@@ -1,9 +1,19 @@
 import requests
 import logging
 from models.db import get_db, put_db
-from config import Config
 
 logger = logging.getLogger(__name__)
+
+def get_safe_float(item, keys):
+    """Esnek fiyat okuyucu"""
+    for key in keys:
+        if key in item:
+            try:
+                val = str(item[key]).replace(",", ".")
+                return float(val)
+            except:
+                continue
+    return 0.0
 
 def fetch_golds():
     conn = None
@@ -19,7 +29,6 @@ def fetch_golds():
         r.raise_for_status()
         data = r.json()
         
-        # Eşleştirme: (Veritabanı Adı, API'deki Key)
         target_golds = {
             "Gram Altın": "GRAM-ALTIN",
             "Çeyrek Altın": "CEYREK-ALTIN",
@@ -28,7 +37,7 @@ def fetch_golds():
             "Cumhuriyet Altını": "CUMHURIYET-ALTINI",
             "Ata Altın": "ATA-ALTIN",
             "Ons Altın": "ONS",
-            "Dolar": "USD",  # Altın sayfasında dolar da görünsün istenirse
+            "Dolar": "USD",
             "Euro": "EUR"
         }
 
@@ -37,17 +46,21 @@ def fetch_golds():
         added = 0
         
         for db_name, api_key in target_golds.items():
-            item = data.get(api_key)
-            if not item: continue
+            # Hem büyük hem küçük harf ile API key ara
+            item = data.get(api_key) or data.get(api_key.lower()) or data.get(api_key.replace("-", " "))
+            
+            if not item or not isinstance(item, dict):
+                continue
 
             try:
-                buying = float(item["Buying"])
-                selling = float(item["Selling"])
+                # 🔥 ESNEK OKUMA
+                buying = get_safe_float(item, ["Buying", "buying", "Alış", "alis"])
+                selling = get_safe_float(item, ["Selling", "selling", "Satış", "satis"])
                 
                 if buying <= 0: continue
                 rate = selling
 
-                # --- DB İŞLEMLERİ ---
+                # --- DB ---
                 cur.execute("SELECT rate FROM golds WHERE name = %s", (db_name,))
                 old_data = cur.fetchone()
                 
