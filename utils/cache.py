@@ -1,7 +1,7 @@
 import time
 from threading import Lock
 
-# Basit RAM cache
+# Thread-safe (Eşzamanlılık güvenli) RAM cache
 _cache = {}
 _cache_lock = Lock()
 
@@ -10,7 +10,7 @@ def get_cache(key, ttl_seconds):
     Cache'den veri al (eğer süresi dolmadıysa)
     
     Args:
-        key: Cache anahtarı
+        key: Cache anahtarı (örn: 'altin_verisi')
         ttl_seconds: Geçerlilik süresi (saniye)
     
     Returns:
@@ -19,28 +19,24 @@ def get_cache(key, ttl_seconds):
     with _cache_lock:
         if key in _cache:
             timestamp, data = _cache[key]
+            # Şu anki zaman - Kayıt zamanı < İzin verilen süre
             if time.time() - timestamp < ttl_seconds:
                 return data
             else:
-                # Süresi dolmuş, sil
+                # Süresi dolmuş, sil ve yer aç
                 del _cache[key]
     return None
 
 def set_cache(key, data):
     """
     Cache'e veri kaydet
-    
-    Args:
-        key: Cache anahtarı
-        data: Kaydedilecek veri
     """
     with _cache_lock:
         _cache[key] = (time.time(), data)
 
 def clear_cache():
     """
-    🔥 YENİ: Tüm cache'i temizle
-    Scheduler yeni veri çektiğinde kullanılır
+    Tüm cache'i temizle
     """
     with _cache_lock:
         _cache.clear()
