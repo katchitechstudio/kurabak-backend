@@ -4,6 +4,16 @@ from models.db import get_db, put_db
 
 logger = logging.getLogger(__name__)
 
+def get_safe_float(item, keys):
+    for key in keys:
+        if key in item:
+            try:
+                val = str(item[key]).replace(",", ".")
+                return float(val)
+            except:
+                continue
+    return 0.0
+
 def fetch_silvers():
     conn = None
     cur = None
@@ -15,20 +25,22 @@ def fetch_silvers():
         headers = {"User-Agent": "Mozilla/5.0"}
         
         r = requests.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
         data = r.json()
         
-        # API'de Gümüş Key'i: "GUMUS"
-        item = data.get("GUMUS")
+        # Gümüş bazen "GUMUS", bazen "gumus" olarak gelir
+        item = data.get("GUMUS") or data.get("gumus") or data.get("GUMUS-TL")
         
         if not item:
             logger.warning("Gümüş verisi API'de bulunamadı.")
             return False
 
-        buying = float(item["Buying"])
-        selling = float(item["Selling"])
+        buying = get_safe_float(item, ["Buying", "buying", "Alış", "alis"])
+        selling = get_safe_float(item, ["Selling", "selling", "Satış", "satis"])
+        
         name = "Gümüş"
         rate = selling
+        
+        if rate <= 0: return False
         
         conn = get_db()
         cur = conn.cursor()
