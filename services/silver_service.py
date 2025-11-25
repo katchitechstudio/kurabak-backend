@@ -26,13 +26,21 @@ def fetch_silvers():
     try:
         logger.info("🥈 Gümüş verisi Altin.in üzerinden çekiliyor...")
         
-        # 1. ADIM: Siteye Bağlan
+        # 1. ADIM: Siteye Bağlan (GÜÇLÜ HEADER İLE)
         url = "https://altin.in/"
+        
+        # Site bizi bot sanmasın diye tam bir tarayıcı gibi davranıyoruz
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.google.com/",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
         }
         
-        r = requests.get(url, headers=headers, timeout=10)
+        # Timeout süresini 15 saniyeye çıkardık
+        r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "html.parser")
         
