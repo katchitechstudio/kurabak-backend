@@ -1,9 +1,19 @@
 import requests
 import logging
 from models.db import get_db, put_db
-from config import Config
 
 logger = logging.getLogger(__name__)
+
+def get_safe_float(item, keys):
+    """Verilen anahtarlardan hangisi varsa onu float'a çevirip döndürür."""
+    for key in keys:
+        if key in item:
+            try:
+                val = str(item[key]).replace(",", ".") # Virgül varsa nokta yap
+                return float(val)
+            except:
+                continue
+    return 0.0
 
 def fetch_currencies():
     conn = None
@@ -12,18 +22,13 @@ def fetch_currencies():
     try:
         logger.info("💱 Dövizler Truncgil API üzerinden çekiliyor...")
         
-        # HTML parse etmek yerine direkt JSON alıyoruz (Çok daha sağlam)
         url = "https://finans.truncgil.com/today.json"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
+        headers = {"User-Agent": "Mozilla/5.0"}
         
         r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
-        data = r.json() # HTML yok, direkt JSON var!
+        data = r.json()
         
-        # Hedef Dövizler: (Bizim Kod, API'deki Adı, Bizim Adımız)
         target_currencies = [
             ("USD", "USD", "Amerikan Doları"),
             ("EUR", "EUR", "Euro"),
@@ -35,22 +40,22 @@ def fetch_currencies():
         added = 0
         
         for my_code, api_key, my_name in target_currencies:
-            item = data.get(api_key)
+            # Hem büyük hem küçük harf ile API key ara (Örn: USD veya usd)
+            item = data.get(api_key) or data.get(api_key.lower())
             
-            if not item:
+            # Eğer veri yoksa veya dictionary değilse atla
+            if not item or not isinstance(item, dict):
                 continue
 
             try:
-                # API'den veriler String gelir, float'a çevirelim
-                buying = float(item["Buying"])
-                selling = float(item["Selling"])
+                # 🔥 ESNEK OKUMA: Buying, buying, Alış... Hepsini dene
+                buying = get_safe_float(item, ["Buying", "buying", "Alış", "alis"])
+                selling = get_safe_float(item, ["Selling", "selling", "Satış", "satis"])
                 
-                # Fiyat 0 ise atla
                 if buying <= 0: continue
-                
                 rate = selling
                 
-                # --- DB İŞLEMLERİ ---
+                # --- DB ---
                 cur.execute("SELECT rate FROM currencies WHERE code = %s", (my_code,))
                 old_data = cur.fetchone()
                 
@@ -72,9 +77,7 @@ def fetch_currencies():
                         updated_at=CURRENT_TIMESTAMP
                 """, (my_code, my_name, buying, selling, rate, change_percent))
                 
-                # Geçmiş
                 cur.execute("INSERT INTO currency_history (code, rate) VALUES (%s, %s)", (my_code, rate))
-                
                 added += 1
 
             except Exception as e:
@@ -83,7 +86,6 @@ def fetch_currencies():
 
         conn.commit()
         
-        # Cache Temizle
         try:
             from utils.cache import clear_cache
             clear_cache()
