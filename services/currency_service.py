@@ -26,18 +26,25 @@ def fetch_currencies():
     try:
         logger.info("💱 Dövizler Altin.in üzerinden çekiliyor...")
         
-        # 1. ADIM: Siteye Bağlan
+        # 1. ADIM: Siteye Bağlan (GÜÇLENDİRİLMİŞ HEADER)
         url = "https://altin.in/"
+        
+        # Site bizi bot sanmasın diye tam bir tarayıcı gibi davranıyoruz
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.google.com/",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
         }
         
-        r = requests.get(url, headers=headers, timeout=10)
+        # Timeout süresini 15 saniyeye çıkardık, garanti olsun
+        r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "html.parser")
         
         # 2. ADIM: Hangi Dövizleri Çekeceğiz?
-        # Format: (Veritabanı Kodu, Veritabanı Adı, Sitedeki ID Öneki)
         target_currencies = [
             ("USD", "Amerikan Doları", "c-usd"),
             ("EUR", "Euro", "c-eur"),
@@ -63,7 +70,6 @@ def fetch_currencies():
                     logger.warning(f"⚠️ {code} için fiyat alınamadı (0 veya negatif).")
                     continue
                 
-                # Genelde işlem yapılan kur SATIŞ kurudur
                 rate = selling
                 
                 # --- VERİTABANI İŞLEMLERİ ---
@@ -79,10 +85,6 @@ def fetch_currencies():
                         change_percent = ((rate - old_rate) / old_rate) * 100
 
                 # Veritabanına Kaydet (UPSERT)
-                # NOT: Eğer veritabanında 'buying' ve 'selling' sütunların yoksa, 
-                # aşağıdaki SQL sorgusundan o kısımları çıkarman gerekebilir.
-                # Ben standart yapıya göre yazdım.
-                
                 cur.execute("""
                     INSERT INTO currencies (code, name, buying, selling, rate, change_percent, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -104,7 +106,7 @@ def fetch_currencies():
                 added += 1
 
             except AttributeError:
-                logger.warning(f"⚠️ {code} verisi sitede bulunamadı.")
+                logger.warning(f"⚠️ {code} verisi sitede bulunamadı (HTML ID değişmiş olabilir).")
                 continue
             except Exception as e:
                 logger.error(f"❌ {code} işlenirken hata: {e}")
