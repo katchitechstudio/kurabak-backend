@@ -1,142 +1,134 @@
 import requests
 import logging
+from bs4 import BeautifulSoup
 from models.db import get_db, put_db
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+def clean_turkish_money(text):
+    """
+    '34,50' metnini 34.50 (float) sayısına çevirir.
+    """
+    if not text:
+        return 0.0
+    try:
+        # Binlik ayracı (.) kaldır, ondalık ayracı (,) nokta yap
+        temiz = text.replace(".", "").replace(",", ".")
+        return float(temiz)
+    except ValueError:
+        return 0.0
 
 def fetch_currencies():
     conn = None
     cur = None
     
     try:
-        logger.info("💱 Dövizler çekiliyor (currencyToAll)...")
+        logger.info("💱 Dövizler Altin.in üzerinden çekiliyor...")
         
+        # 1. ADIM: Siteye Bağlan
+        url = "https://altin.in/"
         headers = {
-            'authorization': f'apikey {Config.COLLECTAPI_TOKEN}'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         
-        # 🔥 YENİ ENDPOINT: currencyToAll (gerçek fiyatlar)
-        url = "https://api.collectapi.com/economy/currencyToAll"
-        params = {
-            'int': '10',
-            'base': 'TRY'  # TRY bazlı fiyatlar
-        }
-        
-        r = requests.get(url, headers=headers, params=params, timeout=10)
+        r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
-        data = r.json()
+        soup = BeautifulSoup(r.content, "html.parser")
         
-        if not data.get("success"):
-            logger.error(f"API hata: {data}")
-            return False
-        
-        items = data.get("result", {}).get("data", [])
-        if not isinstance(items, list) or len(items) == 0:
-            logger.error("API döviz listesi boş.")
-            return False
-        
-        # 🔥 YENİ: TRY'yi manuel olarak listeye ekle (API base=TRY olunca TRY'yi göstermiyor)
-        items.append({
-            "code": "TRY",
-            "name": "Turkish Lira",
-            "rate": 1.0
-        })
-        
-        logger.info(f"✅ {len(items)} döviz alındı")
+        # 2. ADIM: Hangi Dövizleri Çekeceğiz?
+        # Format: (Veritabanı Kodu, Veritabanı Adı, Sitedeki ID Öneki)
+        target_currencies = [
+            ("USD", "Amerikan Doları", "c-usd"),
+            ("EUR", "Euro", "c-eur"),
+            ("GBP", "İngiliz Sterlini", "c-gbp")
+        ]
         
         conn = get_db()
         cur = conn.cursor()
-        
         added = 0
         
-        for row in items:
-            code = row.get("code")
-            name = row.get("name")
-            
+        for code, name, id_prefix in target_currencies:
             try:
-                # 🔥 GÜVENLİ PARSE: String veya number olabilir
-                rate_value = row.get("rate")
-                if isinstance(rate_value, str):
-                    rate = float(rate_value.replace(",", "."))  # Virgül varsa nokta yap
-                else:
-                    rate = float(rate_value)
+                # Siteden verileri bul
+                buying_raw = soup.find("li", {"id": f"{id_prefix}-a"}).text
+                selling_raw = soup.find("li", {"id": f"{id_prefix}-s"}).text
                 
-                # 🔥 YENİ: NEGATİF/SIFIR KONTROLÜ
-                if rate <= 0:
-                    logger.warning(f"⚠️ {code} rate={rate} (negatif/sıfır), atlanıyor")
+                # Temizle ve Sayıya Çevir
+                buying = clean_turkish_money(buying_raw)
+                selling = clean_turkish_money(selling_raw)
+                
+                # Hatalı veri kontrolü
+                if buying <= 0 or selling <= 0:
+                    logger.warning(f"⚠️ {code} için fiyat alınamadı (0 veya negatif).")
                     continue
                 
-                # 🔥 YENİ MANTIK: base=TRY olduğu için rate zaten TRY cinsinden
-                # Örnek: USD rate = 0.0236 → 1 TRY = 0.0236 USD → 1 USD = 1/0.0236 = 42.37 TRY
+                # Genelde işlem yapılan kur SATIŞ kurudur
+                rate = selling
                 
-                if code == "TRY":
-                    price_tl = 1.0  # 1 TL = 1 TL
-                else:
-                    # Diğer dövizler: 1 TRY = rate [döviz]
-                    # Örnek: 1 TRY = 0.0236 USD → 1 USD = 1/0.0236 = 42.37 TRY
-                    price_tl = 1.0 / rate
+                # --- VERİTABANI İŞLEMLERİ ---
                 
+                # Değişim oranını hesaplamak için eski veriyi çek
+                cur.execute("SELECT rate FROM currencies WHERE code = %s", (code,))
+                old_data = cur.fetchone()
+                
+                change_percent = 0.0
+                if old_data and old_data[0]:
+                    old_rate = float(old_data[0])
+                    if old_rate > 0:
+                        change_percent = ((rate - old_rate) / old_rate) * 100
+
+                # Veritabanına Kaydet (UPSERT)
+                # NOT: Eğer veritabanında 'buying' ve 'selling' sütunların yoksa, 
+                # aşağıdaki SQL sorgusundan o kısımları çıkarman gerekebilir.
+                # Ben standart yapıya göre yazdım.
+                
+                cur.execute("""
+                    INSERT INTO currencies (code, name, buying, selling, rate, change_percent, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (code) DO UPDATE SET
+                        name=EXCLUDED.name,
+                        buying=EXCLUDED.buying,
+                        selling=EXCLUDED.selling,
+                        rate=EXCLUDED.rate,
+                        change_percent=EXCLUDED.change_percent,
+                        updated_at=CURRENT_TIMESTAMP
+                """, (code, name, buying, selling, rate, change_percent))
+                
+                # Geçmiş Tablosuna Ekle
+                cur.execute("""
+                    INSERT INTO currency_history (code, rate)
+                    VALUES (%s, %s)
+                """, (code, rate))
+                
+                added += 1
+
+            except AttributeError:
+                logger.warning(f"⚠️ {code} verisi sitede bulunamadı.")
+                continue
             except Exception as e:
-                logger.error(f"{code} hesaplama hatası: {e}")
+                logger.error(f"❌ {code} işlenirken hata: {e}")
                 continue
-            
-            # 🔥 YENİ: FİYAT SAĞLIK KONTROLÜ
-            if price_tl <= 0 or price_tl > 1000000:
-                logger.warning(f"⚠️ {code} price_tl={price_tl} (anormal), atlanıyor")
-                continue
-            
-            # Değişim oranı için önceki fiyatı al
-            cur.execute("SELECT rate FROM currencies WHERE code = %s", (code,))
-            old_data = cur.fetchone()
-            
-            if old_data and old_data[0]:
-                old_price = float(old_data[0])
-                if old_price > 0:
-                    change_percent = ((price_tl - old_price) / old_price) * 100
-                else:
-                    change_percent = 0.0
-            else:
-                change_percent = 0.0  # İlk kayıt
-            
-            # Veritabanına kaydet
-            cur.execute("""
-                INSERT INTO currencies (code, name, rate, change_percent, updated_at)
-                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (code) DO UPDATE SET
-                    name=EXCLUDED.name,
-                    rate=EXCLUDED.rate,
-                    change_percent=EXCLUDED.change_percent,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (code, name, price_tl, change_percent))
-            
-            cur.execute("""
-                INSERT INTO currency_history (code, rate)
-                VALUES (%s, %s)
-            """, (code, price_tl))
-            
-            added += 1
-        
+
         conn.commit()
         
-        # 🔥 YENİ: Cache'i temizle
+        # Cache Temizle
         try:
             from utils.cache import clear_cache
             clear_cache()
         except Exception as e:
             logger.warning(f"Cache temizleme hatası: {e}")
-        
-        logger.info(f"✅ {added} döviz güncellendi")
+            
+        logger.info(f"✅ {added} adet döviz güncellendi.")
         return True
         
     except Exception as e:
-        logger.error(f"Döviz çekme hatası: {e}")
+        logger.error(f"Döviz çekme genel hatası: {e}")
         if conn:
             conn.rollback()
         return False
         
     finally:
-        # ← HATA OLSA BİLE burası çalışır!
         if cur:
             cur.close()
         if conn:
