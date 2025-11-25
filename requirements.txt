@@ -8,3 +8,4 @@ gunicorn==21.2.0
 pytz==2024.1
 tzlocal==5.2
 ujson==5.8.0
+beautifulsoup4==4.12.3
