@@ -41,10 +41,10 @@ def fetch_silvers():
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
             return False
         
-        # 🔥 ÖNEMLİ GÜNCELLEME: Tüm gelen veri yapısını logla
+        # 🔥 ÖNEMLİ GÜNCELLEME: Tüm gelen veri yapısını logla (Hata tespiti için)
         logger.warning(f"🚨 GÜMÜŞ - Gelen Tüm JSON Yapısı: {raw_data}") 
         
-        # DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çekmeyi denemeye devam et
+        # Veri listesini 'Data' anahtarından çekmeyi denemeye devam et
         if isinstance(raw_data, dict) and "Data" in raw_data:
             data = raw_data.get("Data", [])
         else:
