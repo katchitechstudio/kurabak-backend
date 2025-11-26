@@ -1,7 +1,7 @@
 import requests
 import logging
 from models.db import get_db, put_db
-import json # JSONDecodeError yakalamak için gerekli
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +41,19 @@ def fetch_currencies():
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
             return False
         
-        # 🔥 DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çek
+        # 🔥 ÖNEMLİ GÜNCELLEME: Tüm gelen veri yapısını logla
+        # Bu, Data anahtarının ne olduğunu anlamamızı sağlayacak.
+        logger.warning(f"🚨 DÖVİZ - Gelen Tüm JSON Yapısı: {raw_data}") 
+        
+        # DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çekmeyi denemeye devam et
         if isinstance(raw_data, dict) and "Data" in raw_data:
             data = raw_data.get("Data", [])
         else:
-            data = raw_data # Eski API formatı ise kullan
-        
+            data = raw_data
+
         # Verinin bir liste olup olmadığını kontrol et
         if not isinstance(data, list):
+             # Eğer hata devam ediyorsa, bu demektir ki ne 'raw_data' ne de 'raw_data.Data' liste değil.
              logger.error(f"Bigpara Döviz Hatası: 'Data' anahtarından sonra bile beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
              return False
             
