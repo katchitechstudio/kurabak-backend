@@ -14,8 +14,6 @@ def get_safe_float(value):
 def fetch_silvers():
     conn = None
     cur = None
-    
-    # Yanıt içeriğini tutmak için eklendi
     response_text = ""
     
     try:
@@ -23,7 +21,6 @@ def fetch_silvers():
         
         url = "https://api.bigpara.hurriyet.com.tr/doviz/headerlist/anasayfa"
         headers = {
-            # User-Agent başlığı güncellendi
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Referer": "https://bigpara.hurriyet.com.tr/",
             "Origin": "https://bigpara.hurriyet.com.tr",
@@ -31,23 +28,28 @@ def fetch_silvers():
         }
         
         r = requests.get(url, headers=headers, timeout=15)
-        response_text = r.text # Yanıtı dize olarak kaydet
+        response_text = r.text
         
         # 1. HTTP Status Code Kontrolü
-        r.raise_for_status() # 4xx veya 5xx ise HTTPError fırlatır
+        r.raise_for_status()
 
         # 2. JSON Çözümleme Kontrolü
         try:
-            data = r.json()
+            raw_data = r.json()
         except json.JSONDecodeError as json_e:
-            # Yanıt JSON değilse bu hatayı yakalarız
-            logger.error(f"Bigpara Gümüş Hatası: JSON Çözümleme Başarısız. Kaynak: {url}. Hata: {json_e}")
+            logger.error(f"Bigpara Gümüş Hatası: JSON Çözümleme Başarısız. Hata: {json_e}")
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
             return False
         
+        # 🔥 DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çek
+        if isinstance(raw_data, dict) and "Data" in raw_data:
+            data = raw_data.get("Data", [])
+        else:
+            data = raw_data
+
         # Verinin bir liste olup olmadığını kontrol et
         if not isinstance(data, list):
-             logger.error(f"Bigpara Gümüş Hatası: Beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
+             logger.error(f"Bigpara Gümüş Hatası: 'Data' anahtarından sonra bile beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
              return False
 
         conn = get_db()
@@ -89,13 +91,11 @@ def fetch_silvers():
             return False
 
     except requests.exceptions.RequestException as req_e:
-        # requests kütüphanesinden kaynaklanan hatalar (Timeout, HTTPError, ConnectionError vb.)
         logger.error(f"Bigpara Gümüş Hatası (Request): {req_e}")
         if conn: conn.rollback()
         return False
 
     except Exception as e:
-        # Diğer tüm hatalar
         logger.error(f"Bigpara Gümüş Hatası (Genel): {e}")
         if response_text and "json" not in str(e).lower():
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
