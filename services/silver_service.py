@@ -1,7 +1,7 @@
 import requests
 import logging
 from models.db import get_db, put_db
-import json # JSONDecodeError yakalamak için eklendi
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,10 @@ def fetch_silvers():
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
             return False
         
-        # 🔥 DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çek
+        # 🔥 ÖNEMLİ GÜNCELLEME: Tüm gelen veri yapısını logla
+        logger.warning(f"🚨 GÜMÜŞ - Gelen Tüm JSON Yapısı: {raw_data}") 
+        
+        # DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çekmeyi denemeye devam et
         if isinstance(raw_data, dict) and "Data" in raw_data:
             data = raw_data.get("Data", [])
         else:
