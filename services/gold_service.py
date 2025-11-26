@@ -4,102 +4,77 @@ from models.db import get_db, put_db
 
 logger = logging.getLogger(__name__)
 
-def get_safe_float(item, keys):
-    """Esnek fiyat okuyucu"""
-    for key in keys:
-        if key in item:
-            try:
-                val = str(item[key]).replace(",", ".")
-                return float(val)
-            except:
-                continue
-    return 0.0
+def get_safe_float(value):
+    try:
+        if isinstance(value, (int, float)): return float(value)
+        return float(str(value).replace(",", "."))
+    except: return 0.0
 
 def fetch_golds():
     conn = None
     cur = None
-    
     try:
-        logger.info("🥇 Altınlar Truncgil API üzerinden çekiliyor...")
+        logger.info("🥇 Altınlar Bigpara üzerinden çekiliyor...")
         
-        url = "https://finans.truncgil.com/today.json"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        
-        r = requests.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        
-        target_golds = {
-            "Gram Altın": "GRAM-ALTIN",
-            "Çeyrek Altın": "CEYREK-ALTIN",
-            "Yarım Altın": "YARIM-ALTIN",
-            "Tam Altın": "TAM-ALTIN",
-            "Cumhuriyet Altını": "CUMHURIYET-ALTINI",
-            "Ata Altın": "ATA-ALTIN",
-            "Ons Altın": "ONS",
-            "Dolar": "USD",
-            "Euro": "EUR"
+        # Bigpara Altın API'si (Genelde headerlist içinde de vardır ama burası daha detaylı olabilir)
+        # Şimdilik headerlist/anasayfa kullanıyoruz, en güvenli ve hızlısı.
+        url = "https://api.bigpara.hurriyet.com.tr/doviz/headerlist/anasayfa"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
+        
+        r = requests.get(url, headers=headers, timeout=15)
+        data = r.json()
 
         conn = get_db()
         cur = conn.cursor()
         added = 0
-        
-        for db_name, api_key in target_golds.items():
-            # Hem büyük hem küçük harf ile API key ara
-            item = data.get(api_key) or data.get(api_key.lower()) or data.get(api_key.replace("-", " "))
+
+        for item in data:
+            aciklama = item.get("ACIKLAMA", "").upper()
+            sembol = item.get("SEMBOL", "")
             
-            if not item or not isinstance(item, dict):
-                continue
-
-            try:
-                # 🔥 ESNEK OKUMA
-                buying = get_safe_float(item, ["Buying", "buying", "Alış", "alis"])
-                selling = get_safe_float(item, ["Selling", "selling", "Satış", "satis"])
+            # Bigpara'daki isimleri bizimkilere eşle
+            db_name = None
+            if "GRAM ALTIN" in aciklama: db_name = "Gram Altın"
+            elif "ÇEYREK ALTIN" in aciklama: db_name = "Çeyrek Altın"
+            elif "YARIM ALTIN" in aciklama: db_name = "Yarım Altın"
+            elif "TAM ALTIN" in aciklama: db_name = "Tam Altın"
+            elif "CUMHURİYET" in aciklama: db_name = "Cumhuriyet Altını"
+            elif "ONS" in aciklama or sembol == "GLD": db_name = "Ons Altın"
+            
+            if db_name:
+                selling = get_safe_float(item.get("SATIS"))
+                percent = get_safe_float(item.get("YUZDEDEGISIM"))
                 
-                if buying <= 0: continue
+                if selling <= 0: continue
+                
                 rate = selling
-
-                # --- DB ---
-                cur.execute("SELECT rate FROM golds WHERE name = %s", (db_name,))
-                old_data = cur.fetchone()
-                
-                change_percent = 0.0
-                if old_data and old_data[0]:
-                    old_rate = float(old_data[0])
-                    if old_rate > 0:
-                        change_percent = ((rate - old_rate) / old_rate) * 100
 
                 cur.execute("""
                     INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
                     VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                     ON CONFLICT (name) DO UPDATE SET
-                        buying=EXCLUDED.buying,
-                        selling=EXCLUDED.selling,
                         rate=EXCLUDED.rate,
                         change_percent=EXCLUDED.change_percent,
                         updated_at=CURRENT_TIMESTAMP
-                """, (db_name, buying, selling, rate, change_percent))
+                """, (db_name, 0, 0, rate, percent)) 
+                # Not: buying/selling 0 geçiyoruz çünkü DB yapısı buying/selling istiyor ama
+                # Bigpara anasayfa listesinde bazen sadece tek fiyat olabiliyor veya
+                # senin DB yapınla uyumlu olsun diye rate'i önceliklendirdik.
                 
                 cur.execute("INSERT INTO gold_history (name, rate) VALUES (%s, %s)", (db_name, rate))
                 added += 1
 
-            except Exception as e:
-                logger.error(f"{db_name} hatası: {e}")
-                continue
-
         conn.commit()
-        
-        try:
-            from utils.cache import clear_cache
-            clear_cache()
+        try: from utils.cache import clear_cache; clear_cache()
         except: pass
         
-        logger.info(f"✅ {added} altın verisi güncellendi.")
+        logger.info(f"✅ Bigpara: {added} altın güncellendi.")
         return True
-        
+
     except Exception as e:
-        logger.error(f"Altın çekme hatası: {e}")
+        logger.error(f"Bigpara Altın Hatası: {e}")
         if conn: conn.rollback()
         return False
     finally:
