@@ -5,6 +5,8 @@ import logging
 from datetime import datetime
 import os
 import atexit
+import random
+import time
 
 # ==========================================
 # LOGGING
@@ -20,12 +22,10 @@ logger = logging.getLogger(__name__)
 # ==========================================
 from config import Config
 
-# Servisler (Veri çekmek için gerekli)
 from services.currency_service import fetch_currencies
 from services.gold_service import fetch_golds
 from services.silver_service import fetch_silvers
 
-# 🔥 YENİ: Tekli Route Dosyası
 from routes.general_routes import api_bp
 
 from models.db import get_db, put_db
@@ -35,31 +35,45 @@ from models.currency_models import init_db
 # FLASK APP
 # ==========================================
 app = Flask(__name__)
-# CORS: Tüm domainlere izin ver (Mobil uygulama rahat erişsin)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# 🔥 Blueprint register (Sadece api_bp yeterli)
 app.register_blueprint(api_bp)
 
 # ==========================================
-# SCHEDULER (Zamanlayıcı)
+# RANDOM JITTER FONKSİYONU
+# ==========================================
+def run_with_jitter(func):
+    """
+    Scraper çalışmadan önce 0-25 saniye arasında bekletir.
+    Böylece Bigpara bizi bot sanmaz.
+    """
+    delay = random.randint(0, 25)
+    logger.info(f"⏳ Jitter aktif → {delay} saniye gecikme")
+    time.sleep(delay)
+    return func()
+
+# ==========================================
+# SCHEDULER
 # ==========================================
 def init_scheduler():
     try:
         scheduler = BackgroundScheduler()
 
-        # 🔥 GÜNCELLEME SIKLIĞI: 10 Dakikada bir güncelliyoruz.
-        # Site trafiği ve ban riskine karşı 10 dakika idealdir.
-        scheduler.add_job(fetch_currencies, "interval", minutes=10, id="currency_job")
-        scheduler.add_job(fetch_golds, "interval", minutes=10, id="gold_job")
-        scheduler.add_job(fetch_silvers, "interval", minutes=10, id="silver_job")
+        # 🔥 10 Dakikada bir – Jitter ile birlikte
+        scheduler.add_job(lambda: run_with_jitter(fetch_currencies),
+                          "interval", minutes=10, id="currency_job")
+
+        scheduler.add_job(lambda: run_with_jitter(fetch_golds),
+                          "interval", minutes=10, id="gold_job")
+
+        scheduler.add_job(lambda: run_with_jitter(fetch_silvers),
+                          "interval", minutes=10, id="silver_job")
 
         scheduler.start()
-        
-        # Uygulama kapanırken scheduler'ı kapat
+
         atexit.register(lambda: scheduler.shutdown())
         
-        logger.info("🚀 Scheduler başlatıldı (Her 10 dakikada bir güncelleyecek).")
+        logger.info("🚀 Scheduler başlatıldı (Her 10 dakikada bir + jitter).")
 
     except Exception as e:
         logger.error(f"Scheduler hata: {e}")
@@ -69,11 +83,8 @@ def init_scheduler():
 # ==========================================
 logger.info("🔧 KuraBak Backend başlıyor...")
 
-# Veritabanı tablolarını başlat
 init_db()
 
-# Scheduler'ı başlat
-# (Debug modunda çift çalışmaması için basit bir kontrol)
 if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     init_scheduler()
 
@@ -85,10 +96,10 @@ def home():
     return jsonify({
         "app": "KuraBak Backend",
         "status": "running",
-        "version": "2.0 (Scraping Edition)",
+        "version": "2.1 (Scraping Edition + Jitter)",
         "endpoints": [
-            "/api/gold/all", 
-            "/api/currency/all", 
+            "/api/gold/all",
+            "/api/currency/all",
             "/api/silver/all"
         ],
         "timestamp": datetime.now().isoformat()
@@ -124,18 +135,19 @@ def health():
     except Exception as e:
         return jsonify({"status": "unhealthy", "error": str(e)}), 500
 
-# Manuel Tetikleme (Admin için)
 @app.route("/api/update", methods=["POST", "GET"])
 def manual_update():
     try:
-        logger.info("Manuel güncelleme tetiklendi...")
-        g = fetch_golds()
-        c = fetch_currencies()
-        s = fetch_silvers()
+        logger.info("⚡ Manuel güncelleme tetiklendi...")
+        g = run_with_jitter(fetch_golds)
+        c = run_with_jitter(fetch_currencies)
+        s = run_with_jitter(fetch_silvers)
+
         return {
-            "success": True, 
+            "success": True,
             "results": {"gold": g, "currency": c, "silver": s}
         }, 200
+
     except Exception as e:
         return {"success": False, "error": str(e)}, 500
 
@@ -145,5 +157,4 @@ def manual_update():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"🌍 Server aktif → Port: {port}")
-    # Render'da debug=False olmalı, localde True olabilir
     app.run(host="0.0.0.0", port=port, debug=True)
