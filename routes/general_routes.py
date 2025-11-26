@@ -85,30 +85,55 @@ def _get_history(table_name, name_col, name_value):
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# --- ENDPOINTS ---
+# --- CURRENCY ENDPOINTS (Dövizler) ---
 @api_bp.route('/currency/all', methods=['GET'])
-def get_all_currencies(): return _get_data('currencies', 'code')
+def get_all_currencies(): 
+    return _get_data('currencies', 'code')
 
 @api_bp.route('/currency/<code>', methods=['GET'])
-def get_currency(code): return _get_data('currencies', 'code', code)
+def get_currency(code): 
+    return _get_data('currencies', 'code', code)
 
 @api_bp.route('/currency/history/<code>', methods=['GET'])
-def get_currency_history(code): return _get_history('currency', 'code', code)
+def get_currency_history(code): 
+    return _get_history('currency', 'code', code)
+
+# --- GOLD ENDPOINTS (Altın) ---
+# ✅ ANDROID'İN BEKLEDIĞI ENDPOINT
+@api_bp.route('/currency/gold/all', methods=['GET'])
+def get_all_golds_android(): 
+    """Android için: /api/currency/gold/all"""
+    return _get_data('golds', 'name')
 
 @api_bp.route('/gold/all', methods=['GET'])
-def get_all_golds(): return _get_data('golds', 'name')
+def get_all_golds(): 
+    """Alternatif endpoint: /api/gold/all"""
+    return _get_data('golds', 'name')
 
 @api_bp.route('/gold/<name>', methods=['GET'])
-def get_gold(name): return _get_data('golds', 'name', name)
+def get_gold(name): 
+    return _get_data('golds', 'name', name)
 
 @api_bp.route('/gold/history/<name>', methods=['GET'])
-def get_gold_history(name): return _get_history('gold', 'name', name)
+def get_gold_history(name): 
+    return _get_history('gold', 'name', name)
+
+# --- SILVER ENDPOINTS (Gümüş) ---
+# ✅ ANDROID'İN BEKLEDIĞI ENDPOINT
+@api_bp.route('/currency/silver/all', methods=['GET'])
+def get_all_silvers_android(): 
+    """Android için: /api/currency/silver/all"""
+    return _get_data('silvers', 'name')
 
 @api_bp.route('/silver/all', methods=['GET'])
-def get_all_silvers(): return _get_data('silvers', 'name')
+def get_all_silvers(): 
+    """Alternatif endpoint: /api/silver/all"""
+    return _get_data('silvers', 'name')
 
 @api_bp.route('/silver/<name>', methods=['GET'])
-def get_silver(name): return _get_data('silvers', 'name', name)
+def get_silver(name): 
+    return _get_data('silvers', 'name', name)
 
 @api_bp.route('/silver/history/<name>', methods=['GET'])
-def get_silver_history(name): return _get_history('silver', 'name', name)
+def get_silver_history(name): 
+    return _get_history('silver', 'name', name)
