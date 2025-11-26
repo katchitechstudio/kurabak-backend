@@ -48,18 +48,18 @@ def init_scheduler():
     try:
         scheduler = BackgroundScheduler()
 
-        # 🔥 GÜNCELLEME SIKLIĞI: 1 Saat çok uzun. 5 Dakikada (300 sn) bir güncelliyoruz.
-        # Böylece site bizi banlamaz ama veriler taze kalır.
-        scheduler.add_job(fetch_currencies, "interval", minutes=5, id="currency_job")
-        scheduler.add_job(fetch_golds, "interval", minutes=5, id="gold_job")
-        scheduler.add_job(fetch_silvers, "interval", minutes=5, id="silver_job")
+        # 🔥 GÜNCELLEME SIKLIĞI: 10 Dakikada bir güncelliyoruz.
+        # Site trafiği ve ban riskine karşı 10 dakika idealdir.
+        scheduler.add_job(fetch_currencies, "interval", minutes=10, id="currency_job")
+        scheduler.add_job(fetch_golds, "interval", minutes=10, id="gold_job")
+        scheduler.add_job(fetch_silvers, "interval", minutes=10, id="silver_job")
 
         scheduler.start()
         
         # Uygulama kapanırken scheduler'ı kapat
         atexit.register(lambda: scheduler.shutdown())
         
-        logger.info("🚀 Scheduler başlatıldı (Her 5 dakikada bir güncelleyecek).")
+        logger.info("🚀 Scheduler başlatıldı (Her 10 dakikada bir güncelleyecek).")
 
     except Exception as e:
         logger.error(f"Scheduler hata: {e}")
