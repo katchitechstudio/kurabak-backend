@@ -1,6 +1,7 @@
 import requests
 import logging
 from models.db import get_db, put_db
+import json # JSONDecodeError yakalamak için eklendi
 
 logger = logging.getLogger(__name__)
 
@@ -13,22 +14,46 @@ def get_safe_float(value):
 def fetch_golds():
     conn = None
     cur = None
+    
+    # Yanıt içeriğini tutmak için eklendi
+    response_text = "" 
+    
     try:
         logger.info("🥇 Altınlar Bigpara üzerinden çekiliyor...")
         
-        # Bigpara Altın API'si (Genelde headerlist içinde de vardır ama burası daha detaylı olabilir)
-        # Şimdilik headerlist/anasayfa kullanıyoruz, en güvenli ve hızlısı.
+        # Bigpara Altın API'si (Ana Sayfa Özeti)
         url = "https://api.bigpara.hurriyet.com.tr/doviz/headerlist/anasayfa"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            # Tarayıcıyı taklit etmek için User-Agent ve diğer başlıklar eklendi/güncellendi
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://bigpara.hurriyet.com.tr/",
+            "Origin": "https://bigpara.hurriyet.com.tr",
+            "Accept": "application/json, text/plain, */*"
         }
         
         r = requests.get(url, headers=headers, timeout=15)
-        data = r.json()
+        response_text = r.text # Yanıtı dize olarak kaydet
+        
+        # 1. HTTP Status Code Kontrolü
+        r.raise_for_status() # 4xx veya 5xx ise HTTPError fırlatır
 
+        # 2. JSON Çözümleme Kontrolü
+        try:
+            data = r.json()
+        except json.JSONDecodeError as json_e:
+            # Yanıt JSON değilse bu hatayı yakalarız
+            logger.error(f"Bigpara Altın Hatası: JSON Çözümleme Başarısız. Kaynak: {url}. Hata: {json_e}")
+            logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
+            return False
+            
         conn = get_db()
         cur = conn.cursor()
         added = 0
+        
+        # Verinin bir liste olup olmadığını kontrol et
+        if not isinstance(data, list):
+             logger.error(f"Bigpara Altın Hatası: Beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
+             return False
 
         for item in data:
             aciklama = item.get("ACIKLAMA", "").upper()
@@ -59,9 +84,6 @@ def fetch_golds():
                         change_percent=EXCLUDED.change_percent,
                         updated_at=CURRENT_TIMESTAMP
                 """, (db_name, 0, 0, rate, percent)) 
-                # Not: buying/selling 0 geçiyoruz çünkü DB yapısı buying/selling istiyor ama
-                # Bigpara anasayfa listesinde bazen sadece tek fiyat olabiliyor veya
-                # senin DB yapınla uyumlu olsun diye rate'i önceliklendirdik.
                 
                 cur.execute("INSERT INTO gold_history (name, rate) VALUES (%s, %s)", (db_name, rate))
                 added += 1
@@ -73,10 +95,21 @@ def fetch_golds():
         logger.info(f"✅ Bigpara: {added} altın güncellendi.")
         return True
 
-    except Exception as e:
-        logger.error(f"Bigpara Altın Hatası: {e}")
+    except requests.exceptions.RequestException as req_e:
+        # requests kütüphanesinden kaynaklanan hatalar (Timeout, HTTPError, ConnectionError vb.)
+        logger.error(f"Bigpara Altın Hatası (Request): {req_e}")
         if conn: conn.rollback()
         return False
+
+    except Exception as e:
+        # Diğer tüm hatalar
+        logger.error(f"Bigpara Altın Hatası (Genel): {e}")
+        if response_text and "json" not in str(e).lower():
+            logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
+            
+        if conn: conn.rollback()
+        return False
+        
     finally:
         if cur: cur.close()
         if conn: put_db(conn)
