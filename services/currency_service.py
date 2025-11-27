@@ -41,30 +41,29 @@ def fetch_currencies():
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
             return False
         
-        # 🔥 ÖNEMLİ GÜNCELLEME: Tüm gelen veri yapısını logla
-        # Bu, Data anahtarının ne olduğunu anlamamızı sağlayacak.
-        logger.warning(f"🚨 DÖVİZ - Gelen Tüm JSON Yapısı: {raw_data}") 
-        
-        # DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çekmeyi denemeye devam et
-        if isinstance(raw_data, dict) and "Data" in raw_data:
-            data = raw_data.get("Data", [])
+        # ✅ DÜZELTİLDİ: Küçük harf "data" kullanıldı
+        if isinstance(raw_data, dict) and "data" in raw_data:
+            data = raw_data.get("data", [])
         else:
             data = raw_data
 
         # Verinin bir liste olup olmadığını kontrol et
         if not isinstance(data, list):
-             # Eğer hata devam ediyorsa, bu demektir ki ne 'raw_data' ne de 'raw_data.Data' liste değil.
-             logger.error(f"Bigpara Döviz Hatası: 'Data' anahtarından sonra bile beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
+             logger.error(f"Bigpara Döviz Hatası: Beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
              return False
             
         # Bigpara Kodları -> Bizim Kodlar
         mapping = {
-            "USDTRY": "USD", "EURTRY": "EUR", "GBPTRY": "GBP"
+            "USDTRY": "USD", 
+            "EURTRY": "EUR", 
+            "GBPTRY": "GBP"
         }
         
         # İsimler
         names = {
-            "USD": "Amerikan Doları", "EUR": "Euro", "GBP": "İngiliz Sterlini"
+            "USD": "Amerikan Doları", 
+            "EUR": "Euro", 
+            "GBP": "İngiliz Sterlini"
         }
 
         conn = get_db()
@@ -101,8 +100,11 @@ def fetch_currencies():
 
         conn.commit()
         
-        try: from utils.cache import clear_cache; clear_cache()
-        except: pass
+        try: 
+            from utils.cache import clear_cache
+            clear_cache()
+        except: 
+            pass
             
         logger.info(f"✅ Bigpara: {added} döviz güncellendi.")
         return True
