@@ -41,18 +41,15 @@ def fetch_silvers():
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
             return False
         
-        # 🔥 ÖNEMLİ GÜNCELLEME: Tüm gelen veri yapısını logla (Hata tespiti için)
-        logger.warning(f"🚨 GÜMÜŞ - Gelen Tüm JSON Yapısı: {raw_data}") 
-        
-        # Veri listesini 'Data' anahtarından çekmeyi denemeye devam et
-        if isinstance(raw_data, dict) and "Data" in raw_data:
-            data = raw_data.get("Data", [])
+        # ✅ DÜZELTİLDİ: Küçük harf "data" kullanıldı
+        if isinstance(raw_data, dict) and "data" in raw_data:
+            data = raw_data.get("data", [])
         else:
             data = raw_data
 
         # Verinin bir liste olup olmadığını kontrol et
         if not isinstance(data, list):
-             logger.error(f"Bigpara Gümüş Hatası: 'Data' anahtarından sonra bile beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
+             logger.error(f"Bigpara Gümüş Hatası: Beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
              return False
 
         conn = get_db()
@@ -83,8 +80,12 @@ def fetch_silvers():
                     break
         
         conn.commit()
-        try: from utils.cache import clear_cache; clear_cache()
-        except: pass
+        
+        try: 
+            from utils.cache import clear_cache
+            clear_cache()
+        except: 
+            pass
         
         if found:
             logger.info("✅ Bigpara: Gümüş güncellendi.")
