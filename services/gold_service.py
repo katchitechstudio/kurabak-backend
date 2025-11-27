@@ -41,18 +41,15 @@ def fetch_golds():
             logger.error(f"Yanıt İçeriği (İlk 200 karakter): {response_text[:200]}")
             return False
             
-        # 🔥 ÖNEMLİ GÜNCELLEME: Tüm gelen veri yapısını logla
-        logger.warning(f"🚨 ALTIN - Gelen Tüm JSON Yapısı: {raw_data}") 
-            
-        # DEĞİŞİKLİK: Veri listesini 'Data' anahtarından çekmeyi denemeye devam et
-        if isinstance(raw_data, dict) and "Data" in raw_data:
-            data = raw_data.get("Data", [])
+        # ✅ DÜZELTİLDİ: Küçük harf "data" kullanıldı
+        if isinstance(raw_data, dict) and "data" in raw_data:
+            data = raw_data.get("data", [])
         else:
             data = raw_data
         
         # Verinin bir liste olup olmadığını kontrol et
         if not isinstance(data, list):
-             logger.error(f"Bigpara Altın Hatası: 'Data' anahtarından sonra bile beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
+             logger.error(f"Bigpara Altın Hatası: Beklenen Liste formatı gelmedi. Gelen tip: {type(data)}")
              return False
 
         conn = get_db()
@@ -65,12 +62,18 @@ def fetch_golds():
             
             # Bigpara'daki isimleri bizimkilere eşle
             db_name = None
-            if "GRAM ALTIN" in aciklama: db_name = "Gram Altın"
-            elif "ÇEYREK ALTIN" in aciklama: db_name = "Çeyrek Altın"
-            elif "YARIM ALTIN" in aciklama: db_name = "Yarım Altın"
-            elif "TAM ALTIN" in aciklama: db_name = "Tam Altın"
-            elif "CUMHURİYET" in aciklama: db_name = "Cumhuriyet Altını"
-            elif "ONS" in aciklama or sembol == "GLD": db_name = "Ons Altın"
+            if "GRAM" in aciklama and "ALTIN" in aciklama: 
+                db_name = "Gram Altın"
+            elif "ÇEYREK" in aciklama: 
+                db_name = "Çeyrek Altın"
+            elif "YARIM" in aciklama: 
+                db_name = "Yarım Altın"
+            elif "TAM ALTIN" in aciklama: 
+                db_name = "Tam Altın"
+            elif "CUMHURİYET" in aciklama: 
+                db_name = "Cumhuriyet Altını"
+            elif "ONS" in aciklama or sembol == "GLD": 
+                db_name = "Ons Altın"
             
             if db_name:
                 selling = get_safe_float(item.get("SATIS"))
@@ -93,8 +96,12 @@ def fetch_golds():
                 added += 1
 
         conn.commit()
-        try: from utils.cache import clear_cache; clear_cache()
-        except: pass
+        
+        try: 
+            from utils.cache import clear_cache
+            clear_cache()
+        except: 
+            pass
         
         logger.info(f"✅ Bigpara: {added} altın güncellendi.")
         return True
