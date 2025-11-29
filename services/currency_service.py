@@ -48,6 +48,14 @@ def fetch_currencies():
                 selling = get_safe_float(item.get("Selling", 0))
                 change_absolute = get_safe_float(item.get("Change", 0))
                 
+                # 🔥 JAPON YENİ DÜZELTMESİ
+                # Truncgil API, JPY'yi 100 yen birimi olarak veriyor
+                # Bizim uygulama 1 yen göstermeli
+                if code == "JPY":
+                    selling = selling * 100
+                    change_absolute = change_absolute * 100
+                    logger.info(f"🇯🇵 JPY düzeltildi: {selling} (x100)")
+                
                 if selling <= 0: 
                     logger.warning(f"⚠️ {code}: Geçersiz selling değeri: {selling}")
                     continue
