@@ -36,24 +36,46 @@ def fetch_currencies():
             "NOK", "SAR", "QAR", "KWD", "AED"
         ]
         
-        # Türkçe İsimler (API'den geliyor zaten)
         conn = get_db()
         cur = conn.cursor()
         added = 0
-
+        
         for code in currency_codes:
             if code in data and data[code].get("Type") == "Currency":
                 item = data[code]
                 
                 name = item.get("Name", code)
                 selling = get_safe_float(item.get("Selling", 0))
-                change = get_safe_float(item.get("Change", 0))
+                change_absolute = get_safe_float(item.get("Change", 0))
                 
                 if selling <= 0: 
+                    logger.warning(f"⚠️ {code}: Geçersiz selling değeri: {selling}")
                     continue
                 
+                # 🔥 YÜZDE DEĞİŞİM HESAPLAMA
+                # Change = Bugünkü Fiyat - Dünkü Fiyat
+                # Dünkü Fiyat = Bugünkü Fiyat - Change
+                # Yüzde = (Change / Dünkü Fiyat) * 100
+                
+                if abs(change_absolute) > 0.0001:  # Sıfır kontrolü
+                    previous_price = selling - change_absolute
+                    if previous_price > 0:
+                        change_percent = (change_absolute / previous_price) * 100
+                    else:
+                        change_percent = 0.0
+                else:
+                    change_percent = 0.0
+                
                 rate = selling
-
+                
+                # 🔍 DEBUG LOG (Japon Yeni için özel)
+                if code == "JPY":
+                    logger.info(f"📊 JPY Debug:")
+                    logger.info(f"  - Selling: {selling}")
+                    logger.info(f"  - Change (absolute): {change_absolute}")
+                    logger.info(f"  - Previous Price: {selling - change_absolute}")
+                    logger.info(f"  - Change Percent: {change_percent:.2f}%")
+                
                 cur.execute("""
                     INSERT INTO currencies (code, name, rate, change_percent, updated_at)
                     VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -62,11 +84,11 @@ def fetch_currencies():
                         rate=EXCLUDED.rate,
                         change_percent=EXCLUDED.change_percent,
                         updated_at=CURRENT_TIMESTAMP
-                """, (code, name, rate, change))
+                """, (code, name, rate, change_percent))
                 
                 cur.execute("INSERT INTO currency_history (code, rate) VALUES (%s, %s)", (code, rate))
                 added += 1
-
+        
         conn.commit()
         
         try: 
@@ -77,14 +99,13 @@ def fetch_currencies():
             
         logger.info(f"✅ Truncgil: {added} döviz güncellendi.")
         return True
-
+        
     except requests.exceptions.RequestException as req_e:
-        logger.error(f"Truncgil Döviz Hatası (Request): {req_e}")
+        logger.error(f"❌ Truncgil Döviz Hatası (Request): {req_e}")
         if conn: conn.rollback()
         return False
-
     except Exception as e:
-        logger.error(f"Truncgil Döviz Hatası (Genel): {e}")
+        logger.error(f"❌ Truncgil Döviz Hatası (Genel): {e}")
         if conn: conn.rollback()
         return False
         
