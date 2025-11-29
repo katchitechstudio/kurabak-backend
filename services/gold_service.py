@@ -37,23 +37,45 @@ def fetch_golds():
             "TAMALTIN": "Tam Altın",
             "CUMHURIYETALTINI": "Cumhuriyet Altını"
         }
-
+        
         conn = get_db()
         cur = conn.cursor()
         added = 0
-
+        
         for api_code, db_name in gold_mapping.items():
             if api_code in data and data[api_code].get("Type") == "Gold":
                 item = data[api_code]
                 
                 selling = get_safe_float(item.get("Selling", 0))
-                change = get_safe_float(item.get("Change", 0))
+                change_absolute = get_safe_float(item.get("Change", 0))
                 
                 if selling <= 0: 
+                    logger.warning(f"⚠️ {db_name}: Geçersiz selling değeri: {selling}")
                     continue
                 
+                # 🔥 YÜZDE DEĞİŞİM HESAPLAMA
+                # Change = Bugünkü Fiyat - Dünkü Fiyat
+                # Dünkü Fiyat = Bugünkü Fiyat - Change
+                # Yüzde = (Change / Dünkü Fiyat) * 100
+                
+                if abs(change_absolute) > 0.0001:  # Sıfır kontrolü
+                    previous_price = selling - change_absolute
+                    if previous_price > 0:
+                        change_percent = (change_absolute / previous_price) * 100
+                    else:
+                        change_percent = 0.0
+                else:
+                    change_percent = 0.0
+                
                 rate = selling
-
+                
+                # 🔍 DEBUG LOG (tüm altınlar için)
+                logger.debug(f"📊 {db_name}:")
+                logger.debug(f"  - Selling: {selling:.2f}")
+                logger.debug(f"  - Change (absolute): {change_absolute:.2f}")
+                logger.debug(f"  - Previous Price: {selling - change_absolute:.2f}")
+                logger.debug(f"  - Change Percent: {change_percent:.2f}%")
+                
                 cur.execute("""
                     INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
                     VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -61,11 +83,11 @@ def fetch_golds():
                         rate=EXCLUDED.rate,
                         change_percent=EXCLUDED.change_percent,
                         updated_at=CURRENT_TIMESTAMP
-                """, (db_name, 0, 0, rate, change))
+                """, (db_name, 0, 0, rate, change_percent))
                 
                 cur.execute("INSERT INTO gold_history (name, rate) VALUES (%s, %s)", (db_name, rate))
                 added += 1
-
+        
         conn.commit()
         
         try: 
@@ -76,14 +98,13 @@ def fetch_golds():
         
         logger.info(f"✅ Truncgil: {added} altın güncellendi.")
         return True
-
+        
     except requests.exceptions.RequestException as req_e:
-        logger.error(f"Truncgil Altın Hatası (Request): {req_e}")
+        logger.error(f"❌ Truncgil Altın Hatası (Request): {req_e}")
         if conn: conn.rollback()
         return False
-
     except Exception as e:
-        logger.error(f"Truncgil Altın Hatası (Genel): {e}")
+        logger.error(f"❌ Truncgil Altın Hatası (Genel): {e}")
         if conn: conn.rollback()
         return False
         
