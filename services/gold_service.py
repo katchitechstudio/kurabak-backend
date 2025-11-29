@@ -101,15 +101,30 @@ def fetch_golds():
         
     except requests.exceptions.RequestException as req_e:
         logger.error(f"❌ Truncgil Altın Hatası (Request): {req_e}")
-        if conn: conn.rollback()
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
         return False
     except Exception as e:
         logger.error(f"❌ Truncgil Altın Hatası (Genel): {e}")
-        if conn: conn.rollback()
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
         return False
         
     finally:
-        if cur: cur.close()
+        if cur:
+            try:
+                cur.close()
+            except:
+                pass
         if conn:
-            from models.db import put_db
-            put_db(conn)
+            try:
+                from models.db import put_db
+                put_db(conn)
+            except:
+                pass
