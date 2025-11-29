@@ -42,6 +42,9 @@ def fetch_silvers():
                 # Dünkü Fiyat = Bugünkü Fiyat - Change
                 # Yüzde = (Change / Dünkü Fiyat) * 100
                 
+                previous_price = 0.0
+                change_percent = 0.0
+                
                 if abs(change_absolute) > 0.0001:  # Sıfır kontrolü
                     previous_price = selling - change_absolute
                     if previous_price > 0:
@@ -49,6 +52,7 @@ def fetch_silvers():
                     else:
                         change_percent = 0.0
                 else:
+                    previous_price = selling
                     change_percent = 0.0
                 
                 name = "Gümüş"
