@@ -34,11 +34,32 @@ def fetch_silvers():
             item = data["GUMUS"]
             
             selling = get_safe_float(item.get("Selling", 0))
-            change = get_safe_float(item.get("Change", 0))
+            change_absolute = get_safe_float(item.get("Change", 0))
             
             if selling > 0:
+                # 🔥 YÜZDE DEĞİŞİM HESAPLAMA
+                # Change = Bugünkü Fiyat - Dünkü Fiyat
+                # Dünkü Fiyat = Bugünkü Fiyat - Change
+                # Yüzde = (Change / Dünkü Fiyat) * 100
+                
+                if abs(change_absolute) > 0.0001:  # Sıfır kontrolü
+                    previous_price = selling - change_absolute
+                    if previous_price > 0:
+                        change_percent = (change_absolute / previous_price) * 100
+                    else:
+                        change_percent = 0.0
+                else:
+                    change_percent = 0.0
+                
                 name = "Gümüş"
                 rate = selling
+                
+                # 🔍 DEBUG LOG
+                logger.debug(f"📊 Gümüş:")
+                logger.debug(f"  - Selling: {selling:.2f}")
+                logger.debug(f"  - Change (absolute): {change_absolute:.2f}")
+                logger.debug(f"  - Previous Price: {selling - change_absolute:.2f}")
+                logger.debug(f"  - Change Percent: {change_percent:.2f}%")
                 
                 conn = get_db()
                 cur = conn.cursor()
@@ -50,7 +71,7 @@ def fetch_silvers():
                         rate=EXCLUDED.rate,
                         change_percent=EXCLUDED.change_percent,
                         updated_at=CURRENT_TIMESTAMP
-                """, (name, 0, 0, rate, change))
+                """, (name, 0, 0, rate, change_percent))
                 
                 cur.execute("INSERT INTO silver_history (name, rate) VALUES (%s, %s)", (name, rate))
                 
@@ -70,14 +91,13 @@ def fetch_silvers():
         else:
             logger.warning("⚠️ Truncgil: Gümüş bulunamadı.")
             return False
-
+            
     except requests.exceptions.RequestException as req_e:
-        logger.error(f"Truncgil Gümüş Hatası (Request): {req_e}")
+        logger.error(f"❌ Truncgil Gümüş Hatası (Request): {req_e}")
         if conn: conn.rollback()
         return False
-
     except Exception as e:
-        logger.error(f"Truncgil Gümüş Hatası (Genel): {e}")
+        logger.error(f"❌ Truncgil Gümüş Hatası (Genel): {e}")
         if conn: conn.rollback()
         return False
         
