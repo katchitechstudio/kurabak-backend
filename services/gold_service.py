@@ -69,12 +69,12 @@ def fetch_golds():
                 
                 rate = selling
                 
-                # 🔍 DEBUG LOG (tüm altınlar için)
-                logger.debug(f"📊 {db_name}:")
-                logger.debug(f"  - Selling: {selling:.2f}")
-                logger.debug(f"  - Change (absolute): {change_absolute:.2f}")
-                logger.debug(f"  - Previous Price: {selling - change_absolute:.2f}")
-                logger.debug(f"  - Change Percent: {change_percent:.2f}%")
+                # 🔍 DETAYLI DEBUG LOG (HER ALTIN İÇİN)
+                logger.info(f"📊 {db_name} ({api_code}):")
+                logger.info(f"  - Selling: {selling:.2f}₺")
+                logger.info(f"  - Change (absolute): {change_absolute:.2f}₺")
+                logger.info(f"  - Previous Price: {previous_price:.2f}₺")
+                logger.info(f"  - Change Percent: {change_percent:.4f}%")
                 
                 cur.execute("""
                     INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
