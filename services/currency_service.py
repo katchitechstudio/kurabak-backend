@@ -65,6 +65,9 @@ def fetch_currencies():
                 # Dünkü Fiyat = Bugünkü Fiyat - Change
                 # Yüzde = (Change / Dünkü Fiyat) * 100
                 
+                previous_price = 0.0  # ← HER DÖVİZ İÇİN SIFIRDAN BAŞLA
+                change_percent = 0.0
+                
                 if abs(change_absolute) > 0.0001:  # Sıfır kontrolü
                     previous_price = selling - change_absolute
                     if previous_price > 0:
@@ -72,6 +75,7 @@ def fetch_currencies():
                     else:
                         change_percent = 0.0
                 else:
+                    previous_price = selling  # Change yoksa previous = current
                     change_percent = 0.0
                 
                 rate = selling
