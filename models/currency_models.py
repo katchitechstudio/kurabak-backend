@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 def init_db():
     """
     Tüm veritabanı tablolarını otomatik oluşturur
-    Tablo varsa skip eder, yoksa oluşturur
+    Mevcut tablolara ALTER TABLE ile eksik kolonları ekler
     """
     conn = None
     cur = None
@@ -43,9 +43,19 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Index oluştur (varsa skip eder)
         cur.execute('''
-            CREATE INDEX IF NOT EXISTS idx_currency_history_code_date 
-            ON currency_history(code, created_at DESC)
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes 
+                    WHERE indexname = 'idx_currency_history_code_date'
+                ) THEN
+                    CREATE INDEX idx_currency_history_code_date 
+                    ON currency_history(code, created_at DESC);
+                END IF;
+            END $$;
         ''')
         logger.info("✅ currency_history tablosu hazır")
         
@@ -76,14 +86,23 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         cur.execute('''
-            CREATE INDEX IF NOT EXISTS idx_gold_history_name_date 
-            ON gold_history(name, created_at DESC)
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes 
+                    WHERE indexname = 'idx_gold_history_name_date'
+                ) THEN
+                    CREATE INDEX idx_gold_history_name_date 
+                    ON gold_history(name, created_at DESC);
+                END IF;
+            END $$;
         ''')
         logger.info("✅ gold_history tablosu hazır")
         
         # ==========================================
-        # 5. GOLD_DAILY_OPENING (Altın Günlük Açılış) ⭐ YENİ
+        # 5. GOLD_DAILY_OPENING (Altın Günlük Açılış) ⭐
         # ==========================================
         cur.execute('''
             CREATE TABLE IF NOT EXISTS gold_daily_opening (
@@ -95,9 +114,18 @@ def init_db():
                 UNIQUE(name, date)
             )
         ''')
+        
         cur.execute('''
-            CREATE INDEX IF NOT EXISTS idx_gold_daily_opening_name_date 
-            ON gold_daily_opening(name, date)
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes 
+                    WHERE indexname = 'idx_gold_daily_opening_name_date'
+                ) THEN
+                    CREATE INDEX idx_gold_daily_opening_name_date 
+                    ON gold_daily_opening(name, date);
+                END IF;
+            END $$;
         ''')
         logger.info("✅ gold_daily_opening tablosu hazır")
         
@@ -128,9 +156,18 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
         cur.execute('''
-            CREATE INDEX IF NOT EXISTS idx_silver_history_name_date 
-            ON silver_history(name, created_at DESC)
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes 
+                    WHERE indexname = 'idx_silver_history_name_date'
+                ) THEN
+                    CREATE INDEX idx_silver_history_name_date 
+                    ON silver_history(name, created_at DESC);
+                END IF;
+            END $$;
         ''')
         logger.info("✅ silver_history tablosu hazır")
         
@@ -146,7 +183,7 @@ def init_db():
             ORDER BY table_name
         """)
         tables = [row[0] for row in cur.fetchall()]
-        logger.info(f"📊 Mevcut tablolar: {', '.join(tables)}")
+        logger.info(f"📊 Mevcut tablolar ({len(tables)}): {', '.join(tables)}")
         
     except Exception as e:
         logger.error(f"❌ Veritabanı başlatma hatası: {e}")
