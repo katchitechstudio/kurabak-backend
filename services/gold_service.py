@@ -1,7 +1,6 @@
 import requests
 import logging
-from datetime import datetime, time
-from models.db import get_db, put_db
+from models.db import get_db_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -20,45 +19,22 @@ def save_daily_opening_prices():
     Her gün saat 00:00'da çalışacak
     Günlük açılış fiyatlarını kaydeder
     """
-    conn = None
-    cur = None
-    
     try:
-        conn = get_db()
-        cur = conn.cursor()
-        
-        # Bugünkü tüm altın fiyatlarını açılış fiyatı olarak kaydet
-        cur.execute("""
-            INSERT INTO gold_daily_opening (name, opening_rate, date)
-            SELECT name, rate, CURRENT_DATE
-            FROM golds
-            ON CONFLICT (name, date) DO NOTHING
-        """)
-        
-        conn.commit()
+        with get_db_cursor() as (conn, cur):
+            cur.execute("""
+                INSERT INTO gold_daily_opening (name, opening_rate, date)
+                SELECT name, rate, CURRENT_DATE
+                FROM golds
+                ON CONFLICT (name, date) DO NOTHING
+            """)
+            conn.commit()
+            
         logger.info("✅ Günlük açılış fiyatları kaydedildi")
         return True
         
     except Exception as e:
         logger.error(f"❌ Açılış fiyatları kaydetme hatası: {e}")
-        if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
         return False
-        
-    finally:
-        if cur:
-            try:
-                cur.close()
-            except:
-                pass
-        if conn:
-            try:
-                put_db(conn)
-            except:
-                pass
 
 
 def calculate_change_from_opening(conn, cur, name, current_rate):
@@ -97,9 +73,6 @@ def fetch_golds():
     """
     Altın fiyatlarını API'den çeker ve günceller
     """
-    conn = None
-    cur = None
-    
     try:
         url = "https://finans.truncgil.com/v3/today.json"
         headers = {
@@ -119,42 +92,42 @@ def fetch_golds():
             "cumhuriyet-altini": "Cumhuriyet Altını"
         }
         
-        conn = get_db()
-        cur = conn.cursor()
-        added = 0
+        with get_db_cursor() as (conn, cur):
+            added = 0
+            
+            for api_code, db_name in gold_mapping.items():
+                if api_code not in data or data[api_code].get("Type") != "Gold":
+                    continue
+                
+                item = data[api_code]
+                selling = get_safe_float(item.get("Selling", 0))
+                
+                if selling <= 0:
+                    continue
+                
+                rate = selling
+                
+                # ⭐ Günlük açılış fiyatından yüzde değişimi hesapla
+                change_percent = calculate_change_from_opening(conn, cur, db_name, rate)
+                
+                cur.execute("""
+                    INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (name) DO UPDATE SET
+                        rate=EXCLUDED.rate,
+                        change_percent=EXCLUDED.change_percent,
+                        updated_at=CURRENT_TIMESTAMP
+                """, (db_name, 0, 0, rate, change_percent))
+                
+                cur.execute(
+                    "INSERT INTO gold_history (name, rate) VALUES (%s, %s)",
+                    (db_name, rate)
+                )
+                
+                added += 1
+            
+            conn.commit()
         
-        for api_code, db_name in gold_mapping.items():
-            if api_code not in data or data[api_code].get("Type") != "Gold":
-                continue
-            
-            item = data[api_code]
-            selling = get_safe_float(item.get("Selling", 0))
-            
-            if selling <= 0:
-                continue
-            
-            rate = selling
-            
-            # ⭐ Günlük açılış fiyatından yüzde değişimi hesapla
-            change_percent = calculate_change_from_opening(conn, cur, db_name, rate)
-            
-            cur.execute("""
-                INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
-                VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (name) DO UPDATE SET
-                    rate=EXCLUDED.rate,
-                    change_percent=EXCLUDED.change_percent,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (db_name, 0, 0, rate, change_percent))
-            
-            cur.execute(
-                "INSERT INTO gold_history (name, rate) VALUES (%s, %s)",
-                (db_name, rate)
-            )
-            
-            added += 1
-        
-        conn.commit()
         logger.info(f"✅ {added} altın fiyatı güncellendi")
         
         try:
@@ -167,21 +140,4 @@ def fetch_golds():
         
     except Exception as e:
         logger.error(f"❌ Altın çekme hatası: {e}")
-        if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
         return False
-        
-    finally:
-        if cur:
-            try:
-                cur.close()
-            except:
-                pass
-        if conn:
-            try:
-                put_db(conn)
-            except:
-                pass
