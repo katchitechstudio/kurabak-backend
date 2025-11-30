@@ -105,14 +105,13 @@ def init_scheduler():
         logger.error(f"❌ Scheduler hata: {e}")
 
 # ==========================================
-# İLK KURULUM - GELİŞTİRİLMİŞ
+# İLK KURULUM - GÜVENLİ VERSİYON
 # ==========================================
 def initial_setup():
     """
     Uygulama ilk kez başlatıldığında:
     1. Tüm tabloları kontrol eder/oluşturur
     2. Bugün için açılış fiyatı yoksa kaydet
-    3. Veritabanı sağlık kontrolü yapar
     """
     try:
         logger.info("🚀 İlk kurulum başlatılıyor...")
@@ -120,27 +119,31 @@ def initial_setup():
         # 1. Veritabanı sağlık kontrolü
         verify_database_health()
         
-        # 2. Açılış fiyatları kontrolü
-        conn = get_db()
-        cur = conn.cursor()
-        
-        # Bugün için açılış kaydı var mı kontrol et
-        cur.execute("""
-            SELECT COUNT(*) FROM gold_daily_opening 
-            WHERE date = CURRENT_DATE
-        """)
-        
-        count = cur.fetchone()[0]
-        
-        if count == 0:
-            logger.info("📌 Bugün için açılış fiyatı yok, kaydediliyor...")
-            cur.close()
-            put_db(conn)
-            save_daily_opening_prices()
-        else:
-            logger.info(f"✅ Bugün için {count} açılış fiyatı zaten mevcut")
-            cur.close()
-            put_db(conn)
+        # 2. Açılış fiyatları kontrolü (güvenli try-except ile)
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            
+            cur.execute("""
+                SELECT COUNT(*) FROM gold_daily_opening 
+                WHERE date = CURRENT_DATE
+            """)
+            
+            count = cur.fetchone()[0]
+            
+            if count == 0:
+                logger.info("📌 Bugün için açılış fiyatı yok, kaydediliyor...")
+                cur.close()
+                put_db(conn)
+                save_daily_opening_prices()
+            else:
+                logger.info(f"✅ Bugün için {count} açılış fiyatı zaten mevcut")
+                cur.close()
+                put_db(conn)
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Açılış fiyatı kontrolü atlandı: {e}")
+            # İlk deploy'da tablo henüz olmayabilir, devam et
         
         logger.info("🎉 İlk kurulum tamamlandı!")
             
@@ -177,7 +180,8 @@ def home():
             "/api/currency/gold/all",
             "/api/currency/silver/all",
             "/api/update",
-            "/health"
+            "/health",
+            "/api/debug/gold-opening"
         ],
         "features": [
             "Otomatik tablo oluşturma (migration-free)",
@@ -205,12 +209,15 @@ def health():
         cur.execute("SELECT COUNT(*) FROM silvers")
         gumus = cur.fetchone()[0]
         
-        # Bugünkü açılış fiyatı sayısı
-        cur.execute("""
-            SELECT COUNT(*) FROM gold_daily_opening 
-            WHERE date = CURRENT_DATE
-        """)
-        acilis = cur.fetchone()[0]
+        # Bugünkü açılış fiyatı sayısı (güvenli kontrol)
+        try:
+            cur.execute("""
+                SELECT COUNT(*) FROM gold_daily_opening 
+                WHERE date = CURRENT_DATE
+            """)
+            acilis = cur.fetchone()[0]
+        except:
+            acilis = 0  # Tablo yoksa 0 döndür
         
         # Tablo varlık kontrolü
         cur.execute("""
