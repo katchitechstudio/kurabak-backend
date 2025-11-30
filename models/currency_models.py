@@ -3,6 +3,47 @@ from models.db import get_db_cursor
 
 logger = logging.getLogger(__name__)
 
+
+def add_column_if_not_exists(cur, table_name, column_name, column_definition):
+    """
+    Kolon yoksa ekle, varsa atla
+    """
+    cur.execute("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = %s AND column_name = %s
+        )
+    """, (table_name, column_name))
+    
+    exists = cur.fetchone()[0]
+    
+    if not exists:
+        cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+        logger.info(f"  ➕ {table_name}.{column_name} kolonu eklendi")
+        return True
+    return False
+
+
+def create_index_if_not_exists(cur, index_name, table_name, columns):
+    """
+    Index yoksa oluştur, varsa atla
+    """
+    cur.execute("""
+        SELECT EXISTS (
+            SELECT 1 FROM pg_indexes 
+            WHERE indexname = %s
+        )
+    """, (index_name,))
+    
+    exists = cur.fetchone()[0]
+    
+    if not exists:
+        cur.execute(f"CREATE INDEX {index_name} ON {table_name}({columns})")
+        logger.info(f"  ➕ {index_name} indexi oluşturuldu")
+        return True
+    return False
+
+
 def init_db():
     """
     Tüm veritabanı tablolarını otomatik oluşturur
@@ -34,23 +75,18 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS currency_history (
                     id SERIAL PRIMARY KEY,
                     code VARCHAR(10) NOT NULL,
-                    rate DECIMAL(10, 4) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    rate DECIMAL(10, 4) NOT NULL
                 )
             ''')
             
-            cur.execute('''
-                DO $$ 
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_indexes 
-                        WHERE indexname = 'idx_currency_history_code_date'
-                    ) THEN
-                        CREATE INDEX idx_currency_history_code_date 
-                        ON currency_history(code, created_at DESC);
-                    END IF;
-                END $$;
-            ''')
+            # Eksik kolonları ekle
+            add_column_if_not_exists(cur, 'currency_history', 'created_at', 
+                                     'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+            
+            # Index oluştur
+            create_index_if_not_exists(cur, 'idx_currency_history_code_date', 
+                                       'currency_history', 'code, created_at DESC')
+            
             logger.info("✅ currency_history tablosu hazır")
             
             # ==========================================
@@ -76,23 +112,18 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS gold_history (
                     id SERIAL PRIMARY KEY,
                     name VARCHAR(100) NOT NULL,
-                    rate DECIMAL(10, 2) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    rate DECIMAL(10, 2) NOT NULL
                 )
             ''')
             
-            cur.execute('''
-                DO $$ 
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_indexes 
-                        WHERE indexname = 'idx_gold_history_name_date'
-                    ) THEN
-                        CREATE INDEX idx_gold_history_name_date 
-                        ON gold_history(name, created_at DESC);
-                    END IF;
-                END $$;
-            ''')
+            # Eksik kolonları ekle
+            add_column_if_not_exists(cur, 'gold_history', 'created_at', 
+                                     'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+            
+            # Index oluştur
+            create_index_if_not_exists(cur, 'idx_gold_history_name_date', 
+                                       'gold_history', 'name, created_at DESC')
+            
             logger.info("✅ gold_history tablosu hazır")
             
             # ==========================================
@@ -109,18 +140,10 @@ def init_db():
                 )
             ''')
             
-            cur.execute('''
-                DO $$ 
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_indexes 
-                        WHERE indexname = 'idx_gold_daily_opening_name_date'
-                    ) THEN
-                        CREATE INDEX idx_gold_daily_opening_name_date 
-                        ON gold_daily_opening(name, date);
-                    END IF;
-                END $$;
-            ''')
+            # Index oluştur
+            create_index_if_not_exists(cur, 'idx_gold_daily_opening_name_date', 
+                                       'gold_daily_opening', 'name, date')
+            
             logger.info("✅ gold_daily_opening tablosu hazır")
             
             # ==========================================
@@ -146,23 +169,18 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS silver_history (
                     id SERIAL PRIMARY KEY,
                     name VARCHAR(100) NOT NULL,
-                    rate DECIMAL(10, 2) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    rate DECIMAL(10, 2) NOT NULL
                 )
             ''')
             
-            cur.execute('''
-                DO $$ 
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_indexes 
-                        WHERE indexname = 'idx_silver_history_name_date'
-                    ) THEN
-                        CREATE INDEX idx_silver_history_name_date 
-                        ON silver_history(name, created_at DESC);
-                    END IF;
-                END $$;
-            ''')
+            # Eksik kolonları ekle
+            add_column_if_not_exists(cur, 'silver_history', 'created_at', 
+                                     'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+            
+            # Index oluştur
+            create_index_if_not_exists(cur, 'idx_silver_history_name_date', 
+                                       'silver_history', 'name, created_at DESC')
+            
             logger.info("✅ silver_history tablosu hazır")
             
             conn.commit()
