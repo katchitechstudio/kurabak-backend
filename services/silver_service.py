@@ -27,8 +27,8 @@ def fetch_silvers():
         r.raise_for_status()
         data = r.json()
 
-        if "GUMUS" in data and data["GUMUS"].get("Type") == "Gold":
-            item = data["GUMUS"]
+        if "gumus" in data and data["gumus"].get("Type") == "Gold":
+            item = data["gumus"]
 
             selling = get_safe_float(item.get("Selling", 0))
             change_absolute = get_safe_float(item.get("Change", 0))
