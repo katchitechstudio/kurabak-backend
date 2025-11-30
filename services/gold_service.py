@@ -1,5 +1,6 @@
 import requests
 import logging
+from datetime import datetime, time
 from models.db import get_db, put_db
 
 logger = logging.getLogger(__name__)
@@ -13,7 +14,89 @@ def get_safe_float(value):
     except:
         return 0.0
 
+
+def save_daily_opening_prices():
+    """
+    Her gün saat 00:00'da çalışacak
+    Günlük açılış fiyatlarını kaydeder
+    """
+    conn = None
+    cur = None
+    
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Bugünkü tüm altın fiyatlarını açılış fiyatı olarak kaydet
+        cur.execute("""
+            INSERT INTO gold_daily_opening (name, opening_rate, date)
+            SELECT name, rate, CURRENT_DATE
+            FROM golds
+            ON CONFLICT (name, date) DO NOTHING
+        """)
+        
+        conn.commit()
+        logger.info("✅ Günlük açılış fiyatları kaydedildi")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Açılış fiyatları kaydetme hatası: {e}")
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
+        return False
+        
+    finally:
+        if cur:
+            try:
+                cur.close()
+            except:
+                pass
+        if conn:
+            try:
+                put_db(conn)
+            except:
+                pass
+
+
+def calculate_change_from_opening(conn, cur, name, current_rate):
+    """
+    Bugünkü açılış fiyatından yüzde değişimi hesapla
+    """
+    try:
+        cur.execute("""
+            SELECT opening_rate 
+            FROM gold_daily_opening 
+            WHERE name = %s AND date = CURRENT_DATE
+        """, (name,))
+        
+        result = cur.fetchone()
+        
+        if result and result[0] > 0:
+            opening_rate = float(result[0])
+            change_percent = ((current_rate - opening_rate) / opening_rate) * 100
+            return round(change_percent, 2)
+        else:
+            # Bugün için açılış fiyatı yoksa, şu anki fiyatı açılış olarak kaydet
+            cur.execute("""
+                INSERT INTO gold_daily_opening (name, opening_rate, date)
+                VALUES (%s, %s, CURRENT_DATE)
+                ON CONFLICT (name, date) DO NOTHING
+            """, (name, current_rate))
+            logger.info(f"📌 {name} için açılış fiyatı kaydedildi: {current_rate}")
+            return 0.0
+            
+    except Exception as e:
+        logger.error(f"❌ Yüzde hesaplama hatası ({name}): {e}")
+        return 0.0
+
+
 def fetch_golds():
+    """
+    Altın fiyatlarını API'den çeker ve günceller
+    """
     conn = None
     cur = None
     
@@ -46,12 +129,14 @@ def fetch_golds():
             
             item = data[api_code]
             selling = get_safe_float(item.get("Selling", 0))
-            change_percent = get_safe_float(item.get("Change", 0))
             
             if selling <= 0:
                 continue
             
             rate = selling
+            
+            # ⭐ Günlük açılış fiyatından yüzde değişimi hesapla
+            change_percent = calculate_change_from_opening(conn, cur, db_name, rate)
             
             cur.execute("""
                 INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
@@ -70,6 +155,7 @@ def fetch_golds():
             added += 1
         
         conn.commit()
+        logger.info(f"✅ {added} altın fiyatı güncellendi")
         
         try:
             from utils.cache import clear_cache
@@ -79,7 +165,8 @@ def fetch_golds():
         
         return True
         
-    except:
+    except Exception as e:
+        logger.error(f"❌ Altın çekme hatası: {e}")
         if conn:
             try:
                 conn.rollback()
