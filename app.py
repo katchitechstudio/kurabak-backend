@@ -29,7 +29,7 @@ from services.silver_service import fetch_silvers
 
 from routes.general_routes import api_bp
 
-from models.db import get_db, put_db
+from models.db import get_db_cursor, init_connection_pool, close_all_connections
 from models.currency_models import init_db, verify_database_health
 
 # ==========================================
@@ -45,8 +45,7 @@ app.register_blueprint(api_bp)
 # ==========================================
 def run_with_jitter(func):
     """
-    Scraper çalışmadan önce 0-25 saniye arasında bekletir.
-    Böylece Bigpara bizi bot sanmaz.
+    Scraper çalışmadan önce 0-25 saniye arasında bekletir
     """
     delay = random.randint(0, 25)
     logger.info(f"⏳ Jitter aktif → {delay} saniye gecikme")
@@ -70,7 +69,7 @@ def init_scheduler():
         )
         logger.info("📅 Günlük açılış fiyatı job'u eklendi (00:00)")
 
-        # 🔥 10 Dakikada bir – Jitter ile birlikte
+        # 🔥 10 Dakikada bir güncelleme
         scheduler.add_job(
             lambda: run_with_jitter(fetch_currencies),
             "interval",
@@ -96,75 +95,68 @@ def init_scheduler():
         )
 
         scheduler.start()
-
         atexit.register(lambda: scheduler.shutdown())
         
-        logger.info("🚀 Scheduler başlatıldı (Her 10 dakikada + 00:00 açılış kaydı + jitter).")
+        logger.info("🚀 Scheduler başlatıldı")
 
     except Exception as e:
         logger.error(f"❌ Scheduler hata: {e}")
 
 # ==========================================
-# İLK KURULUM - GÜVENLİ VERSİYON
+# İLK KURULUM
 # ==========================================
 def initial_setup():
     """
-    Uygulama ilk kez başlatıldığında:
-    1. Tüm tabloları kontrol eder/oluşturur
-    2. Bugün için açılış fiyatı yoksa kaydet
+    Uygulama başlatma rutini
     """
     try:
         logger.info("🚀 İlk kurulum başlatılıyor...")
         
-        # 1. Veritabanı sağlık kontrolü
+        # Veritabanı sağlık kontrolü
         verify_database_health()
         
-        # 2. Açılış fiyatları kontrolü (güvenli try-except ile)
+        # Açılış fiyatları kontrolü
         try:
-            conn = get_db()
-            cur = conn.cursor()
-            
-            cur.execute("""
-                SELECT COUNT(*) FROM gold_daily_opening 
-                WHERE date = CURRENT_DATE
-            """)
-            
-            count = cur.fetchone()[0]
-            
-            if count == 0:
-                logger.info("📌 Bugün için açılış fiyatı yok, kaydediliyor...")
-                cur.close()
-                put_db(conn)
-                save_daily_opening_prices()
-            else:
-                logger.info(f"✅ Bugün için {count} açılış fiyatı zaten mevcut")
-                cur.close()
-                put_db(conn)
+            with get_db_cursor() as (conn, cur):
+                cur.execute("""
+                    SELECT COUNT(*) FROM gold_daily_opening 
+                    WHERE date = CURRENT_DATE
+                """)
                 
+                count = cur.fetchone()[0]
+                
+                if count == 0:
+                    logger.info("📌 Bugün için açılış fiyatı yok, kaydediliyor...")
+                    save_daily_opening_prices()
+                else:
+                    logger.info(f"✅ Bugün için {count} açılış fiyatı zaten mevcut")
+                    
         except Exception as e:
             logger.warning(f"⚠️ Açılış fiyatı kontrolü atlandı: {e}")
-            # İlk deploy'da tablo henüz olmayabilir, devam et
         
         logger.info("🎉 İlk kurulum tamamlandı!")
             
     except Exception as e:
         logger.error(f"❌ İlk kurulum hatası: {e}")
-        # Hata olsa bile devam et, scheduler başlasın
 
 # ==========================================
 # STARTUP
 # ==========================================
 logger.info("🔧 KuraBak Backend başlıyor...")
 
-# 1. Önce veritabanı tablolarını oluştur
+# Connection pool oluştur
+init_connection_pool()
+
+# Veritabanı tablolarını oluştur
 init_db()
 
-# 2. Scheduler başlamadan önce tek sefer çalışacak işlemler
+# İlk kurulum ve scheduler
 if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-    # 3. İlk kurulum kontrolü (tablo doğrulama + açılış fiyatları)
     initial_setup()
-    # 4. Scheduler'ı başlat
     init_scheduler()
+
+# Uygulama kapanırken bağlantıları kapat
+atexit.register(close_all_connections)
 
 # ==========================================
 # ENDPOINTS
@@ -174,21 +166,20 @@ def home():
     return jsonify({
         "app": "KuraBak Backend",
         "status": "running",
-        "version": "3.0 (Auto-Migration + Daily Opening + Jitter)",
+        "version": "3.1 (Connection Pool + Auto-Migration)",
         "endpoints": [
             "/api/currency/all",
             "/api/currency/gold/all",
             "/api/currency/silver/all",
             "/api/update",
-            "/health",
-            "/api/debug/gold-opening"
+            "/health"
         ],
         "features": [
-            "Otomatik tablo oluşturma (migration-free)",
+            "Connection pool yönetimi",
+            "Otomatik tablo oluşturma",
             "10 dakikalık otomatik güncelleme",
             "Günlük açılış fiyatı takibi (00:00)",
-            "Jitter ile bot koruması",
-            "Self-healing database"
+            "Jitter ile bot koruması"
         ],
         "timestamp": datetime.now().isoformat()
     })
@@ -196,45 +187,37 @@ def home():
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
     try:
-        conn = get_db()
-        cur = conn.cursor()
+        with get_db_cursor() as (conn, cur):
+            cur.execute("SELECT COUNT(*) FROM currencies")
+            doviz = cur.fetchone()[0]
 
-        # Tablo sayılarını al
-        cur.execute("SELECT COUNT(*) FROM currencies")
-        doviz = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM golds")
+            altin = cur.fetchone()[0]
 
-        cur.execute("SELECT COUNT(*) FROM golds")
-        altin = cur.fetchone()[0]
-
-        cur.execute("SELECT COUNT(*) FROM silvers")
-        gumus = cur.fetchone()[0]
-        
-        # Bugünkü açılış fiyatı sayısı (güvenli kontrol)
-        try:
+            cur.execute("SELECT COUNT(*) FROM silvers")
+            gumus = cur.fetchone()[0]
+            
+            try:
+                cur.execute("""
+                    SELECT COUNT(*) FROM gold_daily_opening 
+                    WHERE date = CURRENT_DATE
+                """)
+                acilis = cur.fetchone()[0]
+            except:
+                acilis = 0
+            
             cur.execute("""
-                SELECT COUNT(*) FROM gold_daily_opening 
-                WHERE date = CURRENT_DATE
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name IN (
+                    'currencies', 'golds', 'silvers', 
+                    'gold_daily_opening', 'currency_history', 
+                    'gold_history', 'silver_history'
+                )
+                ORDER BY table_name
             """)
-            acilis = cur.fetchone()[0]
-        except:
-            acilis = 0  # Tablo yoksa 0 döndür
-        
-        # Tablo varlık kontrolü
-        cur.execute("""
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name IN (
-                'currencies', 'golds', 'silvers', 
-                'gold_daily_opening', 'currency_history', 
-                'gold_history', 'silver_history'
-            )
-            ORDER BY table_name
-        """)
-        existing_tables = [row[0] for row in cur.fetchall()]
-
-        cur.close()
-        put_db(conn)
+            existing_tables = [row[0] for row in cur.fetchall()]
 
         return jsonify({
             "status": "healthy",
@@ -262,10 +245,6 @@ def health():
 
 @app.route("/api/update", methods=["POST", "GET"])
 def manual_update():
-    """
-    Manuel güncelleme endpoint'i
-    Tüm verileri yeniden çeker
-    """
     try:
         logger.info("⚡ Manuel güncelleme tetiklendi...")
         
@@ -292,25 +271,14 @@ def manual_update():
 
 @app.route("/api/opening-prices/reset", methods=["POST"])
 def reset_opening_prices():
-    """
-    TEST AMAÇLI: Açılış fiyatlarını manuel olarak sıfırla ve yeniden kaydet
-    Sadece development için kullanın!
-    """
     try:
-        conn = get_db()
-        cur = conn.cursor()
+        with get_db_cursor() as (conn, cur):
+            cur.execute("DELETE FROM gold_daily_opening WHERE date = CURRENT_DATE")
+            conn.commit()
         
-        # Bugünkü kayıtları sil
-        cur.execute("DELETE FROM gold_daily_opening WHERE date = CURRENT_DATE")
-        conn.commit()
-        
-        cur.close()
-        put_db(conn)
-        
-        # Yeniden kaydet
         save_daily_opening_prices()
         
-        logger.info("🔄 Açılış fiyatları sıfırlandı ve yeniden kaydedildi")
+        logger.info("🔄 Açılış fiyatları sıfırlandı")
         
         return jsonify({
             "success": True,
@@ -322,44 +290,6 @@ def reset_opening_prices():
         return jsonify({
             "success": False,
             "error": str(e)
-        }), 500
-
-@app.route("/api/debug/gold-opening", methods=["GET"])
-def debug_gold_opening():
-    """
-    Bugünkü açılış fiyatlarını kontrol etmek için debug endpoint
-    GET /api/debug/gold-opening
-    """
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        
-        cur.execute("""
-            SELECT name, opening_rate, date, 
-                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at
-            FROM gold_daily_opening
-            WHERE date = CURRENT_DATE
-            ORDER BY name
-        """)
-        
-        columns = [col[0] for col in cur.description]
-        data = [dict(zip(columns, row)) for row in cur.fetchall()]
-        
-        cur.close()
-        put_db(conn)
-        
-        return jsonify({
-            'success': True,
-            'count': len(data),
-            'data': data,
-            'timestamp': datetime.now().isoformat()
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"❌ Debug endpoint hatası: {e}")
-        return jsonify({
-            'success': False,
-            'message': str(e)
         }), 500
 
 # ==========================================
