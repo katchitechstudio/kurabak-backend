@@ -30,7 +30,7 @@ from services.silver_service import fetch_silvers
 from routes.general_routes import api_bp
 
 from models.db import get_db, put_db
-from models.currency_models import init_db
+from models.currency_models import init_db, verify_database_health
 
 # ==========================================
 # FLASK APP
@@ -105,14 +105,22 @@ def init_scheduler():
         logger.error(f"❌ Scheduler hata: {e}")
 
 # ==========================================
-# İLK KURULUM
+# İLK KURULUM - GELİŞTİRİLMİŞ
 # ==========================================
 def initial_setup():
     """
-    Uygulama ilk kez başlatıldığında veya bugün için açılış fiyatı yoksa
-    mevcut fiyatları açılış fiyatı olarak kaydet
+    Uygulama ilk kez başlatıldığında:
+    1. Tüm tabloları kontrol eder/oluşturur
+    2. Bugün için açılış fiyatı yoksa kaydet
+    3. Veritabanı sağlık kontrolü yapar
     """
     try:
+        logger.info("🚀 İlk kurulum başlatılıyor...")
+        
+        # 1. Veritabanı sağlık kontrolü
+        verify_database_health()
+        
+        # 2. Açılış fiyatları kontrolü
         conn = get_db()
         cur = conn.cursor()
         
@@ -130,25 +138,29 @@ def initial_setup():
             put_db(conn)
             save_daily_opening_prices()
         else:
-            logger.info("✅ Bugün için açılış fiyatları zaten mevcut")
+            logger.info(f"✅ Bugün için {count} açılış fiyatı zaten mevcut")
             cur.close()
             put_db(conn)
+        
+        logger.info("🎉 İlk kurulum tamamlandı!")
             
     except Exception as e:
-        logger.warning(f"⚠️ İlk kurulum kontrolü: {e}")
-        # Tablo yoksa oluşturulsun diye devam et
+        logger.error(f"❌ İlk kurulum hatası: {e}")
+        # Hata olsa bile devam et, scheduler başlasın
 
 # ==========================================
 # STARTUP
 # ==========================================
 logger.info("🔧 KuraBak Backend başlıyor...")
 
+# 1. Önce veritabanı tablolarını oluştur
 init_db()
 
+# 2. Scheduler başlamadan önce tek sefer çalışacak işlemler
 if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-    # İlk kurulumu yap
+    # 3. İlk kurulum kontrolü (tablo doğrulama + açılış fiyatları)
     initial_setup()
-    # Scheduler'ı başlat
+    # 4. Scheduler'ı başlat
     init_scheduler()
 
 # ==========================================
@@ -159,27 +171,31 @@ def home():
     return jsonify({
         "app": "KuraBak Backend",
         "status": "running",
-        "version": "3.0 (Daily Opening Price + Jitter)",
+        "version": "3.0 (Auto-Migration + Daily Opening + Jitter)",
         "endpoints": [
             "/api/currency/all",
             "/api/currency/gold/all",
             "/api/currency/silver/all",
-            "/api/update"
+            "/api/update",
+            "/health"
         ],
         "features": [
+            "Otomatik tablo oluşturma (migration-free)",
             "10 dakikalık otomatik güncelleme",
             "Günlük açılış fiyatı takibi (00:00)",
-            "Jitter ile bot koruması"
+            "Jitter ile bot koruması",
+            "Self-healing database"
         ],
         "timestamp": datetime.now().isoformat()
     })
 
-@app.route("/health", methods=["GET"])
+@app.route("/health", methods=["GET", "HEAD"])
 def health():
     try:
         conn = get_db()
         cur = conn.cursor()
 
+        # Tablo sayılarını al
         cur.execute("SELECT COUNT(*) FROM currencies")
         doviz = cur.fetchone()[0]
 
@@ -195,6 +211,20 @@ def health():
             WHERE date = CURRENT_DATE
         """)
         acilis = cur.fetchone()[0]
+        
+        # Tablo varlık kontrolü
+        cur.execute("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name IN (
+                'currencies', 'golds', 'silvers', 
+                'gold_daily_opening', 'currency_history', 
+                'gold_history', 'silver_history'
+            )
+            ORDER BY table_name
+        """)
+        existing_tables = [row[0] for row in cur.fetchall()]
 
         cur.close()
         put_db(conn)
@@ -207,13 +237,20 @@ def health():
                 "gumus": gumus,
                 "bugun_acilis_kaydi": acilis
             },
+            "database": {
+                "tables_count": len(existing_tables),
+                "tables": existing_tables,
+                "all_present": len(existing_tables) == 7
+            },
             "timestamp": datetime.now().isoformat()
         }), 200
 
     except Exception as e:
+        logger.error(f"❌ Health check hatası: {e}")
         return jsonify({
             "status": "unhealthy", 
-            "error": str(e)
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
         }), 500
 
 @app.route("/api/update", methods=["POST", "GET"])
@@ -278,6 +315,44 @@ def reset_opening_prices():
         return jsonify({
             "success": False,
             "error": str(e)
+        }), 500
+
+@app.route("/api/debug/gold-opening", methods=["GET"])
+def debug_gold_opening():
+    """
+    Bugünkü açılış fiyatlarını kontrol etmek için debug endpoint
+    GET /api/debug/gold-opening
+    """
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT name, opening_rate, date, 
+                   to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at
+            FROM gold_daily_opening
+            WHERE date = CURRENT_DATE
+            ORDER BY name
+        """)
+        
+        columns = [col[0] for col in cur.description]
+        data = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        cur.close()
+        put_db(conn)
+        
+        return jsonify({
+            'success': True,
+            'count': len(data),
+            'data': data,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ Debug endpoint hatası: {e}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
         }), 500
 
 # ==========================================
