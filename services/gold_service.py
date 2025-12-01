@@ -84,6 +84,9 @@ def fetch_golds():
         r.raise_for_status()
         data = r.json()
         
+        # 🔍 DEBUG: API yanıtını logla
+        logger.info(f"🔍 API'den gelen toplam veri sayısı: {len(data)}")
+        
         gold_mapping = {
             "gram-altin": "Gram Altın",
             "ceyrek-altin": "Çeyrek Altın",
@@ -92,23 +95,52 @@ def fetch_golds():
             "cumhuriyet-altini": "Cumhuriyet Altını"
         }
         
+        # 🔍 DEBUG: Her altın için API'de olup olmadığını kontrol et
+        for api_code, db_name in gold_mapping.items():
+            exists = api_code in data
+            if exists:
+                item_type = data[api_code].get("Type", "N/A")
+                selling = data[api_code].get("Selling", "N/A")
+                logger.info(f"🔍 {api_code} → Var | Type: {item_type} | Selling: {selling}")
+            else:
+                logger.warning(f"⚠️ {api_code} → API'de YOK!")
+        
         with get_db_cursor() as (conn, cur):
             added = 0
+            skipped = 0
             
             for api_code, db_name in gold_mapping.items():
-                if api_code not in data or data[api_code].get("Type") != "Gold":
+                # 🔍 DEBUG: Her adımı logla
+                if api_code not in data:
+                    logger.warning(f"❌ {api_code} API'de yok, atlanıyor")
+                    skipped += 1
                     continue
                 
                 item = data[api_code]
-                selling = get_safe_float(item.get("Selling", 0))
+                item_type = item.get("Type")
+                
+                if item_type != "Gold":
+                    logger.warning(f"❌ {api_code} Type={item_type}, atlanıyor")
+                    skipped += 1
+                    continue
+                
+                selling_raw = item.get("Selling", 0)
+                selling = get_safe_float(selling_raw)
+                
+                logger.info(f"🔍 {api_code}: Selling_Raw='{selling_raw}' → Parsed={selling}")
                 
                 if selling <= 0:
+                    logger.warning(f"❌ {api_code} selling={selling}, atlanıyor")
+                    skipped += 1
                     continue
                 
                 rate = selling
                 
                 # ⭐ Günlük açılış fiyatından yüzde değişimi hesapla
                 change_percent = calculate_change_from_opening(conn, cur, db_name, rate)
+                
+                # 🔍 DEBUG: INSERT öncesi
+                logger.info(f"💾 {db_name} kaydediliyor: rate={rate}, change={change_percent}%")
                 
                 cur.execute("""
                     INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
@@ -117,7 +149,13 @@ def fetch_golds():
                         rate=EXCLUDED.rate,
                         change_percent=EXCLUDED.change_percent,
                         updated_at=CURRENT_TIMESTAMP
+                    RETURNING name
                 """, (db_name, 0, 0, rate, change_percent))
+                
+                # 🔍 DEBUG: INSERT sonrası kontrol
+                result = cur.fetchone()
+                if result:
+                    logger.info(f"✅ {result[0]} veritabanına kaydedildi")
                 
                 cur.execute(
                     "INSERT INTO gold_history (name, rate) VALUES (%s, %s)",
@@ -128,6 +166,8 @@ def fetch_golds():
             
             conn.commit()
         
+        # 🔍 DEBUG: Özet bilgi
+        logger.info(f"📊 Sonuç: {added} eklendi, {skipped} atlandı")
         logger.info(f"✅ {added} altın fiyatı güncellendi")
         
         try:
@@ -140,4 +180,6 @@ def fetch_golds():
         
     except Exception as e:
         logger.error(f"❌ Altın çekme hatası: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
