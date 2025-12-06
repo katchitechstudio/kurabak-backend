@@ -42,33 +42,6 @@ def save_daily_opening_prices():
         return False
 
 
-def calculate_change_from_opening(conn, cur, name, current_rate):
-    try:
-        cur.execute("""
-            SELECT opening_rate 
-            FROM gold_daily_opening 
-            WHERE name = %s AND date = CURRENT_DATE
-        """, (name,))
-        
-        result = cur.fetchone()
-        
-        if result and result[0] > 0:
-            opening_rate = float(result[0])
-            change_percent = ((current_rate - opening_rate) / opening_rate) * 100
-            return round(change_percent, 2)
-        else:
-            cur.execute("""
-                INSERT INTO gold_daily_opening (name, opening_rate, date)
-                VALUES (%s, %s, CURRENT_DATE)
-                ON CONFLICT (name, date) DO NOTHING
-            """, (name, current_rate))
-            return 0.0
-            
-    except Exception as e:
-        logger.error(f"❌ Yüzde hesaplama hatası ({name}): {e}")
-        return 0.0
-
-
 def fetch_golds():
     try:
         url = "https://finans.truncgil.com/v3/today.json"
@@ -103,7 +76,7 @@ def fetch_golds():
                     continue
                 
                 rate = selling
-                change_percent = calculate_change_from_opening(conn, cur, db_name, rate)
+                change_percent = get_safe_float(item.get("Change", 0))
                 
                 cur.execute("""
                     INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
