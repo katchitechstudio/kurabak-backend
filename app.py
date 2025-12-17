@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # ==========================================
 from config import Config
 
-from services.currency_service import fetch_currencies
+from services.currency_service import fetch_currencies, cleanup_database
 from services.gold_service import fetch_golds, save_daily_opening_prices
 from services.silver_service import fetch_silvers
 
@@ -68,6 +68,17 @@ def init_scheduler():
             replace_existing=True
         )
         logger.info("📅 Günlük açılış fiyatı job'u eklendi (00:00)")
+
+        # 🛡️ YENİ: Her gece 03:30'da eski verileri temizle (Disk Koruma)
+        # Bu görev 3 günden eski history verilerini siler.
+        scheduler.add_job(
+            cleanup_database,
+            trigger=CronTrigger(hour=3, minute=30, second=0),
+            id="cleanup_old_data",
+            name="Eski Geçmiş Verileri Temizleme",
+            replace_existing=True
+        )
+        logger.info("📅 Veritabanı temizlik job'u eklendi (03:30)")
 
         # 🔥 10 Dakikada bir güncelleme
         scheduler.add_job(
@@ -150,7 +161,7 @@ init_connection_pool()
 # Veritabanı tablolarını oluştur
 init_db()
 
-# İlk kurulum ve scheduler
+# İlk kurulum ve scheduler (Debug modunda çift çalışmayı önler)
 if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     initial_setup()
     init_scheduler()
@@ -166,7 +177,7 @@ def home():
     return jsonify({
         "app": "KuraBak Backend",
         "status": "running",
-        "version": "3.1 (Connection Pool + Auto-Migration)",
+        "version": "3.2 (Disk Protection + Connection Pool)",
         "endpoints": [
             "/api/currency/all",
             "/api/currency/gold/all",
@@ -179,6 +190,7 @@ def home():
             "Otomatik tablo oluşturma",
             "10 dakikalık otomatik güncelleme",
             "Günlük açılış fiyatı takibi (00:00)",
+            "Otomatik veritabanı temizliği (03:30)",
             "Jitter ile bot koruması"
         ],
         "timestamp": datetime.now().isoformat()
@@ -230,7 +242,7 @@ def health():
             "database": {
                 "tables_count": len(existing_tables),
                 "tables": existing_tables,
-                "all_present": len(existing_tables) == 7
+                "all_present": len(existing_tables) >= 7
             },
             "timestamp": datetime.now().isoformat()
         }), 200
