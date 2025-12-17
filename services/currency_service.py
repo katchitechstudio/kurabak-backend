@@ -36,7 +36,6 @@ def fetch_currencies():
         
         conn = get_db()
         cur = conn.cursor()
-        added = 0
         
         for code in currency_codes:
             if code not in data or data[code].get("Type") != "Currency":
@@ -53,6 +52,7 @@ def fetch_currencies():
             if selling <= 0:
                 continue
             
+            # 1. Ana tabloyu güncelle (Her zaman güncel kalsın)
             cur.execute("""
                 INSERT INTO currencies (code, name, rate, change_percent, updated_at)
                 VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -63,12 +63,15 @@ def fetch_currencies():
                     updated_at=CURRENT_TIMESTAMP
             """, (code, name, selling, change_percent))
             
-            cur.execute(
-                "INSERT INTO currency_history (code, rate) VALUES (%s, %s)",
-                (code, selling)
-            )
+            # 2. ÖNLEM: Sadece fiyat değiştiyse history'ye ekle
+            cur.execute("SELECT rate FROM currency_history WHERE code = %s ORDER BY id DESC LIMIT 1", (code,))
+            last_entry = cur.fetchone()
             
-            added += 1
+            if not last_entry or float(last_entry[0]) != float(selling):
+                cur.execute(
+                    "INSERT INTO currency_history (code, rate) VALUES (%s, %s)",
+                    (code, selling)
+                )
         
         conn.commit()
         
@@ -80,7 +83,8 @@ def fetch_currencies():
         
         return True
         
-    except:
+    except Exception as e:
+        logger.error(f"❌ fetch_currencies hatası: {e}")
         if conn:
             conn.rollback()
         return False
@@ -90,3 +94,25 @@ def fetch_currencies():
             cur.close()
         if conn:
             put_db(conn)
+
+def cleanup_database():
+    """3 günden eski verileri silerek diski korur."""
+    conn = None
+    cur = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        
+        # Geçmiş tablolarını temizle
+        cur.execute("DELETE FROM currency_history WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '3 days'")
+        cur.execute("DELETE FROM gold_history WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '3 days'")
+        cur.execute("DELETE FROM silver_history WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '3 days'")
+        
+        conn.commit()
+        logger.info("🧹 Veritabanı temizliği başarılı: 3 günden eski veriler silindi.")
+    except Exception as e:
+        logger.error(f"❌ Temizlik hatası: {e}")
+        if conn: conn.rollback()
+    finally:
+        if cur: cur.close()
+        if conn: put_db(conn)
