@@ -44,8 +44,8 @@ def fetch_silvers():
         r.raise_for_status()
         data = r.json()
         
-        # V4'te gümüş kodu "gumus" (küçük harf)
-        if "gumus" in data and data["gumus"].get("Type") == "Gold":
+        # V4'te gümüş kodu "GUMUS" (BÜYÜK HARF - V3 ile aynı)
+        if "GUMUS" in data and data["GUMUS"].get("Type") == "Gold":
             item = data["gumus"]
             
             selling = get_safe_float(item.get("Selling", 0))
