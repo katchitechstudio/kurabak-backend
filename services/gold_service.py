@@ -41,6 +41,14 @@ def fetch_golds():
         r.raise_for_status()
         data = r.json()
         
+        # DEBUG: Hangi altın kodları var kontrol et
+        logger.info(f"🔍 API'den gelen altın kodları kontrol ediliyor...")
+        for key in ["gram-altin", "ceyrek-altin", "yarim-altin", "tam-altin", "cumhuriyet-altini"]:
+            if key in data:
+                logger.info(f"  ✅ {key} bulundu - Type: {data[key].get('Type')}")
+            else:
+                logger.warning(f"  ❌ {key} bulunamadı")
+        
         # V4'te altın kodları tire ile ayrılmış küçük harf
         gold_mapping = {
             "gram-altin": "Gram Altın",
