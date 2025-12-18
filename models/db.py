@@ -7,21 +7,12 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# CONNECTION POOL - GLOBAL
-# ==========================================
 connection_pool = None
 
-
 def get_db_config():
-    """
-    DATABASE_URL varsa onu parse et, yoksa ayrı değişkenleri kullan
-    Render, Heroku gibi platformlar DATABASE_URL kullanır
-    """
     database_url = os.getenv("DATABASE_URL")
     
     if database_url:
-        # postgres:// → postgresql:// dönüşümü (bazı platformlar eski format kullanır)
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
         
@@ -29,14 +20,13 @@ def get_db_config():
         config = {
             "host": parsed.hostname,
             "port": parsed.port or 5432,
-            "database": parsed.path[1:],  # başındaki / karakterini kaldır
+            "database": parsed.path[1:],
             "user": parsed.username,
             "password": parsed.password
         }
         logger.info(f"📡 DATABASE_URL kullanılıyor (host: {parsed.hostname})")
         return config
     else:
-        # Lokal geliştirme için ayrı değişkenler
         logger.info("📡 Ayrı DB_* environment değişkenleri kullanılıyor")
         return {
             "host": os.getenv("DB_HOST", "localhost"),
@@ -46,12 +36,7 @@ def get_db_config():
             "password": os.getenv("DB_PASSWORD", "")
         }
 
-
 def init_connection_pool():
-    """
-    Uygulama başlarken bir kez çağrılır
-    Connection pool'u oluşturur
-    """
     global connection_pool
     
     if connection_pool is None:
@@ -59,20 +44,16 @@ def init_connection_pool():
             db_config = get_db_config()
             
             connection_pool = psycopg2.pool.SimpleConnectionPool(
-                minconn=1,
-                maxconn=10,  # Maksimum 10 bağlantı
+                minconn=2,
+                maxconn=20,
                 **db_config
             )
-            logger.info("✅ Database connection pool oluşturuldu (1-10 connection)")
+            logger.info("✅ Database connection pool oluşturuldu (2-20 connection)")
         except Exception as e:
             logger.error(f"❌ Connection pool oluşturulamadı: {e}")
             raise e
 
-
 def get_db():
-    """
-    Pool'dan bir bağlantı al
-    """
     global connection_pool
     
     if connection_pool is None:
@@ -85,11 +66,7 @@ def get_db():
         logger.error(f"❌ Connection alınamadı: {e}")
         raise e
 
-
 def put_db(conn):
-    """
-    Bağlantıyı pool'a geri ver (kapatma!)
-    """
     global connection_pool
     
     if connection_pool and conn:
@@ -98,34 +75,16 @@ def put_db(conn):
         except Exception as e:
             logger.error(f"❌ Connection geri verilemedi: {e}")
 
-
 @contextmanager
 def get_db_connection():
-    """
-    Context manager - bağlantıyı otomatik kapat
-    
-    Kullanım:
-    with get_db_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT ...")
-    """
     conn = get_db()
     try:
         yield conn
     finally:
         put_db(conn)
 
-
 @contextmanager
 def get_db_cursor():
-    """
-    Context manager - hem cursor hem connection'ı otomatik kapat
-    
-    Kullanım:
-    with get_db_cursor() as (conn, cur):
-        cur.execute("SELECT ...")
-        conn.commit()
-    """
     conn = get_db()
     cur = None
     try:
@@ -139,11 +98,7 @@ def get_db_cursor():
                 pass
         put_db(conn)
 
-
 def close_all_connections():
-    """
-    Tüm bağlantıları kapat (uygulama kapanırken)
-    """
     global connection_pool
     
     if connection_pool:
