@@ -5,10 +5,25 @@ from models.db import get_db, put_db
 logger = logging.getLogger(__name__)
 
 def get_safe_float(value):
+    """
+    V4 API'de değerler string olarak geliyor ve virgül kullanılıyor.
+    Change değerleri '%0,03' formatında geliyor.
+    """
     try:
         if isinstance(value, (int, float)):
             return float(value)
-        value_str = str(value).replace(",", ".").replace("%", "").strip()
+        
+        value_str = str(value).strip()
+        
+        # V4'te "89,85" formatı var
+        if '.' in value_str and ',' in value_str:
+            value_str = value_str.replace(".", "").replace(",", ".")
+        else:
+            value_str = value_str.replace(",", ".")
+        
+        # % işaretini temizle (V4'te "%-1,61" formatı var)
+        value_str = value_str.replace("%", "")
+        
         return float(value_str)
     except:
         return 0.0
@@ -18,7 +33,8 @@ def fetch_silvers():
     cur = None
     
     try:
-        url = "https://finans.truncgil.com/v3/today.json"
+        # V4 API endpoint
+        url = "https://finans.truncgil.com/v4/today.json"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json"
@@ -28,6 +44,7 @@ def fetch_silvers():
         r.raise_for_status()
         data = r.json()
         
+        # V4'te gümüş kodu "gumus" (küçük harf)
         if "gumus" in data and data["gumus"].get("Type") == "Gold":
             item = data["gumus"]
             
@@ -36,7 +53,12 @@ def fetch_silvers():
             
             if selling > 0:
                 name = "Gümüş"
-                rate = selling
+                
+                # Fiyatı yuvarla - gümüş için 2 hane yeterli
+                rate = round(selling, 2)
+                
+                # Değişim oranını yuvarla
+                change_percent = round(change_percent, 2)
                 
                 conn = get_db()
                 cur = conn.cursor()
@@ -58,7 +80,7 @@ def fetch_silvers():
                 except:
                     pass
                 
-                logger.info("✅ Gümüş fiyatı güncellendi")
+                logger.info("✅ Gümüş fiyatı güncellendi (V4 API)")
                 return True
             else:
                 return False
