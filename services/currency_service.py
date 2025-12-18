@@ -5,10 +5,16 @@ from models.db import get_db, put_db
 logger = logging.getLogger(__name__)
 
 def get_safe_float(value):
+    """
+    V4 API'de değerler string olarak geliyor ve virgül kullanılıyor.
+    Change değerleri '%0,03' formatında geliyor.
+    """
     try:
         if isinstance(value, (int, float)):
             return float(value)
         value_str = str(value).replace(",", ".").replace("%", "").strip()
+        # V4'te bazen "$4.330,99" gibi dolar işareti olabiliyor
+        value_str = value_str.replace("$", "").replace(" ", "")
         return float(value_str)
     except:
         return 0.0
@@ -18,7 +24,8 @@ def fetch_currencies():
     cur = None
     
     try:
-        url = "https://finans.truncgil.com/v3/today.json"
+        # V4 API endpoint
+        url = "https://finans.truncgil.com/v4/today.json"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json"
@@ -38,19 +45,35 @@ def fetch_currencies():
         cur = conn.cursor()
         
         for code in currency_codes:
-            if code not in data or data[code].get("Type") != "Currency":
+            if code not in data:
                 continue
             
             item = data[code]
+            
+            # V4'te Type kontrolü yapıyoruz (Currency olmalı)
+            if item.get("Type") != "Currency":
+                continue
+            
+            # V4'te alan isimleri büyük harfle başlıyor (V3'le aynı)
             name = item.get("Name", code)
             selling = get_safe_float(item.get("Selling", 0))
+            buying = get_safe_float(item.get("Buying", 0))
             change_percent = get_safe_float(item.get("Change", 0))
             
-            if code == "JPY":
-                selling = selling * 100
+            # V4'te JPY zaten 100 yen için hazır geliyor
+            # Ek işlem yapılmayacak
             
             if selling <= 0:
                 continue
+            
+            # Fiyatları yuvarla - büyük değerler için 2, küçükler için 4 hane
+            if selling >= 10:
+                selling = round(selling, 2)  # 42.7352 -> 42.73
+            else:
+                selling = round(selling, 4)  # 0.5355 -> 0.5355
+            
+            # Değişim oranını 2 hane yap
+            change_percent = round(change_percent, 2)  # 0.03 -> 0.03
             
             cur.execute("""
                 INSERT INTO currencies (code, name, rate, change_percent, updated_at)
@@ -70,7 +93,7 @@ def fetch_currencies():
         except:
             pass
         
-        logger.info("✅ Döviz verileri güncellendi")
+        logger.info("✅ Döviz verileri güncellendi (V4 API)")
         return True
         
     except Exception as e:
