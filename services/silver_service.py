@@ -46,7 +46,7 @@ def fetch_silvers():
         
         # V4'te gümüş kodu "GUMUS" (BÜYÜK HARF - V3 ile aynı)
         if "GUMUS" in data and data["GUMUS"].get("Type") == "Gold":
-            item = data["gumus"]
+            item = data["GUMUS"]
             
             selling = get_safe_float(item.get("Selling", 0))
             change_percent = get_safe_float(item.get("Change", 0))
