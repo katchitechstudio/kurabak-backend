@@ -22,26 +22,6 @@ def get_safe_float(value):
     except:
         return 0.0
 
-
-def save_daily_opening_prices():
-    try:
-        with get_db_cursor() as (conn, cur):
-            cur.execute("""
-                INSERT INTO gold_daily_opening (name, opening_rate, date)
-                SELECT name, rate, CURRENT_DATE
-                FROM golds
-                ON CONFLICT (name, date) DO NOTHING
-            """)
-            conn.commit()
-            
-        logger.info("✅ Günlük açılış fiyatları kaydedildi")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Açılış fiyatları kaydetme hatası: {e}")
-        return False
-
-
 def fetch_golds():
     try:
         url = "https://finans.truncgil.com/v3/today.json"
@@ -86,11 +66,6 @@ def fetch_golds():
                         change_percent=EXCLUDED.change_percent,
                         updated_at=CURRENT_TIMESTAMP
                 """, (db_name, 0, 0, rate, change_percent))
-                
-                cur.execute(
-                    "INSERT INTO gold_history (name, rate) VALUES (%s, %s)",
-                    (db_name, rate)
-                )
                 
                 added += 1
             
