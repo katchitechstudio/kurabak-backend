@@ -50,8 +50,6 @@ def fetch_silvers():
                         updated_at=CURRENT_TIMESTAMP
                 """, (name, 0, 0, rate, change_percent))
                 
-                cur.execute("INSERT INTO silver_history (name, rate) VALUES (%s, %s)", (name, rate))
-                
                 conn.commit()
                 
                 try:
@@ -60,13 +58,15 @@ def fetch_silvers():
                 except:
                     pass
                 
+                logger.info("✅ Gümüş fiyatı güncellendi")
                 return True
             else:
                 return False
         else:
             return False
             
-    except:
+    except Exception as e:
+        logger.error(f"❌ Gümüş çekme hatası: {e}")
         if conn:
             try:
                 conn.rollback()
