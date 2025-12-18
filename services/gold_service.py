@@ -5,17 +5,23 @@ from models.db import get_db_cursor
 logger = logging.getLogger(__name__)
 
 def get_safe_float(value):
+    """
+    V4 API'de değerler string olarak geliyor ve virgül kullanılıyor.
+    Change değerleri '%0,03' formatında geliyor.
+    """
     try:
         if isinstance(value, (int, float)):
             return float(value)
         
         value_str = str(value).strip()
         
+        # V4'te "5.953,42" formatı var
         if '.' in value_str and ',' in value_str:
             value_str = value_str.replace(".", "").replace(",", ".")
         else:
             value_str = value_str.replace(",", ".")
         
+        # % işaretini temizle (V4'te "%0,03" formatı var)
         value_str = value_str.replace("%", "")
         
         return float(value_str)
@@ -24,7 +30,8 @@ def get_safe_float(value):
 
 def fetch_golds():
     try:
-        url = "https://finans.truncgil.com/v3/today.json"
+        # V4 API endpoint
+        url = "https://finans.truncgil.com/v4/today.json"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json"
@@ -34,6 +41,7 @@ def fetch_golds():
         r.raise_for_status()
         data = r.json()
         
+        # V4'te altın kodları tire ile ayrılmış küçük harf
         gold_mapping = {
             "gram-altin": "Gram Altın",
             "ceyrek-altin": "Çeyrek Altın",
@@ -55,8 +63,11 @@ def fetch_golds():
                 if selling <= 0:
                     continue
                 
-                rate = selling
-                change_percent = get_safe_float(item.get("Change", 0))
+                # Fiyatları yuvarla - altın için 2 hane yeterli
+                rate = round(selling, 2)
+                
+                # Değişim oranını yuvarla
+                change_percent = round(get_safe_float(item.get("Change", 0)), 2)
                 
                 cur.execute("""
                     INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
@@ -71,7 +82,7 @@ def fetch_golds():
             
             conn.commit()
         
-        logger.info(f"✅ {added} altın fiyatı güncellendi")
+        logger.info(f"✅ {added} altın fiyatı güncellendi (V4 API)")
         
         try:
             from utils.cache import clear_cache
