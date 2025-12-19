@@ -16,9 +16,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from config import Config
-from services.currency_service import fetch_currencies, cleanup_database
+from services.currency_service import fetch_currencies
 from services.gold_service import fetch_golds
 from services.silver_service import fetch_silvers
+from services.maintenance_service import weekly_maintenance
 from routes.general_routes import api_bp
 from models.db import get_db_cursor, init_connection_pool, close_all_connections
 from models.currency_models import init_db, verify_database_health
@@ -38,15 +39,22 @@ def init_scheduler():
     try:
         scheduler = BackgroundScheduler()
 
+        # Haftalık bakım - Her Pazar sabahı 04:00
         scheduler.add_job(
-            cleanup_database,
-            trigger=CronTrigger(hour=3, minute=30, second=0),
-            id="cleanup_database",
-            name="Veritabanı Optimizasyonu",
+            weekly_maintenance,
+            trigger=CronTrigger(
+                day_of_week='sun',
+                hour=4,
+                minute=0,
+                second=0
+            ),
+            id="weekly_maintenance",
+            name="Haftalık Bakım (Temizlik + Optimizasyon)",
             replace_existing=True
         )
-        logger.info("📅 Veritabanı temizlik job'u eklendi (03:30)")
+        logger.info("📅 Haftalık bakım job'u eklendi (Her Pazar 04:00)")
 
+        # Döviz güncelleme - 10 dakikada bir
         scheduler.add_job(
             lambda: run_with_jitter(fetch_currencies),
             "interval",
@@ -55,6 +63,7 @@ def init_scheduler():
             name="Döviz güncelleme"
         )
 
+        # Altın güncelleme - 10 dakikada bir
         scheduler.add_job(
             lambda: run_with_jitter(fetch_golds),
             "interval",
@@ -63,6 +72,7 @@ def init_scheduler():
             name="Altın güncelleme"
         )
 
+        # Gümüş güncelleme - 10 dakikada bir
         scheduler.add_job(
             lambda: run_with_jitter(fetch_silvers),
             "interval",
@@ -103,7 +113,7 @@ def home():
     return jsonify({
         "app": "KuraBak Backend",
         "status": "running",
-        "version": "4.0 (Production Ready - 10K+ Users)",
+        "version": "4.1 (Production Ready - 10K+ Users)",
         "endpoints": [
             "/api/currency/all",
             "/api/currency/gold/all",
@@ -115,7 +125,8 @@ def home():
             "Redis cache sistemi",
             "Connection pool yönetimi (2-20)",
             "10 dakikalık otomatik güncelleme",
-            "Otomatik veritabanı optimizasyonu (03:30)",
+            "Haftalık otomatik bakım (Pazar 04:00)",
+            "30 günlük veri saklama",
             "Jitter ile bot koruması"
         ],
         "timestamp": datetime.now().isoformat()
