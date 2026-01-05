@@ -1,120 +1,142 @@
+"""
+Maintenance Service - Redis Only
+Periyodik olarak API'den veri çeker ve Redis'e yazar
+"""
 import logging
-import psycopg2
-from datetime import datetime, timedelta
-from config import Config
-from models.db import get_db, put_db
+from apscheduler.schedulers.background import BackgroundScheduler
+from services.currency_service import fetch_currencies_to_cache
+from services.gold_service import fetch_golds_to_cache
+from services.silver_service import fetch_silvers_to_cache
 
 logger = logging.getLogger(__name__)
 
-def cleanup_old_data():
+# Scheduler instance
+scheduler = BackgroundScheduler()
+
+
+def fetch_all_data():
     """
-    30 günden eski verileri temizle
-    Sadece en son kayıtları tut, eski verileri sil
+    Tüm verileri API'den çek ve Redis'e yaz
+    1.5 dakikada bir çalışır
     """
-    conn = None
-    cur = None
+    logger.info("🔄 Periyodik veri güncelleme başlıyor...")
+    
+    success_count = 0
+    total_count = 3
+    
+    # 1. Dövizleri çek
+    try:
+        if fetch_currencies_to_cache():
+            success_count += 1
+            logger.info("✅ Dövizler güncellendi")
+        else:
+            logger.warning("⚠️ Döviz güncelleme başarısız")
+    except Exception as e:
+        logger.error(f"❌ Döviz çekme hatası: {e}")
+    
+    # 2. Altınları çek
+    try:
+        if fetch_golds_to_cache():
+            success_count += 1
+            logger.info("✅ Altınlar güncellendi")
+        else:
+            logger.warning("⚠️ Altın güncelleme başarısız")
+    except Exception as e:
+        logger.error(f"❌ Altın çekme hatası: {e}")
+    
+    # 3. Gümüşü çek
+    try:
+        if fetch_silvers_to_cache():
+            success_count += 1
+            logger.info("✅ Gümüş güncellendi")
+        else:
+            logger.warning("⚠️ Gümüş güncelleme başarısız")
+    except Exception as e:
+        logger.error(f"❌ Gümüş çekme hatası: {e}")
+    
+    # Sonuç raporu
+    if success_count == total_count:
+        logger.info(f"🎉 Tüm veriler başarıyla güncellendi ({success_count}/{total_count})")
+    elif success_count > 0:
+        logger.warning(f"⚠️ Kısmi güncelleme: {success_count}/{total_count} başarılı")
+    else:
+        logger.error(f"❌ Hiçbir veri güncellenemedi!")
+    
+    return success_count > 0
+
+
+def start_scheduler():
+    """
+    Scheduler'ı başlat
+    1.5 dakikada bir fetch_all_data() çalıştırır
+    """
+    if scheduler.running:
+        logger.warning("⚠️ Scheduler zaten çalışıyor")
+        return
     
     try:
-        conn = get_db()
-        cur = conn.cursor()
+        # İlk çalıştırmayı hemen yap
+        logger.info("🚀 İlk veri çekme başlıyor...")
+        fetch_all_data()
         
-        # 30 gün öncesi
-        cutoff_date = datetime.now() - timedelta(days=30)
+        # 1.5 dakikada bir tekrarla (90 saniye)
+        scheduler.add_job(
+            fetch_all_data,
+            'interval',
+            seconds=90,
+            id='fetch_all_data',
+            name='API Veri Güncelleme',
+            replace_existing=True
+        )
         
-        # Her tablodan eski kayıtları sil
-        tables = ['currencies', 'golds', 'silvers']
-        total_deleted = 0
-        
-        for table in tables:
-            cur.execute(f"""
-                DELETE FROM {table} 
-                WHERE updated_at < %s
-            """, (cutoff_date,))
-            
-            deleted = cur.rowcount
-            total_deleted += deleted
-            
-            if deleted > 0:
-                logger.info(f"🗑️ {table}: {deleted} eski kayıt silindi")
-        
-        conn.commit()
-        
-        if total_deleted > 0:
-            logger.info(f"✅ Toplam {total_deleted} eski kayıt temizlendi (30+ gün öncesi)")
-        else:
-            logger.info("✅ Temizlenecek eski kayıt yok")
-        
-        return True
+        scheduler.start()
+        logger.info("✅ Scheduler başlatıldı (1.5 dakikada bir çalışacak)")
         
     except Exception as e:
-        logger.error(f"❌ Veri temizleme hatası: {e}")
-        if conn:
-            conn.rollback()
-        return False
-        
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            put_db(conn)
+        logger.error(f"❌ Scheduler başlatma hatası: {e}")
+        raise
+
+
+def stop_scheduler():
+    """
+    Scheduler'ı durdur
+    """
+    try:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+            logger.info("🛑 Scheduler durduruldu")
+        else:
+            logger.info("ℹ️ Scheduler zaten durmuş")
+    except Exception as e:
+        logger.error(f"❌ Scheduler durdurma hatası: {e}")
+
+
+# Geriye uyumluluk için (eski kodlar çağırabilir)
+def cleanup_old_data():
+    """Artık kullanılmıyor - PostgreSQL yok"""
+    logger.info("ℹ️ cleanup_old_data çağrıldı ama PostgreSQL kullanılmıyor")
+    return True
+
 
 def optimize_database():
-    """
-    Veritabanını optimize et - VACUUM ANALYZE
-    AUTOCOMMIT mode ile çalışır (transaction dışında)
-    """
-    conn = None
-    cur = None
-    
-    try:
-        # VACUUM için AUTOCOMMIT mode gerekli
-        conn = psycopg2.connect(Config.DATABASE_URL)
-        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        
-        tables = ['currencies', 'golds', 'silvers']
-        
-        for table in tables:
-            cur.execute(f"VACUUM ANALYZE {table}")
-            logger.info(f"🧹 {table} tablosu optimize edildi")
-        
-        logger.info("✅ Veritabanı optimizasyonu tamamlandı (VACUUM ANALYZE)")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Veritabanı optimizasyonu hatası: {e}")
-        return False
-        
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+    """Artık kullanılmıyor - PostgreSQL yok"""
+    logger.info("ℹ️ optimize_database çağrıldı ama PostgreSQL kullanılmıyor")
+    return True
+
 
 def weekly_maintenance():
     """
-    Haftalık bakım - Eski verileri temizle ve veritabanını optimize et
-    Her Pazar sabahı 04:00'te çalışır
+    Haftalık bakım - Sadece cache temizleme
+    Redis'te veri birikmediği için çok basit
     """
     logger.info("🔧 Haftalık bakım başlıyor...")
     
-    # 1. Önce eski verileri temizle
-    cleanup_success = cleanup_old_data()
-    
-    # 2. Sonra veritabanını optimize et
-    optimize_success = optimize_database()
-    
-    if cleanup_success and optimize_success:
-        logger.info("✅ Haftalık bakım başarıyla tamamlandı")
-    else:
-        logger.warning("⚠️ Haftalık bakım kısmen tamamlandı (bazı işlemler başarısız)")
-    
-    # Cache'i temizle
     try:
         from utils.cache import clear_cache
         clear_cache()
         logger.info("🗑️ Redis cache temizlendi")
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"❌ Cache temizleme hatası: {e}")
     
+    logger.info("✅ Haftalık bakım tamamlandı")
     return True
