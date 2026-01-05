@@ -1,51 +1,82 @@
+"""
+KuraBak Backend Configuration
+Redis-only architecture (no PostgreSQL)
+"""
 import os
+
 
 class Config:
     """KuraBak Backend genel ayarları"""
     
     # ======================================
-    # DATABASE
+    # REDIS (Cache/Storage)
     # ======================================
-    DB_HOST = os.environ.get("DB_HOST", "localhost")
-    DB_PORT = os.environ.get("DB_PORT", "5432")
-    DB_USER = os.environ.get("DB_USER", "postgres")
-    DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
-    DB_NAME = os.environ.get("DB_NAME", "kurabak")
-    
-    # Eğer Render/Heroku DATABASE_URL veriyorsa override et
-    DATABASE_URL = os.environ.get("DATABASE_URL")
+    REDIS_URL = os.environ.get("REDIS_URL")
     
     # ======================================
-    # CollectAPI Token
+    # CACHE AYARLARI
     # ======================================
-    COLLECTAPI_TOKEN = os.environ.get("COLLECTAPI_TOKEN")
+    CACHE_TTL = 300  # 5 dakika (saniye)
+    UPDATE_INTERVAL = 90  # 1.5 dakika (saniye) - API çekme aralığı
     
     # ======================================
-    # Döviz (Currency) Ayarları
-    # Sadece 15 döviz işlenecek
+    # API AYARLARI
     # ======================================
-    CURRENCIES_LIST = [
-        "USD", "EUR", "JPY", "GBP", "CNY",
-        "CHF", "CAD", "AUD", "NZD", "SGD",
-        "HKD", "SEK", "KRW", "NOK", "INR"
+    API_TIMEOUT = 15  # saniye
+    API_BASE_URL = "https://finans.truncgil.com/v4/today.json"
+    
+    # ======================================
+    # POPÜLER DÖVİZLER (15 adet)
+    # Android uygulamada gösterilecek
+    # ======================================
+    POPULAR_CURRENCIES = [
+        "USD",  # Dolar
+        "EUR",  # Euro
+        "GBP",  # Sterlin
+        "JPY",  # Japon Yeni
+        "CHF",  # İsviçre Frangı
+        "CNY",  # Çin Yuanı
+        "CAD",  # Kanada Doları
+        "AUD",  # Avustralya Doları
+        "DKK",  # Danimarka Kronu
+        "SEK",  # İsveç Kronu
+        "NOK",  # Norveç Kronu
+        "SAR",  # Suudi Arabistan Riyali
+        "QAR",  # Katar Riyali
+        "KWD",  # Kuveyt Dinarı
+        "AED"   # BAE Dirhemi
     ]
     
     # ======================================
-    # ALTIN FORMATLARI
+    # POPÜLER ALTINLAR (5 adet)
+    # Android uygulamada gösterilecek
     # ======================================
-    GOLD_FORMATS = [
+    POPULAR_GOLDS = [
         "Gram Altın",
-        "ONS Altın",
         "Çeyrek Altın",
         "Yarım Altın",
         "Tam Altın",
-        "Cumhuriyet Altını",
-        "Has Altın",
-        "Ziynet Altın",
-        "Reşat Lira Altın"
+        "Cumhuriyet Altını"
     ]
     
     # ======================================
-    # GÜMÜŞ FORMATLARI
+    # GÜMÜŞ (1 adet)
     # ======================================
-    SILVER_FORMATS = ["Gümüş"]
+    SILVER_NAME = "Gümüş"
+    
+    # ======================================
+    # DEPRECATED (Geriye uyumluluk için)
+    # Artık kullanılmıyor ama eski kod referans edebilir
+    # ======================================
+    DATABASE_URL = None  # PostgreSQL kullanılmıyor
+    DB_HOST = None
+    DB_PORT = None
+    DB_USER = None
+    DB_PASSWORD = None
+    DB_NAME = None
+    COLLECTAPI_TOKEN = None  # Artık finans.truncgil.com kullanılıyor
+    
+    # Eski liste isimleri (geriye uyumluluk)
+    CURRENCIES_LIST = POPULAR_CURRENCIES
+    GOLD_FORMATS = POPULAR_GOLDS
+    SILVER_FORMATS = [SILVER_NAME]
