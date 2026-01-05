@@ -1,13 +1,26 @@
+"""
+Gold Service - V4 API
+Redis'e direkt yazar, PostgreSQL kullanmaz
+"""
 import requests
 import logging
-from models.db import get_db_cursor
+from utils.cache import set_cache
 
 logger = logging.getLogger(__name__)
+
+CACHE_TTL = 300  # 5 dakika
+
 
 def get_safe_float(value):
     """
     V4 API'de değerler string olarak geliyor ve virgül kullanılıyor.
     Change değerleri '%0,03' formatında geliyor.
+    
+    Örnekler:
+    - "5.953,42" → 5953.42
+    - "89,85" → 89.85
+    - "%0,03" → 0.03
+    - "%-1,61" → -1.61
     """
     try:
         if isinstance(value, (int, float)):
@@ -15,20 +28,29 @@ def get_safe_float(value):
         
         value_str = str(value).strip()
         
-        # V4'te "5.953,42" formatı var
+        # % işaretini temizle (V4'te "%0,03" veya "%-1,61" formatı var)
+        value_str = value_str.replace("%", "")
+        
+        # "5.953,42" formatı (binlik ayracı nokta, ondalık virgül)
         if '.' in value_str and ',' in value_str:
             value_str = value_str.replace(".", "").replace(",", ".")
+        # "89,85" formatı (sadece ondalık virgül)
         else:
             value_str = value_str.replace(",", ".")
         
-        # % işaretini temizle (V4'te "%0,03" formatı var)
-        value_str = value_str.replace("%", "")
-        
         return float(value_str)
-    except:
+    except Exception as e:
+        logger.warning(f"Float dönüşüm hatası: {value} → {e}")
         return 0.0
 
-def fetch_golds():
+
+def fetch_golds_to_cache():
+    """
+    V4 API'den altınları çek ve Redis'e yaz
+    
+    Returns:
+        bool: Başarılı ise True, hata varsa False
+    """
     try:
         # V4 API endpoint
         url = "https://finans.truncgil.com/v4/today.json"
@@ -37,11 +59,13 @@ def fetch_golds():
             "Accept": "application/json"
         }
         
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        logger.debug("🔄 V4 API'den altın verileri çekiliyor...")
         
-        # V4'te altın kodları BÜYÜK HARFLE geliyor (V3 ile aynı)
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        
+        # V4'te altın kodları BÜYÜK HARFLE geliyor
         gold_mapping = {
             "GRA": "Gram Altın",
             "CEYREKALTIN": "Çeyrek Altın",
@@ -50,48 +74,64 @@ def fetch_golds():
             "CUMHURIYETALTINI": "Cumhuriyet Altını"
         }
         
-        with get_db_cursor() as (conn, cur):
-            added = 0
-            
-            for api_code, db_name in gold_mapping.items():
-                if api_code not in data or data[api_code].get("Type") != "Gold":
-                    continue
-                
-                item = data[api_code]
-                selling = get_safe_float(item.get("Selling", 0))
-                
-                if selling <= 0:
-                    continue
-                
-                # Fiyatları yuvarla - altın için 2 hane yeterli
-                rate = round(selling, 2)
-                
-                # Değişim oranını yuvarla
-                change_percent = round(get_safe_float(item.get("Change", 0)), 2)
-                
-                cur.execute("""
-                    INSERT INTO golds (name, buying, selling, rate, change_percent, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (name) DO UPDATE SET
-                        rate=EXCLUDED.rate,
-                        change_percent=EXCLUDED.change_percent,
-                        updated_at=CURRENT_TIMESTAMP
-                """, (db_name, 0, 0, rate, change_percent))
-                
-                added += 1
-            
-            conn.commit()
+        golds = []
         
-        logger.info(f"✅ {added} altın fiyatı güncellendi (V4 API)")
+        for api_code, display_name in gold_mapping.items():
+            # API'de var mı?
+            if api_code not in data:
+                logger.warning(f"⚠️ {api_code} API'de bulunamadı")
+                continue
+            
+            item = data[api_code]
+            
+            # Type kontrolü
+            if item.get("Type") != "Gold":
+                logger.warning(f"⚠️ {api_code} Type != Gold: {item.get('Type')}")
+                continue
+            
+            # Fiyat kontrolü
+            selling = get_safe_float(item.get("Selling", 0))
+            if selling <= 0:
+                logger.warning(f"⚠️ {api_code} geçersiz fiyat: {selling}")
+                continue
+            
+            # Değişim yüzdesi
+            change_percent = get_safe_float(item.get("Change", 0))
+            
+            # Altın verisini hazırla
+            golds.append({
+                "name": display_name,
+                "rate": round(selling, 2),  # Altın için 2 hane yeterli
+                "change_percent": round(change_percent, 2)
+            })
+            
+            logger.debug(f"✅ {display_name}: {selling:.2f} TL ({change_percent:+.2f}%)")
         
-        try:
-            from utils.cache import clear_cache
-            clear_cache()
-        except:
-            pass
+        if not golds:
+            logger.error("❌ Hiç altın verisi çekilemedi!")
+            return False
+        
+        # Redis'e yaz
+        cache_data = {
+            "success": True,
+            "count": len(golds),
+            "data": golds
+        }
+        
+        set_cache('kurabak:golds:all', cache_data, CACHE_TTL)
+        logger.info(f"✅ {len(golds)} altın fiyatı Redis'e yazıldı (V4 API)")
         
         return True
-        
-    except Exception as e:
-        logger.error(f"❌ Altın çekme hatası: {e}")
+    
+    except requests.RequestException as e:
+        logger.error(f"❌ API bağlantı hatası: {e}")
         return False
+    except Exception as e:
+        logger.error(f"❌ Altın çekme hatası: {e}", exc_info=True)
+        return False
+
+
+# Geriye uyumluluk için (eski kod çağırabilir)
+def fetch_golds():
+    """Eski fonksiyon adı - yeni fonksiyona yönlendir"""
+    return fetch_golds_to_cache()
