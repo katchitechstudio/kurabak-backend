@@ -1,28 +1,57 @@
+"""
+Currency Service - V4 API
+Redis'e direkt yazar, PostgreSQL kullanmaz
+"""
 import requests
 import logging
-from models.db import get_db, put_db
+from utils.cache import set_cache
 
 logger = logging.getLogger(__name__)
+
+CACHE_TTL = 300  # 5 dakika
+
 
 def get_safe_float(value):
     """
     V4 API'de değerler string olarak geliyor ve virgül kullanılıyor.
     Change değerleri '%0,03' formatında geliyor.
+    
+    Örnekler:
+    - "5.953,42" → 5953.42
+    - "89,85" → 89.85
+    - "%0,03" → 0.03
+    - "%-1,61" → -1.61
+    - "$4.330,99" → 4330.99
     """
     try:
         if isinstance(value, (int, float)):
             return float(value)
-        value_str = str(value).replace(",", ".").replace("%", "").strip()
-        # V4'te bazen "$4.330,99" gibi dolar işareti olabiliyor
-        value_str = value_str.replace("$", "").replace(" ", "")
+        
+        value_str = str(value).strip()
+        
+        # Gereksiz karakterleri temizle
+        value_str = value_str.replace("%", "").replace("$", "").replace(" ", "")
+        
+        # "5.953,42" formatı (binlik ayracı nokta, ondalık virgül)
+        if '.' in value_str and ',' in value_str:
+            value_str = value_str.replace(".", "").replace(",", ".")
+        # "89,85" formatı (sadece ondalık virgül)
+        else:
+            value_str = value_str.replace(",", ".")
+        
         return float(value_str)
-    except:
+    except Exception as e:
+        logger.warning(f"Float dönüşüm hatası: {value} → {e}")
         return 0.0
 
-def fetch_currencies():
-    conn = None
-    cur = None
+
+def fetch_currencies_to_cache():
+    """
+    V4 API'den dövizleri çek ve Redis'e yaz
     
+    Returns:
+        bool: Başarılı ise True, hata varsa False
+    """
     try:
         # V4 API endpoint
         url = "https://finans.truncgil.com/v4/today.json"
@@ -31,100 +60,97 @@ def fetch_currencies():
             "Accept": "application/json"
         }
         
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        logger.debug("🔄 V4 API'den döviz verileri çekiliyor...")
         
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Popüler döviz kodları
         currency_codes = [
             "USD", "EUR", "GBP", "JPY", "CHF",
             "CNY", "CAD", "AUD", "DKK", "SEK",
             "NOK", "SAR", "QAR", "KWD", "AED"
         ]
         
-        conn = get_db()
-        cur = conn.cursor()
+        currencies = []
         
         for code in currency_codes:
+            # API'de var mı?
             if code not in data:
+                logger.warning(f"⚠️ {code} API'de bulunamadı")
                 continue
             
             item = data[code]
             
-            # V4'te Type kontrolü yapıyoruz (Currency olmalı)
+            # Type kontrolü
             if item.get("Type") != "Currency":
+                logger.warning(f"⚠️ {code} Type != Currency: {item.get('Type')}")
                 continue
             
-            # V4'te alan isimleri büyük harfle başlıyor (V3'le aynı)
+            # İsim ve fiyatlar
             name = item.get("Name", code)
             selling = get_safe_float(item.get("Selling", 0))
             buying = get_safe_float(item.get("Buying", 0))
             change_percent = get_safe_float(item.get("Change", 0))
             
-            # V4'te JPY zaten 100 yen için hazır geliyor
-            # Ek işlem yapılmayacak
-            
+            # Fiyat kontrolü
             if selling <= 0:
+                logger.warning(f"⚠️ {code} geçersiz fiyat: {selling}")
                 continue
             
             # Fiyatları yuvarla - büyük değerler için 2, küçükler için 4 hane
             if selling >= 10:
-                selling = round(selling, 2)  # 42.7352 -> 42.73
+                rate = round(selling, 2)  # 42.7352 → 42.73
             else:
-                selling = round(selling, 4)  # 0.5355 -> 0.5355
+                rate = round(selling, 4)  # 0.5355 → 0.5355
             
-            # Değişim oranını 2 hane yap
-            change_percent = round(change_percent, 2)  # 0.03 -> 0.03
+            # Döviz verisini hazırla
+            currencies.append({
+                "code": code,
+                "name": name,
+                "rate": rate,
+                "change_percent": round(change_percent, 2)
+            })
             
-            cur.execute("""
-                INSERT INTO currencies (code, name, rate, change_percent, updated_at)
-                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (code) DO UPDATE SET
-                    name=EXCLUDED.name,
-                    rate=EXCLUDED.rate,
-                    change_percent=EXCLUDED.change_percent,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (code, name, selling, change_percent))
+            logger.debug(f"✅ {code} ({name}): {rate:.4f} TL ({change_percent:+.2f}%)")
         
-        conn.commit()
+        if not currencies:
+            logger.error("❌ Hiç döviz verisi çekilemedi!")
+            return False
         
-        try:
-            from utils.cache import clear_cache
-            clear_cache()
-        except:
-            pass
+        # Redis'e yaz
+        cache_data = {
+            "success": True,
+            "count": len(currencies),
+            "data": currencies
+        }
         
-        logger.info("✅ Döviz verileri güncellendi (V4 API)")
+        set_cache('kurabak:currencies:all', cache_data, CACHE_TTL)
+        logger.info(f"✅ {len(currencies)} döviz Redis'e yazıldı (V4 API)")
+        
         return True
-        
-    except Exception as e:
-        logger.error(f"❌ fetch_currencies hatası: {e}")
-        if conn:
-            conn.rollback()
+    
+    except requests.RequestException as e:
+        logger.error(f"❌ API bağlantı hatası: {e}")
         return False
-        
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            put_db(conn)
-
-def cleanup_database():
-    conn = None
-    cur = None
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        
-        cur.execute("VACUUM ANALYZE currencies")
-        cur.execute("VACUUM ANALYZE golds")
-        cur.execute("VACUUM ANALYZE silvers")
-        
-        logger.info("🧹 Veritabanı optimize edildi (VACUUM ANALYZE)")
-        
     except Exception as e:
-        logger.error(f"❌ Temizlik hatası: {e}")
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            put_db(conn)
+        logger.error(f"❌ Döviz çekme hatası: {e}", exc_info=True)
+        return False
+
+
+# Geriye uyumluluk için (eski kod çağırabilir)
+def fetch_currencies():
+    """Eski fonksiyon adı - yeni fonksiyona yönlendir"""
+    return fetch_currencies_to_cache()
+
+
+# cleanup_database fonksiyonu artık gereksiz (PostgreSQL kullanmıyoruz)
+# Eski kodlar çağırabilir diye boş bırakıyoruz
+def cleanup_database():
+    """
+    Artık kullanılmıyor - PostgreSQL yok
+    Geriye uyumluluk için boş fonksiyon
+    """
+    logger.info("ℹ️ cleanup_database çağrıldı ama PostgreSQL kullanılmıyor")
+    return True
