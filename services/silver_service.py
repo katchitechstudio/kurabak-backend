@@ -1,13 +1,26 @@
+"""
+Silver Service - V4 API
+Redis'e direkt yazar, PostgreSQL kullanmaz
+"""
 import requests
 import logging
-from models.db import get_db, put_db
+from utils.cache import set_cache
 
 logger = logging.getLogger(__name__)
+
+CACHE_TTL = 300  # 5 dakika
+
 
 def get_safe_float(value):
     """
     V4 API'de değerler string olarak geliyor ve virgül kullanılıyor.
     Change değerleri '%0,03' formatında geliyor.
+    
+    Örnekler:
+    - "5.953,42" → 5953.42
+    - "89,85" → 89.85
+    - "%0,03" → 0.03
+    - "%-1,61" → -1.61
     """
     try:
         if isinstance(value, (int, float)):
@@ -15,23 +28,29 @@ def get_safe_float(value):
         
         value_str = str(value).strip()
         
-        # V4'te "89,85" formatı var
+        # % işaretini temizle (V4'te "%0,03" veya "%-1,61" formatı var)
+        value_str = value_str.replace("%", "")
+        
+        # "5.953,42" formatı (binlik ayracı nokta, ondalık virgül)
         if '.' in value_str and ',' in value_str:
             value_str = value_str.replace(".", "").replace(",", ".")
+        # "89,85" formatı (sadece ondalık virgül)
         else:
             value_str = value_str.replace(",", ".")
         
-        # % işaretini temizle (V4'te "%-1,61" formatı var)
-        value_str = value_str.replace("%", "")
-        
         return float(value_str)
-    except:
+    except Exception as e:
+        logger.warning(f"Float dönüşüm hatası: {value} → {e}")
         return 0.0
 
-def fetch_silvers():
-    conn = None
-    cur = None
+
+def fetch_silvers_to_cache():
+    """
+    V4 API'den gümüş fiyatını çek ve Redis'e yaz
     
+    Returns:
+        bool: Başarılı ise True, hata varsa False
+    """
     try:
         # V4 API endpoint
         url = "https://finans.truncgil.com/v4/today.json"
@@ -40,70 +59,66 @@ def fetch_silvers():
             "Accept": "application/json"
         }
         
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        logger.debug("🔄 V4 API'den gümüş verisi çekiliyor...")
         
-        # V4'te gümüş kodu "GUMUS" (BÜYÜK HARF - V3 ile aynı)
-        if "GUMUS" in data and data["GUMUS"].get("Type") == "Gold":
-            item = data["GUMUS"]
-            
-            selling = get_safe_float(item.get("Selling", 0))
-            change_percent = get_safe_float(item.get("Change", 0))
-            
-            if selling > 0:
-                name = "Gümüş"
-                
-                # Fiyatı yuvarla - gümüş için 2 hane yeterli
-                rate = round(selling, 2)
-                
-                # Değişim oranını yuvarla
-                change_percent = round(change_percent, 2)
-                
-                conn = get_db()
-                cur = conn.cursor()
-                
-                cur.execute("""
-                    INSERT INTO silvers (name, buying, selling, rate, change_percent, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (name) DO UPDATE SET
-                        rate=EXCLUDED.rate,
-                        change_percent=EXCLUDED.change_percent,
-                        updated_at=CURRENT_TIMESTAMP
-                """, (name, 0, 0, rate, change_percent))
-                
-                conn.commit()
-                
-                try:
-                    from utils.cache import clear_cache
-                    clear_cache()
-                except:
-                    pass
-                
-                logger.info("✅ Gümüş fiyatı güncellendi (V4 API)")
-                return True
-            else:
-                return False
-        else:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        
+        silvers = []
+        
+        # V4'te gümüş kodu "GUMUS" (BÜYÜK HARF)
+        if "GUMUS" not in data:
+            logger.error("❌ GUMUS API'de bulunamadı!")
             return False
-            
-    except Exception as e:
-        logger.error(f"❌ Gümüş çekme hatası: {e}")
-        if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
-        return False
         
-    finally:
-        if cur:
-            try:
-                cur.close()
-            except:
-                pass
-        if conn:
-            try:
-                put_db(conn)
-            except:
-                pass
+        item = data["GUMUS"]
+        
+        # Type kontrolü - API'de bazen "Gold" olarak geliyor
+        item_type = item.get("Type")
+        if item_type not in ["Gold", "Silver"]:
+            logger.warning(f"⚠️ GUMUS Type beklenen değil: {item_type}")
+            # Yine de devam et, çünkü bazı versiyonlarda "Gold" olarak geliyor
+        
+        # Fiyat kontrolü
+        selling = get_safe_float(item.get("Selling", 0))
+        if selling <= 0:
+            logger.error(f"❌ GUMUS geçersiz fiyat: {selling}")
+            return False
+        
+        # Değişim yüzdesi
+        change_percent = get_safe_float(item.get("Change", 0))
+        
+        # Gümüş verisini hazırla
+        silvers.append({
+            "name": "Gümüş",
+            "rate": round(selling, 4),  # Gümüş için 4 hane (daha hassas)
+            "change_percent": round(change_percent, 2)
+        })
+        
+        logger.debug(f"✅ Gümüş: {selling:.4f} TL ({change_percent:+.2f}%)")
+        
+        # Redis'e yaz
+        cache_data = {
+            "success": True,
+            "count": len(silvers),
+            "data": silvers
+        }
+        
+        set_cache('kurabak:silvers:all', cache_data, CACHE_TTL)
+        logger.info(f"✅ {len(silvers)} gümüş fiyatı Redis'e yazıldı (V4 API)")
+        
+        return True
+    
+    except requests.RequestException as e:
+        logger.error(f"❌ API bağlantı hatası: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Gümüş çekme hatası: {e}", exc_info=True)
+        return False
+
+
+# Geriye uyumluluk için (eski kod çağırabilir)
+def fetch_silvers():
+    """Eski fonksiyon adı - yeni fonksiyona yönlendir"""
+    return fetch_silvers_to_cache()
