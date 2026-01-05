@@ -1,297 +1,242 @@
 from flask import Blueprint, jsonify
 import logging
-from models.db import get_db_cursor
 from utils.cache import get_cache, set_cache
+from services.currency_service import fetch_currencies_to_cache
+from services.gold_service import fetch_golds_to_cache
+from services.silver_service import fetch_silvers_to_cache
 
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
-CACHE_TTL = 300
+CACHE_TTL = 300  # 5 dakika
 
-# ✅ YENİ - Sadece popüler dövizler (15 adet)
+# ✅ Popüler döviz kodları
+POPULAR_CURRENCY_CODES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CNY', 'CAD', 'AUD', 'DKK', 'SEK', 'NOK', 'SAR', 'QAR', 'KWD', 'AED']
+
+# ✅ Popüler altın isimleri
+POPULAR_GOLD_NAMES = ['Gram Altın', 'Çeyrek Altın', 'Yarım Altın', 'Tam Altın', 'Cumhuriyet Altını']
+
+
+def get_from_cache_or_fetch(cache_key, fetch_function, filter_function=None):
+    """
+    Redis'ten al, yoksa API'den çek
+    
+    Args:
+        cache_key: Redis key
+        fetch_function: API'den çekme fonksiyonu
+        filter_function: Filtreleme fonksiyonu (opsiyonel)
+    """
+    # 1️⃣ Redis'e bak
+    cached_data = get_cache(cache_key, CACHE_TTL)
+    
+    if cached_data:
+        logger.debug(f"✅ Cache HIT: {cache_key}")
+        
+        # Filtre varsa uygula
+        if filter_function and isinstance(cached_data, dict):
+            filtered = filter_function(cached_data.get('data', []))
+            return {
+                'success': True,
+                'count': len(filtered),
+                'data': filtered
+            }
+        
+        return cached_data
+    
+    # 2️⃣ Cache boşsa API'den çek
+    logger.warning(f"⚠️ Cache MISS: {cache_key}, API'den çekiliyor...")
+    
+    try:
+        # API'den çek ve cache'e yaz
+        success = fetch_function()
+        
+        if success:
+            # Tekrar cache'den oku
+            fresh_data = get_cache(cache_key, CACHE_TTL)
+            
+            if fresh_data:
+                logger.info(f"✅ Fallback başarılı: {cache_key}")
+                
+                # Filtre varsa uygula
+                if filter_function and isinstance(fresh_data, dict):
+                    filtered = filter_function(fresh_data.get('data', []))
+                    return {
+                        'success': True,
+                        'count': len(filtered),
+                        'data': filtered
+                    }
+                
+                return fresh_data
+    
+    except Exception as e:
+        logger.error(f"❌ Fallback hatası: {e}")
+    
+    # 3️⃣ Hiçbir şey bulunamadı
+    logger.error(f"❌ {cache_key} için veri bulunamadı")
+    return None
+
+
 @api_bp.route('/currency/popular', methods=['GET'])
 def get_popular_currencies():
+    """✅ Sadece popüler dövizler (15 adet)"""
     try:
-        cache_key = "kurabak:currencies:popular"
-        cached_data = get_cache(cache_key, CACHE_TTL)
+        # Filtreleme fonksiyonu
+        def filter_popular(currencies):
+            return [c for c in currencies if c.get('code') in POPULAR_CURRENCY_CODES]
         
-        if cached_data:
-            logger.debug("✅ Popular currency cache HIT")
-            return jsonify(cached_data), 200
+        # Cache'den al veya API'den çek
+        result = get_from_cache_or_fetch(
+            'kurabak:currencies:all',
+            fetch_currencies_to_cache,
+            filter_popular
+        )
         
-        logger.debug("❌ Popular currency cache MISS, DB'den çekiliyor")
+        # Veri yoksa 503 dön
+        if not result or not result.get('data'):
+            return jsonify({
+                'success': False,
+                'message': 'Veriler yükleniyor, lütfen birkaç saniye bekleyin',
+                'count': 0,
+                'data': []
+            }), 503
         
-        # 🎯 Sadece popüler dövizler
-        popular_codes = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CNY', 'CAD', 'AUD', 'DKK', 'SEK', 'NOK', 'SAR', 'QAR', 'KWD', 'AED']
-        
-        with get_db_cursor() as (conn, cur):
-            # WHERE IN ile sadece popülerleri çek
-            placeholders = ','.join(['%s'] * len(popular_codes))
-            cur.execute(f"""
-                SELECT code, name, rate, change_percent, updated_at
-                FROM currencies
-                WHERE code IN ({placeholders})
-                ORDER BY 
-                    CASE code
-                        WHEN 'USD' THEN 1
-                        WHEN 'EUR' THEN 2
-                        WHEN 'GBP' THEN 3
-                        WHEN 'JPY' THEN 4
-                        WHEN 'CHF' THEN 5
-                        WHEN 'CNY' THEN 6
-                        WHEN 'CAD' THEN 7
-                        WHEN 'AUD' THEN 8
-                        WHEN 'DKK' THEN 9
-                        WHEN 'SEK' THEN 10
-                        WHEN 'NOK' THEN 11
-                        WHEN 'SAR' THEN 12
-                        WHEN 'QAR' THEN 13
-                        WHEN 'KWD' THEN 14
-                        WHEN 'AED' THEN 15
-                    END
-            """, popular_codes)
-            
-            rows = cur.fetchall()
-            
-            data = {
-                "success": True,
-                "count": len(rows),
-                "data": [
-                    {
-                        "code": row[0],
-                        "name": row[1],
-                        "rate": float(row[2]),
-                        "change_percent": float(row[3]),
-                        "updated_at": row[4].isoformat() if row[4] else None
-                    }
-                    for row in rows
-                ]
-            }
-        
-        set_cache(cache_key, data, CACHE_TTL)
-        logger.info(f"✅ {len(rows)} popüler döviz döndürüldü")
-        
-        return jsonify(data), 200
-        
+        logger.info(f"✅ {result['count']} popüler döviz döndürüldü")
+        return jsonify(result), 200
+    
     except Exception as e:
-        logger.error(f"❌ Popular currency API hatası: {e}")
+        logger.error(f"❌ Popular currencies hatası: {e}")
         return jsonify({
-            "success": False,
-            "error": str(e)
+            'success': False,
+            'message': 'Bir hata oluştu',
+            'count': 0,
+            'data': []
         }), 500
 
 
-# ✅ YENİ - Sadece popüler altınlar (5 adet)
 @api_bp.route('/currency/gold/popular', methods=['GET'])
 def get_popular_golds():
+    """✅ Sadece popüler altınlar (5 adet)"""
     try:
-        cache_key = "kurabak:golds:popular"
-        cached_data = get_cache(cache_key, CACHE_TTL)
+        # Filtreleme fonksiyonu
+        def filter_popular(golds):
+            return [g for g in golds if g.get('name') in POPULAR_GOLD_NAMES]
         
-        if cached_data:
-            logger.debug("✅ Popular gold cache HIT")
-            return jsonify(cached_data), 200
+        # Cache'den al veya API'den çek
+        result = get_from_cache_or_fetch(
+            'kurabak:golds:all',
+            fetch_golds_to_cache,
+            filter_popular
+        )
         
-        logger.debug("❌ Popular gold cache MISS, DB'den çekiliyor")
+        # Veri yoksa 503 dön
+        if not result or not result.get('data'):
+            return jsonify({
+                'success': False,
+                'message': 'Veriler yükleniyor, lütfen birkaç saniye bekleyin',
+                'count': 0,
+                'data': []
+            }), 503
         
-        # 🎯 Sadece popüler altınlar
-        popular_golds = ['Gram Altın', 'Çeyrek Altın', 'Yarım Altın', 'Tam Altın', 'Cumhuriyet Altını']
-        
-        with get_db_cursor() as (conn, cur):
-            placeholders = ','.join(['%s'] * len(popular_golds))
-            cur.execute(f"""
-                SELECT name, rate, change_percent, updated_at
-                FROM golds
-                WHERE name IN ({placeholders})
-                ORDER BY 
-                    CASE name
-                        WHEN 'Gram Altın' THEN 1
-                        WHEN 'Çeyrek Altın' THEN 2
-                        WHEN 'Yarım Altın' THEN 3
-                        WHEN 'Tam Altın' THEN 4
-                        WHEN 'Cumhuriyet Altını' THEN 5
-                    END
-            """, popular_golds)
-            
-            rows = cur.fetchall()
-            
-            data = {
-                "success": True,
-                "count": len(rows),
-                "data": [
-                    {
-                        "name": row[0],
-                        "rate": float(row[1]),
-                        "change_percent": float(row[2]),
-                        "updated_at": row[3].isoformat() if row[3] else None
-                    }
-                    for row in rows
-                ]
-            }
-        
-        set_cache(cache_key, data, CACHE_TTL)
-        logger.info(f"✅ {len(rows)} popüler altın döndürüldü")
-        
-        return jsonify(data), 200
-        
+        logger.info(f"✅ {result['count']} popüler altın döndürüldü")
+        return jsonify(result), 200
+    
     except Exception as e:
-        logger.error(f"❌ Popular gold API hatası: {e}")
+        logger.error(f"❌ Popular golds hatası: {e}")
         return jsonify({
-            "success": False,
-            "error": str(e)
+            'success': False,
+            'message': 'Bir hata oluştu',
+            'count': 0,
+            'data': []
         }), 500
 
 
-# ✅ Gümüş (değişmedi - zaten 1 adet)
 @api_bp.route('/currency/silver/all', methods=['GET'])
 def get_all_silvers():
+    """✅ Gümüş (1 adet)"""
     try:
-        cache_key = "kurabak:silvers:all"
-        cached_data = get_cache(cache_key, CACHE_TTL)
+        # Cache'den al veya API'den çek
+        result = get_from_cache_or_fetch(
+            'kurabak:silvers:all',
+            fetch_silvers_to_cache
+        )
         
-        if cached_data:
-            logger.debug("✅ Silver cache HIT")
-            return jsonify(cached_data), 200
+        # Veri yoksa 503 dön
+        if not result or not result.get('data'):
+            return jsonify({
+                'success': False,
+                'message': 'Veriler yükleniyor, lütfen birkaç saniye bekleyin',
+                'count': 0,
+                'data': []
+            }), 503
         
-        logger.debug("❌ Silver cache MISS, DB'den çekiliyor")
-        
-        with get_db_cursor() as (conn, cur):
-            cur.execute("""
-                SELECT name, rate, change_percent, updated_at
-                FROM silvers
-                ORDER BY name
-            """)
-            
-            rows = cur.fetchall()
-            
-            data = {
-                "success": True,
-                "count": len(rows),
-                "data": [
-                    {
-                        "name": row[0],
-                        "rate": float(row[1]),
-                        "change_percent": float(row[2]),
-                        "updated_at": row[3].isoformat() if row[3] else None
-                    }
-                    for row in rows
-                ]
-            }
-        
-        set_cache(cache_key, data, CACHE_TTL)
-        
-        return jsonify(data), 200
-        
+        logger.info(f"✅ {result['count']} gümüş döndürüldü")
+        return jsonify(result), 200
+    
     except Exception as e:
-        logger.error(f"❌ Silver API hatası: {e}")
+        logger.error(f"❌ Silvers hatası: {e}")
         return jsonify({
-            "success": False,
-            "error": str(e)
+            'success': False,
+            'message': 'Bir hata oluştu',
+            'count': 0,
+            'data': []
         }), 500
 
 
-# ❌ ESKİ ENDPOINT'LER - GERİYE UYUMLULUK İÇİN KALSIN (opsiyonel)
+# ❌ ESKİ ENDPOINT'LER (Geriye uyumluluk - opsiyonel)
 @api_bp.route('/currency/all', methods=['GET'])
 def get_all_currencies():
-    """ESKİ ENDPOINT - Artık kullanılmıyor ama geriye uyumluluk için"""
+    """ESKİ - Tüm dövizler"""
     try:
-        cache_key = "kurabak:currencies:all"
-        cached_data = get_cache(cache_key, CACHE_TTL)
+        result = get_from_cache_or_fetch(
+            'kurabak:currencies:all',
+            fetch_currencies_to_cache
+        )
         
-        if cached_data:
-            logger.debug("✅ Currency cache HIT")
-            return jsonify(cached_data), 200
+        if not result:
+            return jsonify({
+                'success': False,
+                'message': 'Veriler yükleniyor',
+                'count': 0,
+                'data': []
+            }), 503
         
-        logger.debug("❌ Currency cache MISS, DB'den çekiliyor")
-        
-        with get_db_cursor() as (conn, cur):
-            cur.execute("""
-                SELECT code, name, rate, change_percent, updated_at
-                FROM currencies
-                ORDER BY code
-            """)
-            
-            rows = cur.fetchall()
-            
-            data = {
-                "success": True,
-                "count": len(rows),
-                "data": [
-                    {
-                        "code": row[0],
-                        "name": row[1],
-                        "rate": float(row[2]),
-                        "change_percent": float(row[3]),
-                        "updated_at": row[4].isoformat() if row[4] else None
-                    }
-                    for row in rows
-                ]
-            }
-        
-        set_cache(cache_key, data, CACHE_TTL)
-        
-        return jsonify(data), 200
-        
+        return jsonify(result), 200
+    
     except Exception as e:
-        logger.error(f"❌ Currency API hatası: {e}")
+        logger.error(f"❌ All currencies hatası: {e}")
         return jsonify({
-            "success": False,
-            "error": str(e)
+            'success': False,
+            'message': 'Bir hata oluştu',
+            'count': 0,
+            'data': []
         }), 500
 
 
 @api_bp.route('/currency/gold/all', methods=['GET'])
 def get_all_golds():
-    """ESKİ ENDPOINT - Artık kullanılmıyor ama geriye uyumluluk için"""
+    """ESKİ - Tüm altınlar"""
     try:
-        cache_key = "kurabak:golds:all"
-        cached_data = get_cache(cache_key, CACHE_TTL)
+        result = get_from_cache_or_fetch(
+            'kurabak:golds:all',
+            fetch_golds_to_cache
+        )
         
-        if cached_data:
-            logger.debug("✅ Gold cache HIT")
-            return jsonify(cached_data), 200
+        if not result:
+            return jsonify({
+                'success': False,
+                'message': 'Veriler yükleniyor',
+                'count': 0,
+                'data': []
+            }), 503
         
-        logger.debug("❌ Gold cache MISS, DB'den çekiliyor")
-        
-        with get_db_cursor() as (conn, cur):
-            cur.execute("""
-                SELECT name, rate, change_percent, updated_at
-                FROM golds
-                ORDER BY 
-                    CASE name
-                        WHEN 'Gram Altın' THEN 1
-                        WHEN 'Çeyrek Altın' THEN 2
-                        WHEN 'Yarım Altın' THEN 3
-                        WHEN 'Tam Altın' THEN 4
-                        WHEN 'Cumhuriyet Altını' THEN 5
-                        ELSE 6
-                    END
-            """)
-            
-            rows = cur.fetchall()
-            
-            data = {
-                "success": True,
-                "count": len(rows),
-                "data": [
-                    {
-                        "name": row[0],
-                        "rate": float(row[1]),
-                        "change_percent": float(row[2]),
-                        "updated_at": row[3].isoformat() if row[3] else None
-                    }
-                    for row in rows
-                ]
-            }
-        
-        set_cache(cache_key, data, CACHE_TTL)
-        
-        return jsonify(data), 200
-        
+        return jsonify(result), 200
+    
     except Exception as e:
-        logger.error(f"❌ Gold API hatası: {e}")
+        logger.error(f"❌ All golds hatası: {e}")
         return jsonify({
-            "success": False,
-            "error": str(e)
+            'success': False,
+            'message': 'Bir hata oluştu',
+            'count': 0,
+            'data': []
         }), 500
