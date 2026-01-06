@@ -1,9 +1,9 @@
 """
 KuraBak Backend Configuration
 Redis-only architecture (no PostgreSQL)
+Dual API support (V3 + V4)
 """
 import os
-
 
 class Config:
     """KuraBak Backend genel ayarları"""
@@ -20,10 +20,16 @@ class Config:
     UPDATE_INTERVAL = 90  # 1.5 dakika (saniye) - API çekme aralığı
     
     # ======================================
-    # API AYARLARI
+    # API AYARLARI - DUAL API SUPPORT
     # ======================================
     API_TIMEOUT = 15  # saniye
-    API_BASE_URL = "https://finans.truncgil.com/v4/today.json"
+    
+    # V3 ve V4 API endpoint'leri
+    API_V3_URL = "https://finans.truncgil.com/v3/today.json"
+    API_V4_URL = "https://finans.truncgil.com/v4/today.json"
+    
+    # Geriye uyumluluk için (eski kodlar kullanabilir)
+    API_BASE_URL = API_V4_URL  # Deprecated - artık dual API kullanılıyor
     
     # ======================================
     # POPÜLER DÖVİZLER (15 adet)
