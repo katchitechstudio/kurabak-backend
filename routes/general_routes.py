@@ -39,7 +39,9 @@ def get_from_cache_or_fetch(cache_key, fetch_function, filter_function=None):
             return {
                 'success': True,
                 'count': len(filtered),
-                'data': filtered
+                'data': filtered,
+                'api_source': cached_data.get('api_source'),  # API kaynağını ekle
+                'update_date': cached_data.get('update_date')  # Güncelleme tarihini ekle
             }
         
         return cached_data
@@ -64,7 +66,9 @@ def get_from_cache_or_fetch(cache_key, fetch_function, filter_function=None):
                     return {
                         'success': True,
                         'count': len(filtered),
-                        'data': filtered
+                        'data': filtered,
+                        'api_source': fresh_data.get('api_source'),
+                        'update_date': fresh_data.get('update_date')
                     }
                 
                 return fresh_data
@@ -79,7 +83,7 @@ def get_from_cache_or_fetch(cache_key, fetch_function, filter_function=None):
 
 @api_bp.route('/currency/popular', methods=['GET'])
 def get_popular_currencies():
-    """✅ Sadece popüler dövizler (15 adet)"""
+    """✅ Sadece popüler dövizler (15 adet) - API source bilgisiyle"""
     try:
         # Filtreleme fonksiyonu
         def filter_popular(currencies):
@@ -101,7 +105,7 @@ def get_popular_currencies():
                 'data': []
             }), 503
         
-        logger.info(f"✅ {result['count']} popüler döviz döndürüldü")
+        logger.info(f"✅ {result['count']} popüler döviz döndürüldü ({result.get('api_source', 'Unknown')} API)")
         return jsonify(result), 200
     
     except Exception as e:
