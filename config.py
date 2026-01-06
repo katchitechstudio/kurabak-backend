@@ -2,6 +2,7 @@
 KuraBak Backend Configuration
 Redis-only architecture (no PostgreSQL)
 Dual API support (V3 + V4)
+2 dakikada bir güncelleme (V4 API dakikalık güncelleniyor)
 """
 import os
 
@@ -16,8 +17,8 @@ class Config:
     # ======================================
     # CACHE AYARLARI
     # ======================================
-    CACHE_TTL = 300  # 5 dakika (saniye)
-    UPDATE_INTERVAL = 90  # 1.5 dakika (saniye) - API çekme aralığı
+    CACHE_TTL = 180  # 3 dakika (saniye) - Güncelleme aralığından biraz uzun
+    UPDATE_INTERVAL = 120  # 2 dakika (saniye) - API çekme aralığı
     
     # ======================================
     # API AYARLARI - DUAL API SUPPORT
