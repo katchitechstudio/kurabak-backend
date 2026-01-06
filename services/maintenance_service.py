@@ -1,6 +1,7 @@
 """
 Maintenance Service - Redis Only
 Periyodik olarak API'den veri çeker ve Redis'e yazar
+2 DAKIKADA BİR GÜNCELLEME (V4 API dakikalık güncelleniyor)
 """
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -17,7 +18,7 @@ scheduler = BackgroundScheduler()
 def fetch_all_data():
     """
     Tüm verileri API'den çek ve Redis'e yaz
-    1.5 dakikada bir çalışır
+    2 dakikada bir çalışır (V4 API dakikalık güncelleniyor)
     """
     logger.info("🔄 Periyodik veri güncelleme başlıyor...")
     
@@ -68,7 +69,7 @@ def fetch_all_data():
 def start_scheduler():
     """
     Scheduler'ı başlat
-    1.5 dakikada bir fetch_all_data() çalıştırır
+    2 dakikada bir fetch_all_data() çalıştırır
     """
     if scheduler.running:
         logger.warning("⚠️ Scheduler zaten çalışıyor")
@@ -79,18 +80,18 @@ def start_scheduler():
         logger.info("🚀 İlk veri çekme başlıyor...")
         fetch_all_data()
         
-        # 1.5 dakikada bir tekrarla (90 saniye)
+        # 2 dakikada bir tekrarla (120 saniye)
         scheduler.add_job(
             fetch_all_data,
             'interval',
-            seconds=90,
+            seconds=120,  # 2 dakika
             id='fetch_all_data',
             name='API Veri Güncelleme',
             replace_existing=True
         )
         
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı (1.5 dakikada bir çalışacak)")
+        logger.info("✅ Scheduler başlatıldı (2 dakikada bir çalışacak)")
         
     except Exception as e:
         logger.error(f"❌ Scheduler başlatma hatası: {e}")
