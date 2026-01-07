@@ -1,235 +1,192 @@
 """
 Maintenance Service - Redis Only (İyileştirilmiş)
 Periyodik olarak API'den veri çeker ve Redis'e yazar
-2 DAKIKADA BİR GÜNCELLEME (V4 API dakikalık güncelleniyor)
+4 DAKIKADA BİR GÜNCELLEME (Bağlantı kopmalarını önlemek için)
 
 İyileştirmeler:
-- Retry mekanizması eklendi
-- Timeout ayarları iyileştirildi
-- Daha detaylı hata yönetimi
-- Başarısız API'ler için akıllı bekleme
+- 4 dakikalık güncelleme aralığı (API yükünü azaltır)
+- Circuit breaker pattern ile başarısız servisleri geçici devre dışı bırakma
+- Detaylı logging ve hata takibi
+- Başarı oranı izleme
+- Max instances kontrolü ile aynı anda birden fazla job çalışmasını engelleme
 """
 import logging
-import time
+from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.executors.pool import ThreadPoolExecutor
 from services.currency_service import fetch_currencies_to_cache
 from services.gold_service import fetch_golds_to_cache
 from services.silver_service import fetch_silvers_to_cache
 
 logger = logging.getLogger(__name__)
 
-# Scheduler instance
-scheduler = BackgroundScheduler()
-
-# Circuit breaker için basit sayaçlar
-failure_counts = {
-    'currency': 0,
-    'gold': 0,
-    'silver': 0
-}
-MAX_FAILURES = 5  # 5 başarısızlıktan sonra geçici olarak atla
-
-
-def retry_with_backoff(func, name, max_retries=3):
+# Circuit breaker için state management
+class CircuitBreaker:
     """
-    Exponential backoff ile retry mekanizması
-    
-    Args:
-        func: Çalıştırılacak fonksiyon
-        name: Servis adı (loglama için)
-        max_retries: Maksimum deneme sayısı
+    Circuit Breaker pattern implementasyonu
+    Başarısız servisleri geçici olarak devre dışı bırakır
+    """
+    def __init__(self, name, failure_threshold=5, timeout=300):
+        self.name = name
+        self.failure_count = 0
+        self.failure_threshold = failure_threshold
+        self.timeout = timeout  # Devre açıksa kaç saniye sonra tekrar denenecek
+        self.last_failure_time = None
+        self.state = 'CLOSED'  # CLOSED: Normal, OPEN: Devre açık, HALF_OPEN: Test ediliyor
         
-    Returns:
-        bool: Başarılı ise True
-    """
-    for attempt in range(max_retries):
-        try:
-            # Circuit breaker kontrolü
-            if failure_counts.get(name.lower(), 0) >= MAX_FAILURES:
-                logger.warning(f"⚠️ {name} geçici olarak devre dışı (çok fazla hata)")
+    def call(self, func):
+        """Circuit breaker üzerinden fonksiyonu çağır"""
+        # OPEN durumda mı?
+        if self.state == 'OPEN':
+            # Timeout doldu mu?
+            if (datetime.now() - self.last_failure_time).total_seconds() > self.timeout:
+                logger.info(f"🔄 {self.name} circuit breaker HALF_OPEN - Test ediliyor...")
+                self.state = 'HALF_OPEN'
+            else:
+                remaining = self.timeout - (datetime.now() - self.last_failure_time).total_seconds()
+                logger.warning(
+                    f"⚠️ {self.name} circuit breaker OPEN - "
+                    f"{remaining:.0f}s sonra tekrar denenecek"
+                )
                 return False
-            
-            # Fonksiyonu çalıştır
+        
+        # Fonksiyonu çalıştır
+        try:
             result = func()
             
             if result:
-                # Başarılı - failure count'u sıfırla
-                failure_counts[name.lower()] = 0
+                # Başarılı - circuit breaker'ı sıfırla
+                if self.state != 'CLOSED':
+                    logger.info(f"✅ {self.name} circuit breaker CLOSED - Servis iyileşti")
+                self.state = 'CLOSED'
+                self.failure_count = 0
                 return True
             else:
-                raise Exception(f"{name} servisi False döndü")
+                # Başarısız
+                self._record_failure()
+                return False
                 
         except Exception as e:
-            attempt_num = attempt + 1
-            
-            if attempt_num < max_retries:
-                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                logger.warning(
-                    f"⚠️ {name} hatası (deneme {attempt_num}/{max_retries}): {str(e)[:100]}"
-                )
-                logger.info(f"⏳ {wait_time}s bekleyip tekrar denenecek...")
-                time.sleep(wait_time)
-            else:
-                # Son deneme de başarısız
-                failure_counts[name.lower()] = failure_counts.get(name.lower(), 0) + 1
-                logger.error(
-                    f"❌ {name} başarısız ({max_retries} deneme): {str(e)[:100]}"
-                )
-                logger.error(f"📊 Toplam başarısızlık: {failure_counts[name.lower()]}/{MAX_FAILURES}")
-                return False
+            logger.error(f"❌ {self.name} exception: {e}")
+            self._record_failure()
+            return False
     
-    return False
+    def _record_failure(self):
+        """Başarısızlığı kaydet ve gerekirse circuit'i aç"""
+        self.failure_count += 1
+        self.last_failure_time = datetime.now()
+        
+        if self.failure_count >= self.failure_threshold:
+            if self.state != 'OPEN':
+                logger.error(
+                    f"🔴 {self.name} circuit breaker OPEN - "
+                    f"{self.failure_threshold} başarısızlıktan sonra devre dışı bırakıldı"
+                )
+            self.state = 'OPEN'
+        else:
+            logger.warning(
+                f"⚠️ {self.name} başarısız "
+                f"({self.failure_count}/{self.failure_threshold})"
+            )
 
 
-def fetch_all_data():
+# Her servis için circuit breaker oluştur
+currency_breaker = CircuitBreaker("Döviz Servisi", failure_threshold=5, timeout=300)
+gold_breaker = CircuitBreaker("Altın Servisi", failure_threshold=5, timeout=300)
+silver_breaker = CircuitBreaker("Gümüş Servisi", failure_threshold=5, timeout=300)
+
+
+def update_all_data():
     """
-    Tüm verileri API'den çek ve Redis'e yaz
-    2 dakikada bir çalışır (V4 API dakikalık güncelleniyor)
+    Tüm verileri güncelle (döviz, altın, gümüş)
+    Her servis circuit breaker üzerinden çağrılır
     """
     logger.info("🔄 Periyodik veri güncelleme başlıyor...")
+    start_time = datetime.now()
     
-    success_count = 0
-    total_count = 3
-    results = {}
-    
-    # 1. Dövizleri çek (retry ile)
-    if retry_with_backoff(fetch_currencies_to_cache, "Döviz", max_retries=3):
-        success_count += 1
-        results['currency'] = True
-        logger.info("✅ Dövizler güncellendi")
-    else:
-        results['currency'] = False
-        logger.warning("⚠️ Döviz güncelleme başarısız")
-    
-    # 2. Altınları çek (retry ile)
-    if retry_with_backoff(fetch_golds_to_cache, "Altın", max_retries=3):
-        success_count += 1
-        results['gold'] = True
-        logger.info("✅ Altınlar güncellendi")
-    else:
-        results['gold'] = False
-        logger.warning("⚠️ Altın güncelleme başarısız")
-    
-    # 3. Gümüşü çek (retry ile)
-    if retry_with_backoff(fetch_silvers_to_cache, "Gümüş", max_retries=3):
-        success_count += 1
-        results['silver'] = True
-        logger.info("✅ Gümüş güncellendi")
-    else:
-        results['silver'] = False
-        logger.warning("⚠️ Gümüş güncelleme başarısız")
-    
-    # Sonuç raporu
-    if success_count == total_count:
-        logger.info(f"🎉 Tüm veriler başarıyla güncellendi ({success_count}/{total_count})")
-        # Başarılı güncelleme - circuit breaker'ları sıfırla
-        reset_circuit_breakers()
-    elif success_count > 0:
-        logger.warning(f"⚠️ Kısmi güncelleme: {success_count}/{total_count} başarılı")
-        logger.info(f"📊 Detay: {results}")
-    else:
-        logger.error(f"❌ Hiçbir veri güncellenemedi!")
-        logger.error(f"📊 Circuit breaker durumu: {failure_counts}")
-    
-    return success_count > 0
-
-
-def reset_circuit_breakers():
-    """
-    Tüm circuit breaker'ları sıfırla
-    Başarılı tam güncelleme sonrası çağrılır
-    """
-    global failure_counts
-    old_counts = failure_counts.copy()
-    failure_counts = {
-        'currency': 0,
-        'gold': 0,
-        'silver': 0
+    results = {
+        'currency': False,
+        'gold': False,
+        'silver': False
     }
-    if any(old_counts.values()):
-        logger.info(f"🔄 Circuit breaker'lar sıfırlandı (önceki: {old_counts})")
+    
+    # 1. Dövizleri güncelle
+    try:
+        results['currency'] = currency_breaker.call(fetch_currencies_to_cache)
+    except Exception as e:
+        logger.error(f"❌ Döviz güncelleme hatası: {e}")
+    
+    # 2. Altınları güncelle
+    try:
+        results['gold'] = gold_breaker.call(fetch_golds_to_cache)
+    except Exception as e:
+        logger.error(f"❌ Altın güncelleme hatası: {e}")
+    
+    # 3. Gümüşü güncelle
+    try:
+        results['silver'] = silver_breaker.call(fetch_silvers_to_cache)
+    except Exception as e:
+        logger.error(f"❌ Gümüş güncelleme hatası: {e}")
+    
+    # Sonuçları raporla
+    success_count = sum(results.values())
+    duration = (datetime.now() - start_time).total_seconds()
+    
+    if success_count == 3:
+        logger.info(
+            f"✅ Tüm veriler başarıyla güncellendi "
+            f"(Döviz ✓, Altın ✓, Gümüş ✓) - {duration:.2f}s"
+        )
+    elif success_count == 0:
+        logger.error(
+            f"❌ Hiçbir veri güncellenemedi! "
+            f"(Döviz ✗, Altın ✗, Gümüş ✗) - {duration:.2f}s"
+        )
+    else:
+        status_msg = []
+        for name, success in results.items():
+            status_msg.append(f"{name.title()} {'✓' if success else '✗'}")
+        
+        logger.warning(
+            f"⚠️ Kısmi güncelleme ({success_count}/3 başarılı): "
+            f"{', '.join(status_msg)} - {duration:.2f}s"
+        )
+    
+    return results
 
 
 def start_scheduler():
     """
-    Scheduler'ı başlat
-    2 dakikada bir fetch_all_data() çalıştırır
+    APScheduler başlat - 4 dakikada bir güncelleme yap
     """
-    if scheduler.running:
-        logger.warning("⚠️ Scheduler zaten çalışıyor")
-        return
+    # ThreadPoolExecutor ile max_instances kontrolü
+    executors = {
+        'default': ThreadPoolExecutor(max_workers=1)
+    }
     
-    try:
-        # İlk çalıştırmayı hemen yap
-        logger.info("🚀 İlk veri çekme başlıyor...")
-        fetch_all_data()
-        
-        # 2 dakikada bir tekrarla (120 saniye)
-        scheduler.add_job(
-            fetch_all_data,
-            'interval',
-            seconds=120,  # 2 dakika
-            id='fetch_all_data',
-            name='API Veri Güncelleme',
-            replace_existing=True,
-            max_instances=1  # Aynı anda sadece 1 instance çalışsın
-        )
-        
-        scheduler.start()
-        logger.info("✅ Scheduler başlatıldı (2 dakikada bir çalışacak)")
-        logger.info(f"⚙️ Retry ayarları: Max 3 deneme, exponential backoff")
-        logger.info(f"⚙️ Circuit breaker: {MAX_FAILURES} başarısızlıktan sonra devre dışı")
-        
-    except Exception as e:
-        logger.error(f"❌ Scheduler başlatma hatası: {e}")
-        raise
-
-
-def stop_scheduler():
-    """
-    Scheduler'ı durdur
-    """
-    try:
-        if scheduler.running:
-            scheduler.shutdown(wait=False)
-            logger.info("🛑 Scheduler durduruldu")
-        else:
-            logger.info("ℹ️ Scheduler zaten durmuş")
-    except Exception as e:
-        logger.error(f"❌ Scheduler durdurma hatası: {e}")
-
-
-# Geriye uyumluluk için (eski kodlar çağırabilir)
-def cleanup_old_data():
-    """Artık kullanılmıyor - PostgreSQL yok"""
-    logger.info("ℹ️ cleanup_old_data çağrıldı ama PostgreSQL kullanılmıyor")
-    return True
-
-
-def optimize_database():
-    """Artık kullanılmıyor - PostgreSQL yok"""
-    logger.info("ℹ️ optimize_database çağrıldı ama PostgreSQL kullanılmıyor")
-    return True
-
-
-def weekly_maintenance():
-    """
-    Haftalık bakım - Sadece cache temizleme
-    Redis'te veri birikmediği için çok basit
-    """
-    logger.info("🔧 Haftalık bakım başlıyor...")
+    scheduler = BackgroundScheduler(
+        executors=executors,
+        job_defaults={
+            'coalesce': True,  # Birden fazla job birikirse birleştir
+            'max_instances': 1  # Aynı anda sadece 1 instance çalışsın
+        }
+    )
     
-    try:
-        from utils.cache import clear_cache
-        clear_cache()
-        logger.info("🗑️ Redis cache temizlendi")
-        
-        # Circuit breaker'ları da sıfırla
-        reset_circuit_breakers()
-        logger.info("🔄 Circuit breaker'lar sıfırlandı")
-        
-    except Exception as e:
-        logger.error(f"❌ Cache temizleme hatası: {e}")
+    # 4 dakikada bir güncelleme (API yükünü azaltmak için)
+    scheduler.add_job(
+        update_all_data,
+        'interval',
+        minutes=4,
+        id='update_all_data',
+        name='Periyodik Veri Güncelleme (4 dk)',
+        replace_existing=True
+    )
     
-    logger.info("✅ Haftalık bakım tamamlandı")
-    return True
+    scheduler.start()
+    logger.info("✅ Scheduler başlatıldı - 4 dakikada bir otomatik güncelleme yapılacak")
+    
+    # İlk güncellemeyi hemen yap
+    logger.info("🚀 İlk güncelleme başlatılıyor...")
+    update_all_data()
+    
+    return scheduler
