@@ -155,16 +155,26 @@ def update_all_data():
     return results
 
 
+# Global scheduler instance
+_scheduler = None
+
+
 def start_scheduler():
     """
     APScheduler başlat - 4 dakikada bir güncelleme yap
     """
+    global _scheduler
+    
+    if _scheduler is not None:
+        logger.warning("⚠️ Scheduler zaten çalışıyor")
+        return _scheduler
+    
     # ThreadPoolExecutor ile max_instances kontrolü
     executors = {
         'default': ThreadPoolExecutor(max_workers=1)
     }
     
-    scheduler = BackgroundScheduler(
+    _scheduler = BackgroundScheduler(
         executors=executors,
         job_defaults={
             'coalesce': True,  # Birden fazla job birikirse birleştir
@@ -173,7 +183,7 @@ def start_scheduler():
     )
     
     # 4 dakikada bir güncelleme (API yükünü azaltmak için)
-    scheduler.add_job(
+    _scheduler.add_job(
         update_all_data,
         'interval',
         minutes=4,
@@ -182,11 +192,37 @@ def start_scheduler():
         replace_existing=True
     )
     
-    scheduler.start()
+    _scheduler.start()
     logger.info("✅ Scheduler başlatıldı - 4 dakikada bir otomatik güncelleme yapılacak")
     
     # İlk güncellemeyi hemen yap
     logger.info("🚀 İlk güncelleme başlatılıyor...")
     update_all_data()
     
-    return scheduler
+    return _scheduler
+
+
+def stop_scheduler():
+    """
+    Scheduler'ı durdur (graceful shutdown için)
+    """
+    global _scheduler
+    
+    if _scheduler is not None:
+        logger.info("🛑 Scheduler durduruluyor...")
+        _scheduler.shutdown(wait=False)
+        _scheduler = None
+        logger.info("✅ Scheduler durduruldu")
+    else:
+        logger.warning("⚠️ Scheduler zaten durmuş")
+
+
+def fetch_all_data():
+    """
+    Manuel güncelleme için - app.py'den çağrılabilir
+    
+    Returns:
+        dict: Güncelleme sonuçları
+    """
+    logger.info("🔄 Manuel veri güncelleme tetiklendi")
+    return update_all_data()
