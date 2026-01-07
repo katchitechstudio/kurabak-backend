@@ -115,7 +115,7 @@ def fetch_api_data():
     
     logger.debug("🔄 V4 API'den gümüş verisi çekiliyor...")
     
-    response = session.get(url, headers=headers, timeout=15)
+    response = session.get(url, headers=headers, timeout=30)  # 30 saniye (yavaş API için)
     response.raise_for_status()
     return response.json()
 
