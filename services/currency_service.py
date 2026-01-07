@@ -1,20 +1,80 @@
 """
-Currency Service - Dual API (V3 + V4)
+Currency Service - Dual API (V3 + V4) - İyileştirilmiş
 Her iki API'yi kontrol eder, en güncel olanı kullanır
 Redis'e direkt yazar, PostgreSQL kullanmaz
+
+İyileştirmeler:
+- Retry mekanizması ile otomatik tekrar deneme
+- Connection pooling ile daha stabil bağlantı
+- Exponential backoff ile akıllı bekleme
+- 30 saniye timeout (yavaş API için)
+- Detaylı hata loglama
 """
 import requests
 import logging
+import time
+from functools import wraps
 from datetime import datetime
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from utils.cache import set_cache
 
 logger = logging.getLogger(__name__)
 
 CACHE_TTL = 300  # 5 dakika
+MAX_RETRY_ATTEMPTS = 3
+RETRY_DELAY = 1
+API_TIMEOUT = 30  # 30 saniye (yavaş API için)
 
 # API Endpoints
 API_V3 = "https://finans.truncgil.com/v3/today.json"
 API_V4 = "https://finans.truncgil.com/v4/today.json"
+
+# Connection pooling için session oluştur
+session = requests.Session()
+retry_strategy = Retry(
+    total=2,  # 2 deneme (3 yerine, daha hızlı fail için)
+    backoff_factor=0.5,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"]
+)
+adapter = HTTPAdapter(
+    max_retries=retry_strategy,
+    pool_connections=10,
+    pool_maxsize=20,
+    pool_block=False
+)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
+
+def retry_on_failure(max_attempts=MAX_RETRY_ATTEMPTS, delay=RETRY_DELAY):
+    """
+    Bağlantı hatası durumunda exponential backoff ile tekrar dener
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except requests.exceptions.RequestException as e:
+                    if attempt == max_attempts:
+                        logger.error(f"❌ {func.__name__} başarısız (tüm denemeler tükendi): {e}")
+                        raise
+                    
+                    wait_time = delay * (2 ** (attempt - 1))  # Exponential backoff
+                    logger.warning(
+                        f"⚠️ {func.__name__} başarısız (deneme {attempt}/{max_attempts}), "
+                        f"{wait_time}s sonra tekrar denenecek... Hata: {e}"
+                    )
+                    time.sleep(wait_time)
+                except Exception as e:
+                    logger.error(f"❌ {func.__name__} beklenmeyen hata: {e}", exc_info=True)
+                    raise
+            return None
+        return wrapper
+    return decorator
 
 
 def get_safe_float(value):
@@ -66,9 +126,10 @@ def parse_update_date(date_str):
         return None
 
 
+@retry_on_failure(max_attempts=3, delay=1)
 def fetch_api_data(url, api_name):
     """
-    Belirtilen API'den veri çeker ve Update_Date ile birlikte döner
+    Belirtilen API'den veri çeker ve Update_Date ile birlikte döner (retry mekanizması ile)
     
     Args:
         url (str): API endpoint URL'i
@@ -77,50 +138,54 @@ def fetch_api_data(url, api_name):
     Returns:
         tuple: (data, update_date) veya (None, None)
     """
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json"
-        }
-        
-        logger.debug(f"🔄 {api_name} API'den veri çekiliyor...")
-        
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Update_Date kontrolü
-        update_date_str = data.get("Update_Date")
-        if not update_date_str:
-            logger.warning(f"⚠️ {api_name} API'de Update_Date yok!")
-            return None, None
-        
-        update_date = parse_update_date(update_date_str)
-        if not update_date:
-            logger.warning(f"⚠️ {api_name} API'de geçersiz tarih: {update_date_str}")
-            return None, None
-        
-        logger.info(f"✅ {api_name} API başarılı - Tarih: {update_date_str}")
-        return data, update_date
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json"
+    }
     
-    except requests.RequestException as e:
-        logger.error(f"❌ {api_name} API bağlantı hatası: {e}")
+    logger.debug(f"🔄 {api_name} API'den veri çekiliyor...")
+    
+    response = session.get(url, headers=headers, timeout=API_TIMEOUT)
+    response.raise_for_status()
+    data = response.json()
+    
+    # Update_Date kontrolü
+    update_date_str = data.get("Update_Date")
+    if not update_date_str:
+        logger.warning(f"⚠️ {api_name} API'de Update_Date yok!")
         return None, None
-    except Exception as e:
-        logger.error(f"❌ {api_name} API parse hatası: {e}")
+    
+    update_date = parse_update_date(update_date_str)
+    if not update_date:
+        logger.warning(f"⚠️ {api_name} API'de geçersiz tarih: {update_date_str}")
         return None, None
+    
+    logger.info(f"✅ {api_name} API başarılı - Tarih: {update_date_str}")
+    return data, update_date
 
 
 def get_latest_api_data():
     """
     V3 ve V4 API'lerini kontrol eder, en güncel olanı döner
+    Her iki API de retry mekanizması ile çekilir
     
     Returns:
         tuple: (data, api_name) veya (None, None)
     """
-    # Her iki API'yi de çek
-    v3_data, v3_date = fetch_api_data(API_V3, "V3")
-    v4_data, v4_date = fetch_api_data(API_V4, "V4")
+    v3_data, v3_date = None, None
+    v4_data, v4_date = None, None
+    
+    # V3 API'yi dene
+    try:
+        v3_data, v3_date = fetch_api_data(API_V3, "V3")
+    except Exception as e:
+        logger.error(f"❌ V3 API başarısız (tüm denemeler tükendi): {e}")
+    
+    # V4 API'yi dene
+    try:
+        v4_data, v4_date = fetch_api_data(API_V4, "V4")
+    except Exception as e:
+        logger.error(f"❌ V4 API başarısız (tüm denemeler tükendi): {e}")
     
     # Her iki API de başarısız
     if v3_data is None and v4_data is None:
@@ -223,12 +288,13 @@ def fetch_currencies_to_cache():
     """
     V3 ve V4 API'lerinden en güncel veriyi çek ve Redis'e yaz
     Her iki API'yi kontrol eder, tarih olarak hangisi daha yeniyse onu kullanır
+    Retry mekanizması ile bağlantı kopmaları otomatik düzelir
     
     Returns:
         bool: Başarılı ise True, hata varsa False
     """
     try:
-        # En güncel API'yi bul
+        # En güncel API'yi bul (retry mekanizması ile)
         data, api_source = get_latest_api_data()
         
         if not data:
