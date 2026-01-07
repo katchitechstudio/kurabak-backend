@@ -9,7 +9,7 @@ from utils.cache import set_cache
 
 logger = logging.getLogger(__name__)
 
-CACHE_TTL = 300
+CACHE_TTL = 600
 MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY = 1
 API_TIMEOUT = 30
