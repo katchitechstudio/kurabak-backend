@@ -18,7 +18,7 @@ from utils.cache import set_cache
 
 logger = logging.getLogger(__name__)
 
-CACHE_TTL = 300  # 5 dakika
+CACHE_TTL = 600  # 5 dakika
 MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY = 1  # İlk deneme için bekleme süresi (saniye)
 
