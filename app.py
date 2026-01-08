@@ -1,6 +1,9 @@
 """
-KuraBak Backend - Redis Only
-PostgreSQL bağımlılığı tamamen kaldırıldı
+KuraBak Backend - v5.1 (Unified Redis Edition)
+- PostgreSQL bağımlılığı tamamen kaldırıldı.
+- Üçlü veri çekme (Döviz, Altın, Gümüş) tek isteğe indirildi.
+- Circuit Breaker koruması eklendi.
+- Render & Valkey 8 uyumlu.
 """
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -9,167 +12,135 @@ from datetime import datetime
 import os
 import atexit
 
-# Logging ayarları
+# Logging Yapılandırması
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Config ve servisler
+# Config ve Servisler
 from config import Config
 from services.maintenance_service import start_scheduler, stop_scheduler, fetch_all_data
 from routes.general_routes import api_bp
-from utils.cache import get_cache
+from utils.cache import get_cache, REDIS_ENABLED
 
-# Flask app
+# Flask App Başlatma
 app = Flask(__name__)
+# Tüm originlere izin ver (Frontend erişimi için)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# Blueprint kaydet
+# API Rotalarını Kaydet (Blueprint)
 app.register_blueprint(api_bp)
-
 
 @app.route("/", methods=["GET"])
 def home():
-    """Ana sayfa - API bilgileri"""
+    """Ana sayfa - API Durum Paneli"""
     return jsonify({
         "app": "KuraBak Backend",
         "status": "running",
-        "version": "5.0 (Redis Only - Ultra Fast)",
+        "version": "5.1 (Unified Redis - Anti-Ban)",
         "endpoints": [
             "/api/currency/popular",
             "/api/currency/gold/popular",
             "/api/currency/silver/all",
-            "/api/currency/all (deprecated)",
-            "/api/currency/gold/all (deprecated)",
             "/health",
             "/api/update"
         ],
         "features": [
-            "Redis-only architecture (no PostgreSQL)",
-            "Ultra-fast response times (<10ms)",
-            "90-second auto-update interval",
-            "Fallback mechanism for cold starts",
-            "Zero data accumulation",
-            "Free hosting on Render"
+            "Unified API Fetching (Döviz+Altın+Gümüş tek istekte)",
+            "Circuit Breaker (API Hata Koruması)",
+            "Ultra-fast Redis responses (<10ms)",
+            "Zero Database overhead (No PostgreSQL)",
+            "Auto-update every 120 seconds"
         ],
-        "cache_ttl": "300 seconds (5 minutes)",
-        "update_interval": "90 seconds (1.5 minutes)",
+        "cache_system": "Valkey 8 / Redis" if REDIS_ENABLED else "RAM Fallback",
+        "update_interval": "120 seconds",
         "timestamp": datetime.now().isoformat()
     })
-
 
 @app.route("/health", methods=["GET", "HEAD"])
 def health():
     """
-    Health check endpoint
-    Redis cache durumunu kontrol eder
+    Health Check Endpoint
+    Sistemin ve verilerin canlılığını kontrol eder.
     """
     try:
-        # Redis'ten veri sayılarını al
-        currencies_data = get_cache('kurabak:currencies:all', ttl_seconds=300)
-        golds_data = get_cache('kurabak:golds:all', ttl_seconds=300)
-        silvers_data = get_cache('kurabak:silvers:all', ttl_seconds=300)
+        # Cache'den güncel verileri kontrol et
+        currencies_data = get_cache('kurabak:currencies:all')
+        golds_data = get_cache('kurabak:golds:all')
+        silvers_data = get_cache('kurabak:silvers:all')
         
-        currency_count = len(currencies_data.get('data', [])) if currencies_data else 0
-        gold_count = len(golds_data.get('data', [])) if golds_data else 0
-        silver_count = len(silvers_data.get('data', [])) if silvers_data else 0
+        c_count = len(currencies_data.get('data', [])) if currencies_data else 0
+        g_count = len(golds_data.get('data', [])) if golds_data else 0
+        s_count = len(silvers_data.get('data', [])) if silvers_data else 0
         
-        # Tüm veriler mevcut mu?
-        all_healthy = currency_count > 0 and gold_count > 0 and silver_count > 0
+        # En az bir veri türü varsa sistem sağlıklı kabul edilir
+        is_healthy = c_count > 0 or g_count > 0
         
         return jsonify({
-            "status": "healthy" if all_healthy else "warming_up",
-            "storage": "Redis (Valkey 8)",
-            "counts": {
-                "currencies": currency_count,
-                "golds": gold_count,
-                "silvers": silver_count
+            "status": "healthy" if is_healthy else "warming_up",
+            "uptime_status": {
+                "currencies": c_count,
+                "golds": g_count,
+                "silvers": s_count
             },
-            "cache_status": {
-                "currencies": "cached" if currencies_data else "empty",
-                "golds": "cached" if golds_data else "empty",
-                "silvers": "cached" if silvers_data else "empty"
-            },
+            "redis_active": REDIS_ENABLED,
             "timestamp": datetime.now().isoformat()
-        }), 200 if all_healthy else 503
+        }), 200 if is_healthy else 503
 
     except Exception as e:
         logger.error(f"❌ Health check hatası: {e}")
-        return jsonify({
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
+        return jsonify({"status": "unhealthy", "error": str(e)}), 500
 
 @app.route("/api/update", methods=["POST", "GET"])
 def manual_update():
     """
-    Manuel güncelleme endpoint'i
-    Tüm verileri API'den çeker ve Redis'e yazar
+    Manuel Güncelleme Tetikleyici
+    Render veya admin tarafından manuel veri yenilemek için kullanılır.
     """
     try:
-        logger.info("⚡ Manuel güncelleme tetiklendi...")
-        
+        logger.info("⚡ Manuel güncelleme isteği alındı...")
         success = fetch_all_data()
         
         if success:
             return jsonify({
-                "success": True,
-                "message": "Tüm veriler başarıyla güncellendi",
-                "timestamp": datetime.now().isoformat()
+                "success": True, 
+                "message": "Tüm finansal veriler başarıyla senkronize edildi."
             }), 200
         else:
             return jsonify({
-                "success": False,
-                "message": "Bazı veriler güncellenemedi",
-                "timestamp": datetime.now().isoformat()
-            }), 500
-
+                "success": False, 
+                "message": "API hatası veya Circuit Breaker devrede. Logları kontrol edin."
+            }), 503
     except Exception as e:
-        logger.error(f"❌ Manuel güncelleme hatası: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
+        return jsonify({"success": False, "error": str(e)}), 500
 
 def initialize_app():
     """
-    Uygulama başlangıç işlemleri
+    Uygulama ayağa kalkarken yapılacak işlemler
     """
     try:
-        logger.info("🚀 KuraBak Backend başlatılıyor...")
+        logger.info("🚀 KuraBak Mimarisi Başlatılıyor...")
         
-        # Redis bağlantısı kontrol et
-        from utils.cache import REDIS_ENABLED
-        if REDIS_ENABLED:
-            logger.info("✅ Redis bağlantısı aktif")
-        else:
-            logger.warning("⚠️ Redis bağlantısı yok, RAM cache kullanılıyor")
-        
-        # Scheduler'ı başlat (90 saniyede bir güncelleme)
+        # 1. Scheduler'ı Başlat (Otomatik veri çekme döngüsü)
         start_scheduler()
         
-        # Temiz kapanış için atexit kaydı
+        # 2. Uygulama kapandığında scheduler'ı düzgünce durdur
         atexit.register(stop_scheduler)
         
-        logger.info("🎉 KuraBak Backend başarıyla başlatıldı!")
+        logger.info("✅ Arka plan görevleri ve Scheduler hazır.")
         
     except Exception as e:
-        logger.error(f"❌ Başlatma hatası: {e}")
-        raise
+        logger.error(f"❌ Başlatma sırasında kritik hata: {e}")
 
-
-# Uygulama başlatma (debug mode'da sadece bir kez çalışsın)
+# Flask'ın debug mode'da iki kez çalışmasını engellemek için kontrol
 if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     initialize_app()
 
-
 if __name__ == "__main__":
+    # Render tarafından atanan PORT'u al, yoksa 5001 kullan
     port = int(os.environ.get("PORT", 5001))
-    logger.info(f"🌍 Server başlatılıyor → Port: {port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    logger.info(f"🌍 KuraBak Server Aktif → Port: {port}")
+    # Üretim ortamında debug=False olmalıdır
+    app.run(host="0.0.0.0", port=port, debug=False)
