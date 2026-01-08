@@ -45,10 +45,19 @@ def setup_logging():
     # Gunicorn varsa onun logger'ını kullan
     if os.environ.get('GUNICORN_CMD_ARGS'):
         gunicorn_logger = logging.getLogger('gunicorn.error')
-        log_level = gunicorn_logger.level
+        # Gunicorn logger.level zaten integer, direkt kullan
+        logging.basicConfig(
+            level=gunicorn_logger.level,
+            format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+            stream=sys.stdout
+        )
+        return logging.getLogger(__name__)
+    
+    # Normal çalışma: string'i integer'a çevir
+    numeric_level = getattr(logging, log_level, logging.INFO)
     
     logging.basicConfig(
-        level=getattr(logging, log_level, logging.INFO),
+        level=numeric_level,
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
         stream=sys.stdout
     )
