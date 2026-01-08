@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # AYARLAR
 # ======================================
 CACHE_TTL = 600
-API_TIMEOUT = (5, 15)  # 5s bağlantı, 15s okuma (JSON büyük olduğu için okuma süresini artırdık)
+API_TIMEOUT = (5, 15)  # 5s bağlantı, 15s okuma
 API_URL_V4 = "https://finans.truncgil.com/v4/today.json"
 
 # ======================================
@@ -22,7 +22,6 @@ session = requests.Session()
 adapter = HTTPAdapter(pool_connections=2, pool_maxsize=4)
 session.mount("https://", adapter)
 
-# Gerçek bir tarayıcı gibi davranıyoruz
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json",
@@ -51,12 +50,14 @@ def process_currencies(data):
         if code in data and data[code].get("Type") == "Currency":
             item = data[code]
             selling = get_safe_float(item.get("Selling"))
-            result.append({
-                "code": code,
-                "name": item.get("Name", code),
-                "rate": round(selling, 4) if selling < 10 else round(selling, 2),
-                "change_percent": round(get_safe_float(item.get("Change")), 2)
-            })
+            # Sadece geçerli fiyatı olanları ekle (Koruma)
+            if selling > 0:
+                result.append({
+                    "code": code,
+                    "name": item.get("Name", code),
+                    "rate": round(selling, 4) if selling < 10 else round(selling, 2),
+                    "change_percent": round(get_safe_float(item.get("Change")), 2)
+                })
     return result
 
 def process_golds(data):
@@ -65,21 +66,26 @@ def process_golds(data):
     for code, name in mapping.items():
         if code in data:
             item = data[code]
-            result.append({
-                "name": name,
-                "rate": round(get_safe_float(item.get("Selling")), 2),
-                "change_percent": round(get_safe_float(item.get("Change")), 2)
-            })
+            selling = get_safe_float(item.get("Selling"))
+            # Sadece geçerli fiyatı olan altınları ekle (Koruma)
+            if selling > 0:
+                result.append({
+                    "name": name,
+                    "rate": round(selling, 2),
+                    "change_percent": round(get_safe_float(item.get("Change")), 2)
+                })
     return result
 
 def process_silvers(data):
     if "GUMUS" in data:
         item = data["GUMUS"]
-        return [{
-            "name": "Gümüş",
-            "rate": round(get_safe_float(item.get("Selling")), 4),
-            "change_percent": round(get_safe_float(item.get("Change")), 2)
-        }]
+        selling = get_safe_float(item.get("Selling"))
+        if selling > 0:
+            return [{
+                "name": "Gümüş",
+                "rate": round(selling, 4),
+                "change_percent": round(get_safe_float(item.get("Change")), 2)
+            }]
     return []
 
 # ======================================
@@ -96,7 +102,6 @@ def sync_financial_data():
         response = session.get(API_URL_V4, headers=HEADERS, timeout=API_TIMEOUT)
         response.raise_for_status()
         
-        # JSON kontrolü
         try:
             full_data = response.json()
         except Exception as e:
