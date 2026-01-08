@@ -167,7 +167,7 @@ class Config:
     HEALTH_MIN_CURRENCIES = 10  # En az 10 döviz olmalı
     HEALTH_MIN_GOLDS = 3        # En az 3 altın olmalı
     HEALTH_MIN_SILVERS = 1      # En az 1 gümüş olmalı
-    HEALTH_MAX_DATA_AGE = 300   # Veri 5 dakikadan eski olmamalı (saniye)
+    HEALTH_MAX_DATA_AGE = 200   # Veri 200 saniyeden (3.3 dk) eski olmamalı
     
     # ======================================
     # LOGGING
