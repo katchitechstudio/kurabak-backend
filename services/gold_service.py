@@ -1,79 +1,112 @@
 """
-Gold Service - V4 API (İyileştirilmiş)
+Gold Service - V4 API (Optimize Edilmiş)
 Redis'e direkt yazar, PostgreSQL kullanmaz
 
-İyileştirmeler:
-- Retry mekanizması ile otomatik tekrar deneme
-- Connection pooling ile daha stabil bağlantı
-- Exponential backoff ile akıllı bekleme
-- Detaylı hata loglama
+Optimizasyonlar:
+- ❌ Session retry KALDIRILDI (çatışma önlendi)
+- ✅ Timeout düşürüldü: 30s → (5, 10)s
+- ✅ Pool size azaltıldı: 20 → 4
+- ✅ JSON hatasında retry YOK (boşuna deneme)
+- ✅ Exponential backoff düzeltildi: 1s → 2s → 4s
 """
 import requests
 import logging
 import time
 from functools import wraps
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from utils.cache import set_cache
 
 logger = logging.getLogger(__name__)
 
-CACHE_TTL = 600  # 5 dakika
+# ======================================
+# OPTİMİZE EDİLMİŞ AYARLAR
+# ======================================
+CACHE_TTL = 600
 MAX_RETRY_ATTEMPTS = 3
-RETRY_DELAY = 1  # İlk deneme için bekleme süresi (saniye)
-API_TIMEOUT = 30  # API timeout süresi (saniye)
+API_TIMEOUT = (5, 10)  # (connect, read) - Daha gerçekçi
+API_URL = "https://finans.truncgil.com/v4/today.json"
 
-# Connection pooling için session oluştur
+# ======================================
+# OPTİMİZE EDİLMİŞ SESSION
+# ======================================
 session = requests.Session()
-retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["GET"]
-)
+
+# ❌ RETRY STRATEGY KALDIRILDI - Sadece decorator retry
 adapter = HTTPAdapter(
-    max_retries=retry_strategy,
-    pool_connections=10,
-    pool_maxsize=20,
+    pool_connections=2,   # Sadece 2 host gerekli
+    pool_maxsize=4,       # Her host için max 2 bağlantı
     pool_block=False
 )
 session.mount("http://", adapter)
 session.mount("https://", adapter)
 
 
-def retry_on_failure(max_attempts=MAX_RETRY_ATTEMPTS, delay=RETRY_DELAY):
+def retry_on_failure(max_attempts=MAX_RETRY_ATTEMPTS):
     """
-    Bağlantı hatası durumunda exponential backoff ile tekrar dener
+    Optimize edilmiş retry decorator
+    - Exponential backoff: 1s → 2s → 4s
+    - Sadece bağlantı hatalarında retry
+    - JSON hatalarında RETRY YOK
     """
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            last_exception = None
+            
             for attempt in range(1, max_attempts + 1):
                 try:
                     return func(*args, **kwargs)
-                except requests.exceptions.RequestException as e:
+                
+                except requests.exceptions.Timeout as e:
+                    last_exception = e
                     if attempt == max_attempts:
-                        logger.error(f"❌ {func.__name__} başarısız (tüm denemeler tükendi): {e}")
+                        logger.error(f"❌ {func.__name__} timeout (tüm denemeler)")
                         raise
                     
-                    wait_time = delay * (2 ** (attempt - 1))  # Exponential backoff
+                    wait_time = 2 ** (attempt - 1)  # 1s, 2s, 4s
                     logger.warning(
-                        f"⚠️ {func.__name__} başarısız (deneme {attempt}/{max_attempts}), "
-                        f"{wait_time}s sonra tekrar denenecek... Hata: {e}"
+                        f"⚠️ {func.__name__} timeout (deneme {attempt}/{max_attempts}), "
+                        f"{wait_time}s sonra tekrar..."
                     )
                     time.sleep(wait_time)
-                except Exception as e:
-                    logger.error(f"❌ {func.__name__} beklenmeyen hata: {e}", exc_info=True)
+                
+                except requests.exceptions.ConnectionError as e:
+                    last_exception = e
+                    if attempt == max_attempts:
+                        logger.error(f"❌ {func.__name__} bağlantı hatası (tüm denemeler)")
+                        raise
+                    
+                    wait_time = 2 ** (attempt - 1)
+                    logger.warning(
+                        f"⚠️ {func.__name__} bağlantı hatası (deneme {attempt}/{max_attempts}), "
+                        f"{wait_time}s sonra tekrar..."
+                    )
+                    time.sleep(wait_time)
+                
+                except requests.exceptions.JSONDecodeError as e:
+                    # ❌ JSON hatası - RETRY YAPMA!
+                    logger.error(f"❌ API bozuk JSON döndürdü (altın servisi)")
                     raise
-            return None
+                
+                except requests.exceptions.RequestException as e:
+                    last_exception = e
+                    logger.error(f"❌ {func.__name__} beklenmeyen hata: {e}")
+                    raise
+                
+                except Exception as e:
+                    logger.error(f"❌ {func.__name__} kritik hata: {e}", exc_info=True)
+                    raise
+            
+            if last_exception:
+                raise last_exception
+            
         return wrapper
     return decorator
 
 
 def get_safe_float(value):
     """
-    V4 API'de değerler string olarak geliyor ve virgül kullanılıyor.
-    Change değerleri '%0,03' formatında geliyor.
+    Float dönüşümü - Türk formatı desteği
     
     Örnekler:
     - "5.953,42" → 5953.42
@@ -86,39 +119,50 @@ def get_safe_float(value):
             return float(value)
         
         value_str = str(value).strip()
+        value_str = value_str.replace("%", "").replace("$", "").replace(" ", "")
         
-        # % işaretini temizle (V4'te "%0,03" veya "%-1,61" formatı var)
-        value_str = value_str.replace("%", "")
-        
-        # "5.953,42" formatı (binlik ayracı nokta, ondalık virgül)
+        # Türk formatı: 5.953,42 → 5953.42
         if '.' in value_str and ',' in value_str:
             value_str = value_str.replace(".", "").replace(",", ".")
-        # "89,85" formatı (sadece ondalık virgül)
-        else:
+        # Tek virgül: 89,85 → 89.85
+        elif ',' in value_str:
             value_str = value_str.replace(",", ".")
         
         return float(value_str)
     except Exception as e:
-        logger.warning(f"Float dönüşüm hatası: {value} → {e}")
+        logger.warning(f"⚠️ Float dönüşüm hatası: '{value}' → {e}")
         return 0.0
 
 
-@retry_on_failure(max_attempts=3, delay=1)
+@retry_on_failure(max_attempts=3)
 def fetch_api_data():
     """
-    V4 API'den veri çek (retry mekanizması ile)
+    V4 API'den altın verileri çek
+    
+    Optimizasyon:
+    - Timeout: (5, 10) → 5s connect, 10s read
+    - Session retry YOK (decorator yeterli)
     """
-    url = "https://finans.truncgil.com/v4/today.json"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
+        "User-Agent": "KuraBak-Backend/2.0 (Python/requests)",
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive"
     }
     
-    logger.debug("🔄 V4 API'den altın verileri çekiliyor...")
+    logger.debug(f"🔄 V4 API çağrılıyor (altın): {API_URL}")
     
-    response = session.get(url, headers=headers, timeout=30)  # 30 saniye (yavaş API için)
+    # ✅ Timeout tuple
+    response = session.get(API_URL, headers=headers, timeout=API_TIMEOUT)
     response.raise_for_status()
-    return response.json()
+    
+    # JSON parse - hata varsa JSONDecodeError fırlatır
+    try:
+        return response.json()
+    except requests.exceptions.JSONDecodeError as e:
+        logger.error("❌ V4 API bozuk JSON döndürdü (altın)")
+        logger.debug(f"Response text (ilk 500 char): {response.text[:500]}")
+        raise
 
 
 def fetch_golds_to_cache():
@@ -129,10 +173,10 @@ def fetch_golds_to_cache():
         bool: Başarılı ise True, hata varsa False
     """
     try:
-        # API'den veri çek (retry mekanizması ile)
+        # 1. API'den veri çek
         data = fetch_api_data()
         
-        # V4'te altın kodları BÜYÜK HARFLE geliyor
+        # 2. Altın mapping (V4 kodları BÜYÜK HARF)
         gold_mapping = {
             "GRA": "Gram Altın",
             "CEYREKALTIN": "Çeyrek Altın",
@@ -142,43 +186,50 @@ def fetch_golds_to_cache():
         }
         
         golds = []
+        skipped_count = 0
         
+        # 3. Altınları işle
         for api_code, display_name in gold_mapping.items():
             # API'de var mı?
             if api_code not in data:
-                logger.warning(f"⚠️ {api_code} API'de bulunamadı")
+                logger.debug(f"⚠️ {api_code} API'de yok")
+                skipped_count += 1
                 continue
             
             item = data[api_code]
             
             # Type kontrolü
             if item.get("Type") != "Gold":
-                logger.warning(f"⚠️ {api_code} Type != Gold: {item.get('Type')}")
+                logger.debug(f"⚠️ {api_code} Type != Gold: {item.get('Type')}")
+                skipped_count += 1
                 continue
             
-            # Fiyat kontrolü
+            # Fiyat al
             selling = get_safe_float(item.get("Selling", 0))
             if selling <= 0:
                 logger.warning(f"⚠️ {api_code} geçersiz fiyat: {selling}")
+                skipped_count += 1
                 continue
             
             # Değişim yüzdesi
             change_percent = get_safe_float(item.get("Change", 0))
             
-            # Altın verisini hazırla
+            # Altın ekle
             golds.append({
                 "name": display_name,
-                "rate": round(selling, 2),  # Altın için 2 hane yeterli
+                "rate": round(selling, 2),  # 2 hane yeterli
                 "change_percent": round(change_percent, 2)
             })
-            
-            logger.debug(f"✅ {display_name}: {selling:.2f} TL ({change_percent:+.2f}%)")
         
+        if skipped_count > 0:
+            logger.info(f"ℹ️ {skipped_count} altın atlandı")
+        
+        # 4. Validasyon
         if not golds:
-            logger.error("❌ Hiç altın verisi çekilemedi!")
+            logger.error("❌ Hiç altın verisi işlenemedi!")
             return False
         
-        # Redis'e yaz
+        # 5. Redis'e yaz
         cache_data = {
             "success": True,
             "count": len(golds),
@@ -191,14 +242,13 @@ def fetch_golds_to_cache():
         return True
     
     except requests.RequestException as e:
-        logger.error(f"❌ API bağlantı hatası (tüm denemeler başarısız): {e}")
+        logger.error(f"❌ API bağlantı hatası (tüm denemeler başarısız): {type(e).__name__}")
         return False
     except Exception as e:
         logger.error(f"❌ Altın çekme hatası: {e}", exc_info=True)
         return False
 
 
-# Geriye uyumluluk için (eski kod çağırabilir)
 def fetch_golds():
-    """Eski fonksiyon adı - yeni fonksiyona yönlendir"""
+    """Public API - geriye uyumluluk"""
     return fetch_golds_to_cache()
