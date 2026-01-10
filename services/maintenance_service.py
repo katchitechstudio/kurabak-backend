@@ -9,6 +9,7 @@ Maintenance Service - Scheduler & Circuit Breaker
 ✅ Multi-process güvenli
 ✅ Memory leak koruması
 ✅ İyileştirilmiş timeout logic
+✅ Render Deploy Fix (ThreadPoolExecutor argümanı düzeltildi)
 """
 
 import logging
@@ -337,10 +338,10 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
         logger.info(f"🔧 Scheduler başlatılıyor (PID: {pid})...")
         
         # Executor yapılandırması
+        # DÜZELTME: thread_name_prefix argümanı kaldırıldı
         executors = {
             'default': ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix='scheduler'
+                max_workers=1
             )
         }
         
