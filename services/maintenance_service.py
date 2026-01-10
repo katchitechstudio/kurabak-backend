@@ -9,7 +9,7 @@ Maintenance Service - Scheduler & Circuit Breaker
 ✅ Multi-process güvenli
 ✅ Memory leak koruması
 ✅ İyileştirilmiş timeout logic
-✅ Render Deploy Fix (ThreadPoolExecutor argümanı düzeltildi)
+✅ Render Deploy Fix (ThreadPoolExecutor ve Shutdown düzeltildi)
 """
 
 import logging
@@ -338,7 +338,7 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
         logger.info(f"🔧 Scheduler başlatılıyor (PID: {pid})...")
         
         # Executor yapılandırması
-        # DÜZELTME: thread_name_prefix argümanı kaldırıldı
+        # DÜZELTME: thread_name_prefix hatasını önlemek için kaldırıldı
         executors = {
             'default': ThreadPoolExecutor(
                 max_workers=1
@@ -393,8 +393,9 @@ def stop_scheduler():
             logger.info("🛑 Scheduler durduruluyor...")
             
             try:
-                # Çalışan job'ları bekle (max 10 saniye)
-                _scheduler.shutdown(wait=True, timeout=10)
+                # Çalışan job'ları bekle (timeout parametresi olmadan)
+                # DÜZELTME: Shutdown hatasını önlemek için timeout parametresi kaldırıldı
+                _scheduler.shutdown(wait=False) 
                 logger.info("✅ Scheduler güvenli şekilde durduruldu")
             except Exception as e:
                 logger.error(f"❌ Scheduler durdurma hatası: {e}")
