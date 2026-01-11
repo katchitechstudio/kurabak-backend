@@ -1,8 +1,10 @@
 """
-Financial Service - Multi-Version API Support (Final)
+Financial Service - Multi-Version API Support (FULL & FINAL)
 =====================================================
 ✅ V4/V3 API desteği (fallback)
-✅ Cache TTL 1 Saat (Asla 503 vermez)
+✅ Gelişmiş Type-Safe Veri İşleme (Numeric & String Uyumlu)
+✅ V4 Key Mapping Önceliklendirme (Altın Sorunu Çözüldü)
+✅ Cache TTL 1 Saat (Safe Fallback)
 ✅ Günün Özeti (Winner/Loser) Hesaplama
 ✅ Thread-safe session yönetimi
 """
@@ -18,7 +20,6 @@ from urllib3.util.retry import Retry
 from typing import Optional, List
 
 from utils.cache import set_cache
-# Config'den CACHE_TTL'i siliyoruz, manuel 1 saat vereceğiz.
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,6 @@ API_URL_V4 = "https://finans.truncgil.com/v4/today.json"
 API_URL_V3 = "https://finans.truncgil.com/v3/today.json"
 
 # 🔥 CACHE SÜRESİ: 1 SAAT (3600 Saniye)
-# Veri her 2 dakikada bir yenilense de, cache silinmeyecek.
 SAFE_CACHE_TTL = 3600 
 
 HEADERS = {
@@ -48,7 +48,7 @@ POPULAR_CURRENCIES = [
     "QAR", "KWD", "AED"
 ]
 
-# ALTIN KEY MAPPİNGLERİ
+# ALTIN KEY MAPPİNGLERİ (v4 Anahtarları Öncelikli)
 GOLD_MAPPINGS = {
     "GRA": ["GRA", "gram-altin", "gram_altin", "GRAM"],
     "CEYREKALTIN": ["CEYREKALTIN", "ceyrek-altin", "ceyrek_altin", "CEYREK"],
@@ -150,24 +150,30 @@ class SessionManager:
 session_manager = SessionManager()
 
 # ======================================
-# DATA PROCESSING
+# DATA PROCESSING (RE-ENGINEERED)
 # ======================================
 
 def get_safe_float(value) -> float:
+    """v4 (Float) ve v3 (String %0,02) verilerini hatasız parse eder."""
+    if value is None:
+        return 0.0
+    
+    # Veri zaten sayıysa (v4) direkt dön
+    if isinstance(value, (int, float)):
+        return float(value)
+    
     try:
-        if isinstance(value, (int, float)):
-            return float(value)
-        if value is None:
-            return 0.0
-        
+        # String veriyi (v3) temizle
         v = str(value).strip().replace("%", "").replace("$", "").replace(" ", "")
-        if '.' in v and ',' in v:
+        
+        # Nokta/Virgül karmaşasını çöz
+        if ',' in v:
+            # v3 formatı: 1.250,50 -> 1250.50
             v = v.replace(".", "").replace(",", ".")
-        elif ',' in v:
-            v = v.replace(",", ".")
         
         result = float(v)
-        if result < 0 or result > 1_000_000:
+        # Mantıksız veya aşırı yüksek değer kontrolü
+        if result < -100 or result > 1_000_000:
             return 0.0
         
         return result
@@ -183,7 +189,8 @@ def find_item(data: dict, keys: List[str]) -> Optional[dict]:
 def process_currencies(data: dict) -> List[dict]:
     result = []
     for code in POPULAR_CURRENCIES:
-        item = find_item(data, [code, code.lower()])
+        # Büyük/Küçük harf duyarlılığı eklendi
+        item = find_item(data, [code, code.upper(), code.lower()])
         if not item:
             continue
         
@@ -194,11 +201,13 @@ def process_currencies(data: dict) -> List[dict]:
         if selling <= 0:
             continue
         
+        change = get_safe_float(item.get("Change"))
+        
         result.append({
             "code": code,
             "name": item.get("Name", code),
             "rate": round(selling, 4) if selling < 10 else round(selling, 2),
-            "change_percent": round(get_safe_float(item.get("Change")), 2)
+            "change_percent": round(change, 2)
         })
     return result
 
@@ -213,10 +222,12 @@ def process_golds(data: dict) -> List[dict]:
         if selling <= 0:
             continue
         
+        change = get_safe_float(item.get("Change"))
+        
         result.append({
             "name": GOLD_NAMES[main_code],
             "rate": round(selling, 2),
-            "change_percent": round(get_safe_float(item.get("Change")), 2)
+            "change_percent": round(change, 2)
         })
     return result
 
@@ -229,26 +240,22 @@ def process_silvers(data: dict) -> List[dict]:
     if selling <= 0:
         return []
     
+    change = get_safe_float(item.get("Change"))
+    
     return [{
         "name": "Gümüş",
         "rate": round(selling, 4),
-        "change_percent": round(get_safe_float(item.get("Change")), 2)
+        "change_percent": round(change, 2)
     }]
 
-# 🔥 YENİ: GÜNÜN ÖZETİNİ HESAPLA (WINNER/LOSER)
 def calculate_daily_summary(currencies: List[dict]) -> dict:
     """En çok artan ve düşen dövizi bulur"""
     if not currencies or len(currencies) < 2:
         return {}
 
     try:
-        # Değişim oranına göre sırala (Küçükten büyüğe)
         sorted_currencies = sorted(currencies, key=lambda x: x['change_percent'])
-
-        # En çok düşen (Listenin başı)
         loser = sorted_currencies[0]
-        
-        # En çok yükselen (Listenin sonu)
         winner = sorted_currencies[-1]
 
         return {
@@ -284,15 +291,12 @@ def fetch_api_data(url: str) -> Optional[dict]:
         
         try:
             return resp.json()
-        except requests.exceptions.JSONDecodeError as je:
+        except Exception as je:
             logger.error(f"❌ Bozuk JSON ({url}): {str(je)[:100]}")
             return None
             
-    except requests.exceptions.Timeout:
-        logger.error(f"❌ Timeout: {url}")
-        return None
     except Exception as e:
-        logger.error(f"❌ API Hatası: {str(e)[:100]}")
+        logger.error(f"❌ API Hatası ({url}): {str(e)[:100]}")
         return None
 
 # ======================================
@@ -323,38 +327,36 @@ def sync_financial_data() -> bool:
         elapsed = time.time() - start_time
         metrics.record_success(version, elapsed)
         
-        update_date = data.get("Update_Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # Tarih bilgisi
+        update_date = data.get("Update_Date") or data.get("update_date") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # 3. Verileri işle
         currencies = process_currencies(data)
         golds = process_golds(data)
         silvers = process_silvers(data)
         
-        # 4. GÜNÜN ÖZETİNİ HESAPLA 🔥
+        # 4. Günün Özetini Hesapla
         daily_summary = calculate_daily_summary(currencies)
 
         # 5. Veri kontrolü
         if not currencies:
-            logger.error("❌ Hiç döviz verisi yok!")
+            logger.error("❌ Hiç döviz verisi çekilemedi!")
             metrics.record_failure()
             return False
         
-        # 6. Redis'e kaydet (TTL ARTTIRILDI -> 3600 Saniye)
+        # 6. Redis'e kaydet (TTL: 3600 Saniye)
         base_data = {
             "success": True,
             "update_date": update_date,
             "api_version": version
         }
         
-        # Tüm verileri 1 saatlik cache süresiyle kaydet
         set_cache('kurabak:currencies:all', {**base_data, "count": len(currencies), "data": currencies}, SAFE_CACHE_TTL)
         set_cache('kurabak:golds:all', {**base_data, "count": len(golds), "data": golds}, SAFE_CACHE_TTL)
         set_cache('kurabak:silvers:all', {**base_data, "count": len(silvers), "data": silvers}, SAFE_CACHE_TTL)
         
-        # Özet verisini de kaydet
         if daily_summary:
             set_cache('kurabak:summary', {**base_data, "data": daily_summary}, SAFE_CACHE_TTL)
-            logger.info("✅ Günün özeti hesaplandı ve kaydedildi.")
 
         total_time = time.time() - start_time
         logger.info(
