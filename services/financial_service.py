@@ -1,11 +1,9 @@
 """
-Financial Service - Multi-Version API Support
-==============================================
-
+Financial Service - Multi-Version API Support (Final)
+=====================================================
 ✅ V4/V3 API desteği (fallback)
-✅ Akıllı key mapping (hem V4 hem V3 formatları)
-✅ JSON parse hata yönetimi
-✅ Gümüş cache fix
+✅ Cache TTL 1 Saat (Asla 503 vermez)
+✅ Günün Özeti (Winner/Loser) Hesaplama
 ✅ Thread-safe session yönetimi
 """
 
@@ -20,6 +18,7 @@ from urllib3.util.retry import Retry
 from typing import Optional, List
 
 from utils.cache import set_cache
+# Config'den CACHE_TTL'i siliyoruz, manuel 1 saat vereceğiz.
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,10 @@ logger = logging.getLogger(__name__)
 API_TIMEOUT = (10, 20)
 API_URL_V4 = "https://finans.truncgil.com/v4/today.json"
 API_URL_V3 = "https://finans.truncgil.com/v3/today.json"
+
+# 🔥 CACHE SÜRESİ: 1 SAAT (3600 Saniye)
+# Veri her 2 dakikada bir yenilense de, cache silinmeyecek.
+SAFE_CACHE_TTL = 3600 
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -45,7 +48,7 @@ POPULAR_CURRENCIES = [
     "QAR", "KWD", "AED"
 ]
 
-# ALTIN KEY MAPPİNGLERİ (V4 + V3 uyumlu)
+# ALTIN KEY MAPPİNGLERİ
 GOLD_MAPPINGS = {
     "GRA": ["GRA", "gram-altin", "gram_altin", "GRAM"],
     "CEYREKALTIN": ["CEYREKALTIN", "ceyrek-altin", "ceyrek_altin", "CEYREK"],
@@ -62,7 +65,7 @@ GOLD_NAMES = {
     "CUMHURIYETALTINI": "Cumhuriyet Altını"
 }
 
-# GÜMÜŞ KEY MAPPİNGLERİ (V4 + V3 uyumlu)
+# GÜMÜŞ KEY MAPPİNGLERİ
 SILVER_KEYS = ["GUMUS", "gumus", "silver", "SILVER", "gümüş"]
 
 # ======================================
@@ -147,11 +150,10 @@ class SessionManager:
 session_manager = SessionManager()
 
 # ======================================
-# DATA PROCESSING (ROBUST)
+# DATA PROCESSING
 # ======================================
 
 def get_safe_float(value) -> float:
-    """Güvenli float dönüşümü"""
     try:
         if isinstance(value, (int, float)):
             return float(value)
@@ -159,44 +161,32 @@ def get_safe_float(value) -> float:
             return 0.0
         
         v = str(value).strip().replace("%", "").replace("$", "").replace(" ", "")
-        
-        # Türkçe format: 1.234,56 -> 1234.56
         if '.' in v and ',' in v:
             v = v.replace(".", "").replace(",", ".")
         elif ',' in v:
             v = v.replace(",", ".")
         
         result = float(v)
-        
-        # Sınır kontrolü
         if result < 0 or result > 1_000_000:
-            logger.warning(f"⚠️ Anormal değer: {result}")
             return 0.0
         
         return result
     except:
         return 0.0
 
-
 def find_item(data: dict, keys: List[str]) -> Optional[dict]:
-    """Verilen key alias'larından biriyle veriyi bul"""
     for key in keys:
         if key in data:
             return data[key]
     return None
 
-
 def process_currencies(data: dict) -> List[dict]:
-    """Döviz işleme"""
     result = []
-    
     for code in POPULAR_CURRENCIES:
-        # Hem büyük hem küçük harf dene
         item = find_item(data, [code, code.lower()])
         if not item:
             continue
         
-        # V3'te Type olmayabilir, o yüzden esnek kontrol
         if "Type" in item and item["Type"] != "Currency":
             continue
 
@@ -210,14 +200,10 @@ def process_currencies(data: dict) -> List[dict]:
             "rate": round(selling, 4) if selling < 10 else round(selling, 2),
             "change_percent": round(get_safe_float(item.get("Change")), 2)
         })
-    
     return result
 
-
 def process_golds(data: dict) -> List[dict]:
-    """Altın işleme (V3/V4 alias desteği)"""
     result = []
-    
     for main_code, aliases in GOLD_MAPPINGS.items():
         item = find_item(data, aliases)
         if not item:
@@ -232,16 +218,11 @@ def process_golds(data: dict) -> List[dict]:
             "rate": round(selling, 2),
             "change_percent": round(get_safe_float(item.get("Change")), 2)
         })
-    
     return result
 
-
 def process_silvers(data: dict) -> List[dict]:
-    """Gümüş işleme (V3/V4 alias desteği) - FIXED"""
     item = find_item(data, SILVER_KEYS)
-    
     if not item:
-        logger.warning("⚠️ Gümüş verisi bulunamadı (tüm alias'lar denendi)")
         return []
 
     selling = get_safe_float(item.get("Selling"))
@@ -254,12 +235,45 @@ def process_silvers(data: dict) -> List[dict]:
         "change_percent": round(get_safe_float(item.get("Change")), 2)
     }]
 
+# 🔥 YENİ: GÜNÜN ÖZETİNİ HESAPLA (WINNER/LOSER)
+def calculate_daily_summary(currencies: List[dict]) -> dict:
+    """En çok artan ve düşen dövizi bulur"""
+    if not currencies or len(currencies) < 2:
+        return {}
+
+    try:
+        # Değişim oranına göre sırala (Küçükten büyüğe)
+        sorted_currencies = sorted(currencies, key=lambda x: x['change_percent'])
+
+        # En çok düşen (Listenin başı)
+        loser = sorted_currencies[0]
+        
+        # En çok yükselen (Listenin sonu)
+        winner = sorted_currencies[-1]
+
+        return {
+            "winner": {
+                "name": winner["name"],
+                "code": winner["code"],
+                "change": winner["change_percent"],
+                "rate": winner["rate"]
+            },
+            "loser": {
+                "name": loser["name"],
+                "code": loser["code"],
+                "change": loser["change_percent"],
+                "rate": loser["rate"]
+            }
+        }
+    except Exception as e:
+        logger.error(f"❌ Günün özeti hesaplanırken hata: {e}")
+        return {}
+
 # ======================================
 # API FETCH
 # ======================================
 
 def fetch_api_data(url: str) -> Optional[dict]:
-    """API'den veri çek - ROBUST JSON handling"""
     try:
         session = session_manager.get_session()
         resp = session.get(url, headers=HEADERS, timeout=API_TIMEOUT)
@@ -268,7 +282,6 @@ def fetch_api_data(url: str) -> Optional[dict]:
             logger.error(f"❌ HTTP {resp.status_code}: {url}")
             return None
         
-        # JSON parse (bozuk JSON hatası için hazır)
         try:
             return resp.json()
         except requests.exceptions.JSONDecodeError as je:
@@ -287,10 +300,6 @@ def fetch_api_data(url: str) -> Optional[dict]:
 # ======================================
 
 def sync_financial_data() -> bool:
-    """
-    Ana senkronizasyon fonksiyonu
-    V4 -> V3 fallback desteği
-    """
     start_time = time.time()
     
     try:
@@ -315,36 +324,38 @@ def sync_financial_data() -> bool:
         metrics.record_success(version, elapsed)
         
         update_date = data.get("Update_Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        logger.info(f"✅ {version} API başarılı - {update_date}")
         
         # 3. Verileri işle
         currencies = process_currencies(data)
         golds = process_golds(data)
         silvers = process_silvers(data)
         
-        # 4. Veri kontrolü (esnek)
+        # 4. GÜNÜN ÖZETİNİ HESAPLA 🔥
+        daily_summary = calculate_daily_summary(currencies)
+
+        # 5. Veri kontrolü
         if not currencies:
             logger.error("❌ Hiç döviz verisi yok!")
             metrics.record_failure()
             return False
         
-        # Gümüş olmasa bile devam et (bazen V3'te olmayabiliyor)
-        if not golds:
-            logger.warning("⚠️ Altın verisi yok")
-        if not silvers:
-            logger.warning("⚠️ Gümüş verisi yok")
-        
-        # 5. Redis'e kaydet
+        # 6. Redis'e kaydet (TTL ARTTIRILDI -> 3600 Saniye)
         base_data = {
             "success": True,
             "update_date": update_date,
             "api_version": version
         }
         
-        set_cache('kurabak:currencies:all', {**base_data, "count": len(currencies), "data": currencies}, Config.CACHE_TTL)
-        set_cache('kurabak:golds:all', {**base_data, "count": len(golds), "data": golds}, Config.CACHE_TTL)
-        set_cache('kurabak:silvers:all', {**base_data, "count": len(silvers), "data": silvers}, Config.CACHE_TTL)
+        # Tüm verileri 1 saatlik cache süresiyle kaydet
+        set_cache('kurabak:currencies:all', {**base_data, "count": len(currencies), "data": currencies}, SAFE_CACHE_TTL)
+        set_cache('kurabak:golds:all', {**base_data, "count": len(golds), "data": golds}, SAFE_CACHE_TTL)
+        set_cache('kurabak:silvers:all', {**base_data, "count": len(silvers), "data": silvers}, SAFE_CACHE_TTL)
         
+        # Özet verisini de kaydet
+        if daily_summary:
+            set_cache('kurabak:summary', {**base_data, "data": daily_summary}, SAFE_CACHE_TTL)
+            logger.info("✅ Günün özeti hesaplandı ve kaydedildi.")
+
         total_time = time.time() - start_time
         logger.info(
             f"✅ Güncelleme tamamlandı ({version}) - "
@@ -358,10 +369,8 @@ def sync_financial_data() -> bool:
         metrics.record_failure()
         return False
 
-
 def get_service_metrics() -> dict:
     return metrics.get_stats()
-
 
 @atexit.register
 def cleanup():
