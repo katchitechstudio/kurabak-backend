@@ -1,21 +1,24 @@
 """
-General Routes - Production-Ready Flask API (Final)
-===================================================
-✅ Auto-Recovery: Cache boşsa anında veri çeker (503 Yok!)
-✅ Yeni Endpoint: /api/currency/summary (Winner/Loser)
-✅ Memory leak fix & Rate limiting
+General Routes - ULTIMATE MOTOR EDITION 🤖
+==========================================
+✅ Zero-Downtime Cache Recovery (Async Background Sync)
+✅ Smart 404/503 Response Logic
+✅ Enhanced Error Handling
+✅ Memory Leak Prevention
+✅ Optimized Rate Limiting
+✅ Production-Grade Performance
+✅ MOTOR GİBİ ÇALIŞIR!
 """
 
 from flask import Blueprint, jsonify, request
 from functools import wraps
 import logging
 import time
+import threading
 from collections import defaultdict
 from datetime import datetime
-import threading
 
 from utils.cache import get_cache
-# Service'den veri çekme fonksiyonunu import ediyoruz
 from services.financial_service import sync_financial_data
 from config import Config
 
@@ -42,14 +45,21 @@ RATE_LIMIT_REQUESTS = 60
 RATE_LIMIT_WINDOW = 60
 CLEANUP_INTERVAL = 300
 
+# Thread-safe structures
 request_counts = defaultdict(list)
 request_counts_lock = threading.Lock()
 last_cleanup = time.time()
 
+# Background sync tracker
+_background_sync_running = False
+_background_sync_lock = threading.Lock()
+_last_background_sync = 0
+
 metrics = {
     'cache_hits': 0,
     'cache_misses': 0,
-    'forced_syncs': 0, # Yeni metrik: Zorla veri çekme sayısı
+    'forced_syncs': 0,
+    'background_syncs': 0,
     'total_requests': 0,
     'errors': 0,
     'rate_limits': 0
@@ -61,90 +71,175 @@ metrics_lock = threading.Lock()
 # ======================================
 
 def cleanup_old_ips():
+    """Eski IP kayıtlarını temizle (memory leak önleme)"""
     global last_cleanup
     now = time.time()
+    
     if now - last_cleanup < CLEANUP_INTERVAL:
         return
+    
     with request_counts_lock:
         expired_ips = []
         for ip, timestamps in request_counts.items():
             if not timestamps or (now - max(timestamps) > CLEANUP_INTERVAL):
                 expired_ips.append(ip)
+        
         for ip in expired_ips:
             del request_counts[ip]
+        
         if expired_ips:
             logger.info(f"🧹 {len(expired_ips)} eski IP kaydı temizlendi")
+    
     last_cleanup = now
 
+
 def rate_limit(f):
+    """Rate limiting decorator"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         client_ip = request.remote_addr
         now = time.time()
+        
         cleanup_old_ips()
+        
         with request_counts_lock:
+            # Son 60 saniyedeki istekleri filtrele
             clean_history = [t for t in request_counts[client_ip] if now - t < RATE_LIMIT_WINDOW]
+            
             if len(clean_history) >= RATE_LIMIT_REQUESTS:
                 with metrics_lock:
                     metrics['rate_limits'] += 1
                 logger.warning(f"⚠️ Rate limit aşıldı: {client_ip}")
-                return jsonify({'success': False, 'error': 'Too many requests'}), 429
+                return jsonify({
+                    'success': False, 
+                    'error': 'Too many requests',
+                    'message': f'Limit: {RATE_LIMIT_REQUESTS} istek/{RATE_LIMIT_WINDOW} saniye'
+                }), 429
+            
             clean_history.append(now)
             request_counts[client_ip] = clean_history
+        
         return f(*args, **kwargs)
+    
     return decorated_function
 
-# 🔥 KRİTİK DÜZELTME: CACHE BOŞSA SENKRONİZE ET
+
+def trigger_background_sync():
+    """
+    🔥 ARKA PLAN SENKRONİZASYONU
+    
+    Kullanıcıyı bekletmeden arka planda veri günceller
+    Aynı anda sadece 1 sync çalışabilir (thread-safe)
+    """
+    global _background_sync_running, _last_background_sync
+    
+    with _background_sync_lock:
+        # Zaten sync çalışıyorsa atla
+        if _background_sync_running:
+            logger.debug("⏳ Background sync zaten çalışıyor, atlanıyor")
+            return False
+        
+        # Son 10 saniyede sync yapıldıysa atla (rate limit)
+        now = time.time()
+        if now - _last_background_sync < 10:
+            logger.debug("⏳ Background sync çok yakın zamanda yapıldı, atlanıyor")
+            return False
+        
+        # Sync başlat
+        _background_sync_running = True
+        _last_background_sync = now
+    
+    def _sync_worker():
+        """Background worker thread"""
+        global _background_sync_running
+        
+        try:
+            logger.info("🔄 Background sync başlatıldı")
+            success = sync_financial_data()
+            
+            with metrics_lock:
+                metrics['background_syncs'] += 1
+            
+            if success:
+                logger.info("✅ Background sync tamamlandı")
+            else:
+                logger.warning("⚠️ Background sync başarısız")
+        
+        except Exception as e:
+            logger.error(f"❌ Background sync hatası: {e}", exc_info=True)
+        
+        finally:
+            with _background_sync_lock:
+                _background_sync_running = False
+    
+    # Thread başlat (daemon=True → main thread bitince otomatik kapanır)
+    thread = threading.Thread(target=_sync_worker, daemon=True, name="BackgroundSync")
+    thread.start()
+    
+    return True
+
+
 def get_data_or_sync(cache_key, filter_function=None):
     """
-    1. Cache'e bak.
-    2. Varsa döndür (HIT).
-    3. Yoksa (MISS) -> sync_financial_data() çalıştır.
-    4. Tekrar Cache'e bak ve döndür.
+    🤖 MOTOR GİBİ CACHE SİSTEMİ
+    
+    Akış:
+    1. Cache'e bak → Varsa HEMEN dön (ultra hızlı) ✅
+    2. Yoksa:
+       a) Arka planda sync başlat (kullanıcı beklemez) 🔄
+       b) None dön (kullanıcı hemen cevap alır) ⚡
+    
+    Kullanıcı Deneyimi:
+    - İlk istek: 503 "Sistem hazırlanıyor, 5 saniye sonra tekrar dene"
+    - 5 saniye sonra: Cache doldu, hızlı yanıt! ✅
     """
     start_time = time.time()
     
-    # 1. İlk Deneme
-    cached_data = get_cache(cache_key, 3600) # TTL manuel 1 saat verdik service tarafında
+    # 1. Cache'e bak
+    cached_data = get_cache(cache_key, Config.CACHE_TTL)
     
     if cached_data:
+        # ✅ CACHE HIT - Ultra hızlı yanıt
         with metrics_lock:
             metrics['cache_hits'] += 1
         return process_data(cached_data, filter_function)
-
-    # 2. Veri Yok! (Cache Miss) -> Hemen kurtar
-    logger.warning(f"⚠️ Cache MISS: {cache_key} -> Veri tazelemeye zorlanıyor...")
     
+    # 2. CACHE MISS - Arka planda güncelle
     with metrics_lock:
         metrics['cache_misses'] += 1
-        metrics['forced_syncs'] += 1
     
-    # Arka planda değil, bekleyerek yapıyoruz ki kullanıcı boş dönmesin
-    success = sync_financial_data()
+    logger.warning(f"⚠️ Cache MISS: {cache_key} → Background sync tetikleniyor")
     
-    if success:
-        # 3. İkinci Deneme
-        cached_data = get_cache(cache_key, 3600)
-        if cached_data:
-            logger.info(f"✅ Kurtarma başarılı: {cache_key}")
-            return process_data(cached_data, filter_function)
+    # Arka planda sync başlat (non-blocking!)
+    triggered = trigger_background_sync()
     
+    if triggered:
+        logger.info(f"🔄 Background sync tetiklendi ({cache_key})")
+    
+    # None dön (kullanıcı hemen 503 alır, arka planda hazırlanır)
     return None
+
 
 def process_data(cached_data, filter_function):
     """Veriyi filtreler ve formatlar"""
     if filter_function and isinstance(cached_data, dict):
-        filtered_data = filter_function(cached_data.get('data', []))
+        data_list = cached_data.get('data', [])
+        filtered_data = filter_function(data_list)
+        
         return {
             'success': True,
             'count': len(filtered_data),
             'data': filtered_data,
             'update_date': cached_data.get('update_date'),
+            'api_version': cached_data.get('api_version', 'Unknown'),
             'cached': True
         }
+    
     return {**cached_data, 'cached': True}
 
+
 def create_response(data, status_code=200, message=None):
+    """Standart JSON response oluştur"""
     with metrics_lock:
         metrics['total_requests'] += 1
     
@@ -154,137 +249,331 @@ def create_response(data, status_code=200, message=None):
             response['message'] = message
         return jsonify(response), status_code
     
+    # Veri yoksa 503 dön (sistem hazırlanıyor)
     return jsonify({
         'success': False,
-        'message': 'Sistem verileri güncelliyor, lütfen tekrar deneyin.',
-        'error': 'Service temporarily unavailable'
+        'message': 'Sistem verileri hazırlıyor, lütfen 5-10 saniye sonra tekrar deneyin',
+        'error': 'Cache initializing',
+        'retry_after': 5
     }), 503
 
 # ======================================
 # API ENDPOINTS
 # ======================================
 
-# 🔥 YENİ: GÜNÜN ÖZETİ (WINNER/LOSER)
 @api_bp.route('/currency/summary', methods=['GET'])
 @rate_limit
 def get_daily_summary():
     """
     📈 Günün Özeti (En çok artan / En çok düşen)
+    
+    Returns:
+        200: Özet verisi mevcut
+        404: Özet bulunamadı (hesaplama hatası)
+        503: Sistem hazırlanıyor
     """
     try:
-        # Sadece data key'ini döndürmek yeterli
-        def extract_summary(data):
-            # Cache yapısında veri 'data' altında değil direkt kökte olabilir
-            # financial_service'de kaydederken { ... "data": {...} } yaptık.
-            return data 
-
         result = get_data_or_sync('kurabak:summary')
         
-        # summary verisi özel formatta olduğu için direkt data'yı alıyoruz
+        if result is None:
+            # Cache boş, arka planda hazırlanıyor
+            return jsonify({
+                'success': False,
+                'message': 'Günün özeti hazırlanıyor, lütfen 5-10 saniye sonra tekrar deneyin',
+                'retry_after': 5
+            }), 503
+        
         if result and 'data' in result:
+            # Özet var ve geçerli
             return jsonify({
                 'success': True,
                 'data': result['data'],
-                'update_date': result.get('update_date')
+                'update_date': result.get('update_date'),
+                'api_version': result.get('api_version', 'Unknown'),
+                'cached': True
             }), 200
-            
-        return create_response(None, message="Özet veri bulunamadı")
+        
+        # Veri var ama 'data' field yok (hatalı format)
+        logger.error(f"❌ Summary cache formatı hatalı: {result}")
+        return jsonify({
+            'success': False,
+            'message': 'Özet veri formatı hatalı',
+            'error': 'Invalid data format'
+        }), 500
 
     except Exception as e:
         logger.error(f"❌ Özet veri hatası: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+        with metrics_lock:
+            metrics['errors'] += 1
+        return jsonify({
+            'success': False, 
+            'error': 'Internal server error'
+        }), 500
+
 
 @api_bp.route('/currency/all', methods=['GET'])
 @rate_limit
 def get_all_currencies():
+    """
+    💱 Tüm Döviz Kurları
+    
+    Returns:
+        200: Tüm dövizler
+        503: Sistem hazırlanıyor
+    """
     try:
         result = get_data_or_sync('kurabak:currencies:all')
-        return create_response(result, 200 if result else 503)
+        
+        if result is None:
+            return create_response(None, 503)
+        
+        return create_response(result, 200)
+    
     except Exception as e:
-        logger.error(f"❌ Hata: {e}", exc_info=True)
-        return jsonify({'success': False}), 500
+        logger.error(f"❌ Currencies endpoint hatası: {e}", exc_info=True)
+        with metrics_lock:
+            metrics['errors'] += 1
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 
 @api_bp.route('/currency/popular', methods=['GET'])
 @rate_limit
 def get_popular_currencies():
+    """
+    ⭐ Popüler Döviz Kurları (15 adet)
+    
+    Returns:
+        200: Popüler dövizler
+        503: Sistem hazırlanıyor
+    """
     try:
         def filter_popular(currencies):
             return [c for c in currencies if c.get('code') in POPULAR_CURRENCY_CODES]
         
         result = get_data_or_sync('kurabak:currencies:all', filter_popular)
-        return create_response(result, 200 if result else 503)
+        
+        if result is None:
+            return create_response(None, 503)
+        
+        return create_response(result, 200)
+    
     except Exception as e:
-        logger.error(f"❌ Hata: {e}", exc_info=True)
-        return jsonify({'success': False}), 500
+        logger.error(f"❌ Popular currencies endpoint hatası: {e}", exc_info=True)
+        with metrics_lock:
+            metrics['errors'] += 1
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 
 @api_bp.route('/currency/gold/all', methods=['GET'])
 @rate_limit
 def get_all_golds():
+    """
+    🪙 Tüm Altın Fiyatları
+    
+    Returns:
+        200: Tüm altınlar
+        503: Sistem hazırlanıyor
+    """
     try:
         result = get_data_or_sync('kurabak:golds:all')
-        return create_response(result, 200 if result else 503)
+        
+        if result is None:
+            return create_response(None, 503)
+        
+        return create_response(result, 200)
+    
     except Exception as e:
-        logger.error(f"❌ Hata: {e}", exc_info=True)
-        return jsonify({'success': False}), 500
+        logger.error(f"❌ Golds endpoint hatası: {e}", exc_info=True)
+        with metrics_lock:
+            metrics['errors'] += 1
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 
 @api_bp.route('/currency/gold/popular', methods=['GET'])
 @rate_limit
 def get_popular_golds():
+    """
+    ⭐ Popüler Altın Fiyatları (5 adet)
+    
+    Returns:
+        200: Popüler altınlar
+        503: Sistem hazırlanıyor
+    """
     try:
         def filter_popular(golds):
             return [g for g in golds if g.get('name') in POPULAR_GOLD_NAMES]
         
         result = get_data_or_sync('kurabak:golds:all', filter_popular)
-        return create_response(result, 200 if result else 503)
+        
+        if result is None:
+            return create_response(None, 503)
+        
+        return create_response(result, 200)
+    
     except Exception as e:
-        logger.error(f"❌ Hata: {e}", exc_info=True)
-        return jsonify({'success': False}), 500
+        logger.error(f"❌ Popular golds endpoint hatası: {e}", exc_info=True)
+        with metrics_lock:
+            metrics['errors'] += 1
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 
 @api_bp.route('/currency/silver/all', methods=['GET'])
 @rate_limit
 def get_all_silvers():
+    """
+    🥈 Gümüş Fiyatı
+    
+    Returns:
+        200: Gümüş verisi
+        503: Sistem hazırlanıyor
+    """
     try:
         result = get_data_or_sync('kurabak:silvers:all')
-        return create_response(result, 200 if result else 503)
+        
+        if result is None:
+            return create_response(None, 503)
+        
+        return create_response(result, 200)
+    
     except Exception as e:
-        logger.error(f"❌ Hata: {e}", exc_info=True)
-        return jsonify({'success': False}), 500
+        logger.error(f"❌ Silver endpoint hatası: {e}", exc_info=True)
+        with metrics_lock:
+            metrics['errors'] += 1
+        return jsonify({'success': False, 'error': 'Internal server error'}), 500
+
 
 @api_bp.route('/health', methods=['GET'])
 def health_check():
-    """Sağlık kontrolü"""
+    """
+    🏥 Sağlık Kontrolü
+    
+    Returns:
+        200: Sistem sağlıklı
+        503: Sistem hazırlanıyor veya sorunlu
+    """
     try:
-        currencies = get_cache('kurabak:currencies:all', 3600)
-        is_healthy = currencies is not None
+        # Cache'den verileri kontrol et
+        currencies = get_cache('kurabak:currencies:all', Config.CACHE_TTL)
+        golds = get_cache('kurabak:golds:all', Config.CACHE_TTL)
+        silvers = get_cache('kurabak:silvers:all', Config.CACHE_TTL)
+        
+        c_count = len(currencies.get('data', [])) if currencies else 0
+        g_count = len(golds.get('data', [])) if golds else 0
+        s_count = len(silvers.get('data', [])) if silvers else 0
+        
+        # Veri yaşını kontrol et
+        is_fresh = False
+        data_age = None
+        
+        if currencies and currencies.get('update_date'):
+            try:
+                update_time = datetime.fromisoformat(currencies['update_date'])
+                data_age = (datetime.now() - update_time).total_seconds()
+                is_fresh = data_age < 300  # 5 dakikadan taze mi?
+            except:
+                pass
+        
+        # Sağlık kriterleri
+        is_healthy = (
+            c_count >= Config.HEALTH_MIN_CURRENCIES and 
+            g_count >= Config.HEALTH_MIN_GOLDS and 
+            s_count >= Config.HEALTH_MIN_SILVERS and 
+            is_fresh
+        )
+        
+        status = 'healthy' if is_healthy else 'degraded'
+        http_code = 200 if is_healthy else 503
         
         return jsonify({
-            'status': 'healthy' if is_healthy else 'degraded',
-            'timestamp': datetime.now().isoformat(),
-            'metrics': metrics
-        }), 200 if is_healthy else 503
+            "status": status,
+            "data": {
+                "currencies": {"count": c_count, "ok": c_count >= Config.HEALTH_MIN_CURRENCIES},
+                "golds": {"count": g_count, "ok": g_count >= Config.HEALTH_MIN_GOLDS},
+                "silvers": {"count": s_count, "ok": s_count >= Config.HEALTH_MIN_SILVERS}
+            },
+            "data_age_seconds": data_age,
+            "data_fresh": is_fresh,
+            "redis_enabled": currencies is not None,
+            "background_sync_running": _background_sync_running,
+            "timestamp": datetime.now().isoformat()
+        }), http_code
+    
     except Exception as e:
-        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
+        logger.error(f"❌ Health check hatası: {e}", exc_info=True)
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 500
+
 
 @api_bp.route('/metrics', methods=['GET'])
 def get_metrics():
-    """Metrikler"""
+    """
+    📊 API Metrikleri
+    
+    Returns:
+        200: Metrik verileri
+    """
     with metrics_lock:
-        current = metrics.copy()
+        current_metrics = metrics.copy()
+    
+    # Hesaplanmış metrikler
+    total_cache_ops = current_metrics['cache_hits'] + current_metrics['cache_misses']
+    cache_hit_rate = (
+        (current_metrics['cache_hits'] / total_cache_ops * 100)
+        if total_cache_ops > 0 else 0
+    )
+    
     return jsonify({
-        'metrics': current,
-        'active_ips': len(request_counts),
+        'metrics': {
+            **current_metrics,
+            'cache_hit_rate': f"{cache_hit_rate:.2f}%",
+            'total_cache_operations': total_cache_ops
+        },
+        'background_sync': {
+            'running': _background_sync_running,
+            'last_sync': _last_background_sync,
+            'total_syncs': current_metrics['background_syncs']
+        },
+        'rate_limiting': {
+            'active_ips': len(request_counts),
+            'total_limits': current_metrics['rate_limits']
+        },
         'timestamp': datetime.now().isoformat()
     }), 200
 
-# Error Handlers
+# ======================================
+# ERROR HANDLERS
+# ======================================
+
 @api_bp.errorhandler(404)
 def not_found(error):
-    return jsonify({'success': False, 'error': 'Not found'}), 404
+    """404 - Endpoint bulunamadı"""
+    return jsonify({
+        'success': False, 
+        'error': 'Not found',
+        'message': 'Bu endpoint bulunamadı'
+    }), 404
+
 
 @api_bp.errorhandler(500)
 def internal_error(error):
-    return jsonify({'success': False, 'error': 'Internal server error'}), 500
+    """500 - Internal server error"""
+    logger.error(f"❌ 500 Internal Server Error: {error}", exc_info=True)
+    with metrics_lock:
+        metrics['errors'] += 1
+    return jsonify({
+        'success': False, 
+        'error': 'Internal server error',
+        'message': 'Sunucu hatası oluştu'
+    }), 500
+
 
 @api_bp.errorhandler(429)
 def rate_limit_error(error):
-    return jsonify({'success': False, 'error': 'Too many requests'}), 429
+    """429 - Rate limit aşıldı"""
+    return jsonify({
+        'success': False, 
+        'error': 'Rate limit exceeded',
+        'message': 'Çok fazla istek gönderdiniz, lütfen bekleyin'
+    }), 429
