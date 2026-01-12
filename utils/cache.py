@@ -23,7 +23,7 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 # ======================================
-# REDIS CLIENT (LAZY INITIALIZATION)
+# REDIS CLIENT
 # ======================================
 
 class RedisClient:
@@ -117,7 +117,12 @@ class RedisClient:
             self.metrics['connection_attempts'] += 1
             self.metrics['last_connection_attempt'] = datetime.now().isoformat()
             
-            logger.info("🔄 Redis'e yeniden bağlanılıyor...")
+            # Sadece ilk denemede değil, her bağlantı kopmasında log bas
+            # Ama spam yapmamak için debug seviyesinde tutabiliriz, 
+            # şimdilik görmemiz için info kalsın.
+            if self.metrics['connection_attempts'] == 1:
+                 logger.info("🔄 Redis'e bağlanılıyor...")
+            
             self._client = self._create_client()
             
             if self._client:
@@ -196,8 +201,17 @@ class RedisClient:
             self.metrics['redis_errors'] += 1
             return []
 
+# ======================================
+# GLOBAL INSTANCE & INIT
+# ======================================
+
 # Global Redis client
 redis_client = RedisClient()
+
+# 🔥 KRİTİK DÜZELTME: İlk bağlantıyı burada zorluyoruz!
+# Böylece app.py başladığında REDIS_ENABLED doğru değeri alıyor.
+redis_client.get_client()
+
 REDIS_ENABLED = redis_client.is_enabled()
 
 # ======================================
@@ -301,18 +315,15 @@ ram_cache = RAMCache()
 def get_cache(key: str, ttl: Optional[int] = None) -> Optional[Any]:
     """
     Cache'den veri al (Redis → RAM fallback)
-    
-    Args:
-        key: Cache key
-        ttl: TTL süresi (saniye), None ise Config.CACHE_TTL kullanılır
-    
-    Returns:
-        Cached data veya None
     """
     # TTL default değeri
     if ttl is None:
-        from config import Config
-        ttl = Config.CACHE_TTL
+        # Circular import önlemek için burada import ediyoruz
+        try:
+            from config import Config
+            ttl = Config.CACHE_TTL
+        except ImportError:
+            ttl = 300
     
     # 1. Redis'e bak
     if redis_client.is_enabled():
@@ -332,24 +343,25 @@ def get_cache(key: str, ttl: Optional[int] = None) -> Optional[Any]:
 def set_cache(key: str, data: Any, ttl: Optional[int] = None) -> bool:
     """
     Cache'e veri yaz (Redis + RAM fallback)
-    
-    Args:
-        key: Cache key
-        data: Yazılacak veri
-        ttl: TTL süresi (saniye), None ise Config.CACHE_TTL kullanılır
-    
-    Returns:
-        bool: En az bir cache'e yazıldıysa True
     """
     # TTL default değeri
     if ttl is None:
-        from config import Config
-        ttl = Config.CACHE_TTL
+        try:
+            from config import Config
+            ttl = Config.CACHE_TTL
+        except ImportError:
+            ttl = 300
     
     success = False
     
     # JSON serialize
     try:
+        # DateTime serialization için helper
+        def _json_serializer(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return str(obj)
+
         json_data = json.dumps(data, default=_json_serializer)
     except Exception as e:
         logger.error(f"❌ JSON serialize hatası: {e}")
@@ -425,24 +437,11 @@ def get_cache_stats() -> dict:
         }
     }
 
-
-def _json_serializer(obj):
-    """
-    Custom JSON serializer for datetime and other types
-    """
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    
-    # Fallback: str() kullan
-    return str(obj)
-
 # ======================================
-# STARTUP
+# STARTUP CHECK
 # ======================================
 
-# Redis'i başlangıçta başlat
-REDIS_ENABLED = redis_client.is_enabled()
-
+# Bu kısım sadece log için
 if REDIS_ENABLED:
     logger.info("✅ Cache sistemi hazır (Redis aktif)")
 else:
