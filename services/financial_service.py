@@ -1,13 +1,13 @@
 """
-Financial Service - ULTIMATE EDITION (V4/V3 Hybrid Bulletproof)
+Financial Service - ULTIMATE EDITION (V4/V3 Hibrit & Kurşun Geçirmez)
 ================================================================
-✅ V4/V3 API Full Compatibility (Format Karmaşası %100 Çözüldü)
-✅ Type-Safe Float Parser (String/Float/Int/Null/Empty - HEPSİ)
-✅ Smart Key Mapping (snake_case, kebab-case, UPPER, lower)
-✅ Cache TTL 1 Saat + Auto-Recovery
-✅ Thread-Safe Session Management
-✅ Production-Grade Error Handling
-✅ Günün Özeti (Winner/Loser) Hesaplama
+✅ V4/V3 API Tam Uyumluluk (Format Karmaşası %100 Çözüldü)
+✅ Güvenli Float Dönüştürücü (String/Float/Int/Null/Empty - HEPSİNİ TANIR)
+✅ Akıllı Key Eşleştirme (Büyük/Küçük harf, tire, alt çizgi fark etmez)
+✅ Cache TTL 1 Saat + Otomatik Kurtarma
+✅ Thread-Safe Session Yönetimi
+✅ Profesyonel Hata Yönetimi
+✅ Günün Özeti (Kazanan/Kaybeden) Hesaplama
 ✅ MAKİNE GİBİ ÇALIŞIR 🤖
 """
 
@@ -27,7 +27,7 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 # ======================================
-# CONFIG
+# AYARLAR (CONFIG)
 # ======================================
 
 API_TIMEOUT = (10, 20)
@@ -43,15 +43,15 @@ HEADERS = {
     "Connection": "keep-alive"
 }
 
-# Döviz kodları
+# Takip edilecek döviz kodları
 POPULAR_CURRENCIES = [
     "USD", "EUR", "GBP", "JPY", "CHF", "CNY", 
     "CAD", "AUD", "DKK", "SEK", "NOK", "SAR", 
     "QAR", "KWD", "AED"
 ]
 
-# ALTIN KEY MAPPİNGLERİ (V4 + V3 Hibrit)
-# Her altın için olası tüm key varyasyonları
+# ALTIN EŞLEŞTİRMELERİ (V4 + V3 Hibrit)
+# Her altın türü için API'den gelebilecek tüm olası isimler
 GOLD_MAPPINGS = {
     "GRA": ["GRA", "gram-altin", "gram_altin", "GRAM", "GRAMALTIN"],
     "CEYREKALTIN": ["CEYREKALTIN", "ceyrek-altin", "ceyrek_altin", "CEYREK"],
@@ -60,6 +60,7 @@ GOLD_MAPPINGS = {
     "CUMHURIYETALTINI": ["CUMHURIYETALTINI", "cumhuriyet-altini", "cumhuriyet_altini", "CUMHURIYET"]
 }
 
+# Uygulamada görünecek isimler
 GOLD_NAMES = {
     "GRA": "Gram Altın",
     "CEYREKALTIN": "Çeyrek Altın",
@@ -68,11 +69,11 @@ GOLD_NAMES = {
     "CUMHURIYETALTINI": "Cumhuriyet Altını"
 }
 
-# GÜMÜŞ KEY MAPPİNGLERİ
+# GÜMÜŞ KEYLERİ
 SILVER_KEYS = ["GUMUS", "gumus", "silver", "SILVER", "gümüş"]
 
 # ======================================
-# METRICS
+# METRİKLER (İstatistik Tutma)
 # ======================================
 
 class ServiceMetrics:
@@ -128,7 +129,7 @@ class ServiceMetrics:
 metrics = ServiceMetrics()
 
 # ======================================
-# SESSION MANAGER
+# BAĞLANTI YÖNETİCİSİ (Session Manager)
 # ======================================
 
 class SessionManager:
@@ -152,7 +153,7 @@ class SessionManager:
         )
         adapter = HTTPAdapter(max_retries=retry, pool_maxsize=5)
         session.mount("https://", adapter)
-        logger.info("✅ HTTP Session created")
+        logger.info("✅ HTTP Session oluşturuldu")
         return session
 
     def close(self):
@@ -165,46 +166,29 @@ class SessionManager:
 session_manager = SessionManager()
 
 # ======================================
-# ULTIMATE FLOAT PARSER (BULLETPROOF)
+# 🔥 AKILLI FLOAT DÖNÜŞTÜRÜCÜ (EN ÖNEMLİ KISIM)
 # ======================================
 
 def get_safe_float(value: Any) -> float:
     """
-    🤖 MAKİNE GİBİ FLOAT PARSER
+    Bu fonksiyon her türlü bozuk sayı formatını düzeltir.
     
-    Desteklenen Formatlar:
-    ✅ Float: 0.77, -0.93, 1234.56
-    ✅ Int: 42, -100
-    ✅ String (V4): "0.77", "-0.93"
-    ✅ String (V3): "%0,77", "%-0,93"
-    ✅ String (Karışık): "1.250,50", "1,250.50"
-    ✅ Null/None: → 0.0
-    ✅ Empty: "", "—", "-", " " → 0.0
-    ✅ Hatalı: "abc", "N/A" → 0.0
-    
-    Returns:
-        float: Parse edilmiş sayı, hata durumunda 0.0
+    Örnekler:
+    - "140,4318" -> 140.4318 (Virgülü nokta yapar)
+    - "1.250,50" -> 1250.50  (Noktayı siler, virgülü nokta yapar)
+    - "1,250.50" -> 1250.50  (Virgülü siler)
+    - "%0,77"    -> 0.77     (Sembolleri temizler)
     """
-    # 1. NULL CHECK
+    # 1. NULL veya BOŞ KONTROLÜ
     if value is None:
         return 0.0
     
-    # 2. ZATEN SAYIYSA (V4 API)
+    # 2. ZATEN SAYI İSE (V4 API bazen direkt float dönüyor)
     if isinstance(value, (int, float)):
-        try:
-            result = float(value)
-            # NaN/Inf kontrolü
-            if not (-1_000_000 < result < 1_000_000):
-                metrics.record_parse_error()
-                return 0.0
-            return result
-        except:
-            metrics.record_parse_error()
-            return 0.0
+        return float(value)
     
-    # 3. STRİNG İSE (V3 API veya Karışık)
+    # 3. STRİNG İSE (Temizleme başlıyor)
     try:
-        # String'e çevir ve normalize et
         v = str(value).strip()
         
         # Boş string kontrolü
@@ -215,85 +199,70 @@ def get_safe_float(value: Any) -> float:
         v = v.replace("%", "").replace("$", "").replace("₺", "")
         v = v.replace("TL", "").replace(" ", "").strip()
         
-        # Tekrar boş mu diye kontrol
         if not v:
             return 0.0
         
-        # 🔥 AKILLI ONDALIK AYIRICI TESPİTİ
-        # Durum 1: Hem nokta hem virgül var → "1.250,50" veya "1,250.50"
+        # 🔥 AKILLI FORMAT TESPİTİ
+        
+        # Durum A: Hem nokta hem virgül var (Örn: "1.234,56" veya "1,234.56")
         if '.' in v and ',' in v:
             metrics.record_format_fix()
             
-            # Son hangi karakter gelirse o ondalık ayırıcıdır
+            # Hangi işaret daha sondaysa o ondalıktır
             dot_pos = v.rfind('.')
             comma_pos = v.rfind(',')
             
             if comma_pos > dot_pos:
-                # Virgül sonra gelmiş: "1.250,50" → Avrupa formatı
+                # Virgül sonda: "1.250,50" (Türk/Avrupa standardı)
+                # Noktaları (binlik) sil, Virgülü (ondalık) nokta yap
                 v = v.replace(".", "").replace(",", ".")
             else:
-                # Nokta sonra gelmiş: "1,250.50" → ABD formatı
+                # Nokta sonda: "1,250.50" (Amerikan standardı)
+                # Virgülleri (binlik) sil
                 v = v.replace(",", "")
         
-        # Durum 2: Sadece virgül var → "0,77"
+        # Durum B: Sadece virgül var (Örn: "140,43" veya "1,250")
         elif ',' in v:
-            # Virgülden sonra en fazla 2 hane varsa ondalık ayırıcıdır
-            parts = v.split(',')
-            if len(parts) == 2 and len(parts[1]) <= 2:
-                # Ondalık ayırıcı: "0,77" → "0.77"
-                v = v.replace(",", ".")
-            else:
-                # Binlik ayırıcı: "1,250" → "1250"
-                v = v.replace(",", "")
+            # Virgülden sonra 3 hane veya daha fazlaysa ve değer küçükse?
+            # Truncgil API genelde virgülü ondalık olarak kullanıyor (Örn: 140,4318)
+            # Bu yüzden virgülü her zaman nokta yapıyoruz.
+            v = v.replace(",", ".")
         
-        # Durum 3: Sadece nokta var → "0.77" veya "1.250"
-        elif '.' in v:
-            parts = v.split('.')
-            if len(parts) == 2 and len(parts[1]) > 2:
-                # Binlik ayırıcı: "1.250" → "1250"
-                v = v.replace(".", "")
-            # Yoksa ondalık ayırıcı, olduğu gibi bırak
+        # Durum C: Sadece nokta var (Örn: "1.25") -> Dokunma, zaten Python formatı.
         
-        # Float'a çevir
+        # Son Dönüşüm
         result = float(v)
         
-        # Mantık kontrolü (çok büyük/küçük sayılar mantıksız)
-        if not (-1_000_000 < result < 1_000_000):
-            logger.warning(f"⚠️ Mantıksız değer: {value} → {result}")
-            metrics.record_parse_error()
-            return 0.0
-        
+        # Çok saçma büyük sayı kontrolü (Hata önleyici)
+        if result > 1_000_000_000: # 1 Milyar üstü kur olamaz
+             logger.warning(f"⚠️ Anormal büyük değer tespit edildi: {value} -> {result}")
+             metrics.record_parse_error()
+             return 0.0
+             
         return result
     
     except Exception as e:
-        # Parse hatası
-        logger.debug(f"⚠️ Parse hatası: {value} ({type(value).__name__}) → {str(e)}")
+        logger.debug(f"⚠️ Sayı çevirme hatası: {value} -> {str(e)}")
         metrics.record_parse_error()
         return 0.0
 
 # ======================================
-# SMART KEY FINDER
+# AKILLI KEY BULUCU
 # ======================================
 
 def find_item(data: dict, keys: List[str]) -> Optional[dict]:
-    """
-    Verilen key listesinden ilk bulduğunu döndür
-    Case-insensitive + strip
-    """
+    """Verilen anahtar kelimelerden herhangi birini JSON içinde bulur"""
     for key in keys:
-        # Tam eşleşme
         if key in data:
             return data[key]
-        
-        # Case-insensitive arama
+        # Büyük/küçük harf duyarsız arama
         for data_key in data.keys():
             if data_key.lower() == key.lower():
                 return data[data_key]
-    
     return None
 
 # ======================================
-# DATA PROCESSORS
+# VERİ İŞLEYİCİLER (PROCESSORS)
 # ======================================
 
 def process_currencies(data: dict) -> List[dict]:
@@ -301,28 +270,32 @@ def process_currencies(data: dict) -> List[dict]:
     result = []
     
     for code in POPULAR_CURRENCIES:
-        # Key varyasyonları
+        # Kodun kendisi veya tam adı ile ara
         item = find_item(data, [code, code.upper(), code.lower()])
         if not item:
             continue
         
-        # Type kontrolü (bazı API'ler Currency olarak işaretler)
+        # "Type" alanı varsa ve "Currency" değilse atla (Bazen Altın karışıyor)
         item_type = item.get("Type", "").lower()
-        if item_type and item_type != "currency":
-            continue
+        if item_type and "currency" not in item_type and "döviz" not in item_type:
+            # Bazı API versiyonlarında Type alanı olmayabilir, o yüzden katı değiliz
+            pass
 
-        # Fiyat al
-        selling = get_safe_float(item.get("Selling"))
-        if selling <= 0:
+        # Fiyatı al (Selling veya Buying)
+        price = get_safe_float(item.get("Selling"))
+        if price <= 0:
+            price = get_safe_float(item.get("Buying")) # Satış yoksa Alış fiyatını dene
+            
+        if price <= 0:
             continue
         
-        # Değişim al
+        # Değişim oranını al
         change = get_safe_float(item.get("Change"))
         
         result.append({
             "code": code,
             "name": item.get("Name", code),
-            "rate": round(selling, 4) if selling < 10 else round(selling, 2),
+            "rate": round(price, 4), # Kuruş hassasiyeti
             "change_percent": round(change, 2)
         })
     
@@ -337,17 +310,15 @@ def process_golds(data: dict) -> List[dict]:
         if not item:
             continue
 
-        # Fiyat al
-        selling = get_safe_float(item.get("Selling"))
-        if selling <= 0:
+        price = get_safe_float(item.get("Selling"))
+        if price <= 0:
             continue
         
-        # Değişim al (kritik!)
         change = get_safe_float(item.get("Change"))
         
         result.append({
             "name": GOLD_NAMES[main_code],
-            "rate": round(selling, 2),
+            "rate": round(price, 2),
             "change_percent": round(change, 2)
         })
     
@@ -359,29 +330,28 @@ def process_silvers(data: dict) -> List[dict]:
     if not item:
         return []
 
-    # Fiyat al
-    selling = get_safe_float(item.get("Selling"))
-    if selling <= 0:
+    price = get_safe_float(item.get("Selling"))
+    if price <= 0:
         return []
     
-    # Değişim al
     change = get_safe_float(item.get("Change"))
     
     return [{
         "name": "Gümüş",
-        "rate": round(selling, 4),
+        "rate": round(price, 4),
         "change_percent": round(change, 2)
     }]
 
 def calculate_daily_summary(currencies: List[dict]) -> dict:
-    """En çok artan ve düşen dövizi bulur"""
+    """En çok kazandıran ve kaybettireni bulur"""
     if not currencies or len(currencies) < 2:
         return {}
 
     try:
+        # Değişim yüzdesine göre sırala
         sorted_currencies = sorted(currencies, key=lambda x: x['change_percent'])
-        loser = sorted_currencies[0]
-        winner = sorted_currencies[-1]
+        loser = sorted_currencies[0]  # En düşük (negatif)
+        winner = sorted_currencies[-1] # En yüksek (pozitif)
 
         return {
             "winner": {
@@ -398,85 +368,79 @@ def calculate_daily_summary(currencies: List[dict]) -> dict:
             }
         }
     except Exception as e:
-        logger.error(f"❌ Günün özeti hesaplanırken hata: {e}")
+        logger.error(f"❌ Günün özeti hatası: {e}")
         return {}
 
 # ======================================
-# API FETCH
+# API ÇEKME (FETCH)
 # ======================================
 
 def fetch_api_data(url: str) -> Optional[dict]:
-    """API'den veri çek"""
+    """Belirtilen URL'den JSON verisi çeker"""
     try:
         session = session_manager.get_session()
         resp = session.get(url, headers=HEADERS, timeout=API_TIMEOUT)
         
         if resp.status_code != 200:
-            logger.error(f"❌ HTTP {resp.status_code}: {url}")
+            logger.error(f"❌ HTTP Hatası {resp.status_code}: {url}")
             return None
         
-        try:
-            return resp.json()
-        except Exception as je:
-            logger.error(f"❌ Bozuk JSON ({url}): {str(je)[:100]}")
-            return None
+        return resp.json()
             
     except Exception as e:
-        logger.error(f"❌ API Hatası ({url}): {str(e)[:100]}")
+        logger.error(f"❌ Bağlantı Hatası ({url}): {str(e)[:100]}")
         return None
 
 # ======================================
-# MAIN SYNC FUNCTION
+# ANA SENKRONİZASYON (MAIN SYNC)
 # ======================================
 
 def sync_financial_data() -> bool:
     """
-    🤖 ANA SENKRONİZASYON FONKSİYONU
-    
-    V4 → V3 Fallback sistemi ile veri çeker
-    Her iki formatı da mükemmel şekilde parse eder
+    Bu fonksiyon belirli aralıklarla çalışır.
+    Önce V4 API'yi dener, olmazsa V3'e geçer.
+    Verileri temizler, formatlar ve Redis Cache'e kaydeder.
     """
     start_time = time.time()
     
     try:
         logger.info("🔄 Finansal veriler güncelleniyor...")
         
-        # 1. V4 dene
+        # 1. ADIM: V4 Dene
         data = fetch_api_data(API_URL_V4)
         version = "V4"
         
-        # 2. V3 fallback
+        # 2. ADIM: Olmazsa V3 Dene (Fallback)
         if not data:
-            logger.warning("⚠️ V4 başarısız, V3 deneniyor...")
+            logger.warning("⚠️ V4 yanıt vermedi, V3 deneniyor...")
             data = fetch_api_data(API_URL_V3)
             version = "V3"
         
         if not data:
-            logger.error("❌ Hem V4 hem V3 başarısız!")
+            logger.error("❌ Kritik: Hem V4 hem V3 API çalışmıyor!")
             metrics.record_failure()
             return False
         
         elapsed = time.time() - start_time
         metrics.record_success(version, elapsed)
         
-        # Tarih bilgisi
+        # Update Date bilgisini bul
         update_date = data.get("Update_Date") or data.get("update_date") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # 3. Verileri işle (HER FORMAT DESTEKLENIR)
+        # 3. ADIM: Verileri İşle (Parsing)
         currencies = process_currencies(data)
         golds = process_golds(data)
         silvers = process_silvers(data)
         
-        # 4. Günün Özetini Hesapla
+        # 4. ADIM: Özet Hesapla
         daily_summary = calculate_daily_summary(currencies)
 
-        # 5. Veri kontrolü
         if not currencies:
-            logger.error("❌ Hiç döviz verisi çekilemedi!")
+            logger.error("❌ Veri çekildi ama hiç döviz bulunamadı!")
             metrics.record_failure()
             return False
         
-        # 6. Redis'e kaydet (TTL: 3600 Saniye)
+        # 5. ADIM: Cache'e Kaydet (Redis)
         base_data = {
             "success": True,
             "update_date": update_date,
@@ -491,28 +455,26 @@ def sync_financial_data() -> bool:
             set_cache('kurabak:summary', {**base_data, "data": daily_summary}, SAFE_CACHE_TTL)
 
         total_time = time.time() - start_time
-        
         stats = metrics.get_stats()
+        
         logger.info(
-            f"✅ Güncelleme tamamlandı ({version}) - "
-            f"D:{len(currencies)} A:{len(golds)} G:{len(silvers)} - "
-            f"{total_time:.2f}s - "
-            f"Fixes:{stats['format_fixes']} Errors:{stats['parse_errors']}"
+            f"✅ Güncelleme Başarılı ({version}) - "
+            f"Döviz:{len(currencies)} Altın:{len(golds)} Gümüş:{len(silvers)} - "
+            f"Süre:{total_time:.2f}s - "
+            f"Düzeltmeler:{stats['format_fixes']} Hatalar:{stats['parse_errors']}"
         )
         
         return True
     
     except Exception as e:
-        logger.error(f"❌ Kritik hata: {type(e).__name__}: {str(e)}", exc_info=True)
+        logger.error(f"❌ Beklenmeyen Hata: {str(e)}", exc_info=True)
         metrics.record_failure()
         return False
 
 def get_service_metrics() -> dict:
-    """Servis metriklerini döndür"""
     return metrics.get_stats()
 
 @atexit.register
 def cleanup():
-    """Cleanup"""
-    logger.info("🧹 Financial service cleanup...")
+    logger.info("🧹 Servis kapatılıyor, bağlantılar temizleniyor...")
     session_manager.close()
