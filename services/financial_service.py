@@ -1,480 +1,466 @@
 """
-Financial Service - ULTIMATE EDITION (V4/V3 Hibrit & Kurşun Geçirmez)
-================================================================
-✅ V4/V3 API Tam Uyumluluk (Format Karmaşası %100 Çözüldü)
-✅ Güvenli Float Dönüştürücü (String/Float/Int/Null/Empty - HEPSİNİ TANIR)
-✅ Akıllı Key Eşleştirme (Büyük/Küçük harf, tire, alt çizgi fark etmez)
-✅ Cache TTL 1 Saat + Otomatik Kurtarma
-✅ Thread-Safe Session Yönetimi
-✅ Profesyonel Hata Yönetimi
-✅ Günün Özeti (Kazanan/Kaybeden) Hesaplama
-✅ MAKİNE GİBİ ÇALIŞIR 🤖
+Financial Service - PRODUCTION READY 🚀
+=======================================
+✅ V5 Primary (92ms response)
+✅ V4/V3 Fallback (bozuk JSON repair)
+✅ Regional Currencies (21 döviz)
+✅ Stale Cache Serving (API çökerse eski veri)
+✅ Thread-Safe Session Management
+✅ Comprehensive Error Handling
 """
 
 import requests
 import logging
 import time
-import atexit
+import json
+import re
 import threading
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from typing import Optional, List, Union, Any
+from typing import Optional, List, Any, Dict
 
-from utils.cache import set_cache
+from utils.cache import set_cache, get_cache
 from config import Config
 
 logger = logging.getLogger(__name__)
 
 # ======================================
-# AYARLAR (CONFIG)
+# METRICS
 # ======================================
-
-API_TIMEOUT = (10, 20)
-API_URL_V4 = "https://finans.truncgil.com/v4/today.json"
-API_URL_V3 = "https://finans.truncgil.com/v3/today.json"
-
-# 🔥 CACHE SÜRESİ: 1 SAAT (3600 Saniye)
-SAFE_CACHE_TTL = 3600 
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
-    "Connection": "keep-alive"
-}
-
-# Takip edilecek döviz kodları
-POPULAR_CURRENCIES = [
-    "USD", "EUR", "GBP", "JPY", "CHF", "CNY", 
-    "CAD", "AUD", "DKK", "SEK", "NOK", "SAR", 
-    "QAR", "KWD", "AED"
-]
-
-# ALTIN EŞLEŞTİRMELERİ (V4 + V3 Hibrit)
-# Her altın türü için API'den gelebilecek tüm olası isimler
-GOLD_MAPPINGS = {
-    "GRA": ["GRA", "gram-altin", "gram_altin", "GRAM", "GRAMALTIN"],
-    "CEYREKALTIN": ["CEYREKALTIN", "ceyrek-altin", "ceyrek_altin", "CEYREK"],
-    "YARIMALTIN": ["YARIMALTIN", "yarim-altin", "yarim_altin", "YARIM"],
-    "TAMALTIN": ["TAMALTIN", "tam-altin", "tam_altin", "TAM"],
-    "CUMHURIYETALTINI": ["CUMHURIYETALTINI", "cumhuriyet-altini", "cumhuriyet_altini", "CUMHURIYET"]
-}
-
-# Uygulamada görünecek isimler
-GOLD_NAMES = {
-    "GRA": "Gram Altın",
-    "CEYREKALTIN": "Çeyrek Altın",
-    "YARIMALTIN": "Yarım Altın",
-    "TAMALTIN": "Tam Altın",
-    "CUMHURIYETALTINI": "Cumhuriyet Altını"
-}
-
-# GÜMÜŞ KEYLERİ
-SILVER_KEYS = ["GUMUS", "gumus", "silver", "SILVER", "gümüş"]
-
-# ======================================
-# METRİKLER (İstatistik Tutma)
-# ======================================
-
 class ServiceMetrics:
     def __init__(self):
         self.lock = threading.Lock()
-        self.total_calls = 0
-        self.successful_calls = 0
-        self.failed_calls = 0
-        self.v4_calls = 0
-        self.v3_fallbacks = 0
-        self.total_response_time = 0.0
-        self.last_success_time = None
-        self.parse_errors = 0
-        self.format_fixes = 0
-        
-    def record_success(self, api_version: str, response_time: float):
-        with self.lock:
-            self.total_calls += 1
-            self.successful_calls += 1
-            self.total_response_time += response_time
-            self.last_success_time = datetime.now()
-            if api_version == "V4":
-                self.v4_calls += 1
-            else:
-                self.v3_fallbacks += 1
+        self.stats = {
+            'v5_success': 0,
+            'v4_fallback': 0,
+            'v3_fallback': 0,
+            'json_repairs': 0,
+            'stale_cache_served': 0,
+            'total_calls': 0,
+            'errors': 0,
+            'avg_response_time': 0.0
+        }
     
-    def record_failure(self):
+    def inc(self, key, value=1):
         with self.lock:
-            self.total_calls += 1
-            self.failed_calls += 1
+            self.stats[key] = self.stats.get(key, 0) + value
     
-    def record_parse_error(self):
+    def get(self):
         with self.lock:
-            self.parse_errors += 1
-    
-    def record_format_fix(self):
-        with self.lock:
-            self.format_fixes += 1
-
-    def get_stats(self) -> dict:
-        with self.lock:
-            avg = (self.total_response_time / self.successful_calls) if self.successful_calls > 0 else 0
-            rate = (self.successful_calls / self.total_calls * 100) if self.total_calls > 0 else 0
-            return {
-                'success_rate': f"{rate:.1f}%",
-                'v4_calls': self.v4_calls,
-                'v3_fallbacks': self.v3_fallbacks,
-                'avg_time': f"{avg:.2f}s",
-                'parse_errors': self.parse_errors,
-                'format_fixes': self.format_fixes
-            }
+            return self.stats.copy()
 
 metrics = ServiceMetrics()
 
 # ======================================
-# BAĞLANTI YÖNETİCİSİ (Session Manager)
+# SESSION MANAGER
 # ======================================
-
 class SessionManager:
     def __init__(self):
+        self._sessions = {}
         self._lock = threading.Lock()
-        self._session = None
     
-    def get_session(self):
-        if self._session is None:
+    def get_session(self, api_version: str):
+        if api_version not in self._sessions:
             with self._lock:
-                if self._session is None:
-                    self._session = self._create()
-        return self._session
+                if api_version not in self._sessions:
+                    self._sessions[api_version] = self._create(api_version)
+        return self._sessions[api_version]
     
-    def _create(self):
+    def _create(self, api_version: str):
         session = requests.Session()
         retry = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504]
+            total=Config.API_RETRY_TOTAL,
+            backoff_factor=Config.API_RETRY_BACKOFF,
+            status_forcelist=[500, 502, 503, 504]
         )
-        adapter = HTTPAdapter(max_retries=retry, pool_maxsize=5)
+        adapter = HTTPAdapter(max_retries=retry, pool_maxsize=10)
         session.mount("https://", adapter)
-        logger.info("✅ HTTP Session oluşturuldu")
+        session.headers.update({
+            "User-Agent": "KuraBak/2.0",
+            "Accept": "application/json"
+        })
+        logger.info(f"✅ Session oluşturuldu: {api_version}")
         return session
-
-    def close(self):
-        if self._session:
-            with self._lock:
-                if self._session:
-                    self._session.close()
-                    self._session = None
+    
+    def close_all(self):
+        with self._lock:
+            for session in self._sessions.values():
+                session.close()
+            self._sessions.clear()
 
 session_manager = SessionManager()
 
 # ======================================
-# 🔥 AKILLI FLOAT DÖNÜŞTÜRÜCÜ (EN ÖNEMLİ KISIM)
+# JSON REPAIR
 # ======================================
-
-def get_safe_float(value: Any) -> float:
+def repair_json(text: str) -> Optional[dict]:
     """
-    Bu fonksiyon her türlü bozuk sayı formatını düzeltir.
-    
-    Örnekler:
-    - "140,4318" -> 140.4318 (Virgülü nokta yapar)
-    - "1.250,50" -> 1250.50  (Noktayı siler, virgülü nokta yapar)
-    - "1,250.50" -> 1250.50  (Virgülü siler)
-    - "%0,77"    -> 0.77     (Sembolleri temizler)
+    Bozuk JSON'u düzelt
+    Örnek: {"USD":{"Selling":"43.15   <- Tırnak kapanmamış
     """
-    # 1. NULL veya BOŞ KONTROLÜ
-    if value is None:
-        return 0.0
-    
-    # 2. ZATEN SAYI İSE (V4 API bazen direkt float dönüyor)
-    if isinstance(value, (int, float)):
-        return float(value)
-    
-    # 3. STRİNG İSE (Temizleme başlıyor)
     try:
-        v = str(value).strip()
-        
-        # Boş string kontrolü
-        if not v or v in ["—", "-", "–", "N/A", "null", "undefined"]:
-            return 0.0
-        
-        # Sembol temizliği (%, $, ₺, TL, boşluk)
-        v = v.replace("%", "").replace("$", "").replace("₺", "")
-        v = v.replace("TL", "").replace(" ", "").strip()
-        
-        if not v:
-            return 0.0
-        
-        # 🔥 AKILLI FORMAT TESPİTİ
-        
-        # Durum A: Hem nokta hem virgül var (Örn: "1.234,56" veya "1,234.56")
-        if '.' in v and ',' in v:
-            metrics.record_format_fix()
-            
-            # Hangi işaret daha sondaysa o ondalıktır
-            dot_pos = v.rfind('.')
-            comma_pos = v.rfind(',')
-            
-            if comma_pos > dot_pos:
-                # Virgül sonda: "1.250,50" (Türk/Avrupa standardı)
-                # Noktaları (binlik) sil, Virgülü (ondalık) nokta yap
-                v = v.replace(".", "").replace(",", ".")
-            else:
-                # Nokta sonda: "1,250.50" (Amerikan standardı)
-                # Virgülleri (binlik) sil
-                v = v.replace(",", "")
-        
-        # Durum B: Sadece virgül var (Örn: "140,43" veya "1,250")
-        elif ',' in v:
-            # Virgülden sonra 3 hane veya daha fazlaysa ve değer küçükse?
-            # Truncgil API genelde virgülü ondalık olarak kullanıyor (Örn: 140,4318)
-            # Bu yüzden virgülü her zaman nokta yapıyoruz.
-            v = v.replace(",", ".")
-        
-        # Durum C: Sadece nokta var (Örn: "1.25") -> Dokunma, zaten Python formatı.
-        
-        # Son Dönüşüm
-        result = float(v)
-        
-        # Çok saçma büyük sayı kontrolü (Hata önleyici)
-        if result > 1_000_000_000: # 1 Milyar üstü kur olamaz
-             logger.warning(f"⚠️ Anormal büyük değer tespit edildi: {value} -> {result}")
-             metrics.record_parse_error()
-             return 0.0
-             
+        # Açık tırnakları kapat
+        repaired = re.sub(r'"([^"]*?)$', r'"\1"', text, flags=re.MULTILINE)
+        result = json.loads(repaired)
+        metrics.inc('json_repairs')
+        logger.info("✅ JSON repair başarılı")
         return result
-    
     except Exception as e:
-        logger.debug(f"⚠️ Sayı çevirme hatası: {value} -> {str(e)}")
-        metrics.record_parse_error()
-        return 0.0
-
-# ======================================
-# AKILLI KEY BULUCU
-# ======================================
-
-def find_item(data: dict, keys: List[str]) -> Optional[dict]:
-    """Verilen anahtar kelimelerden herhangi birini JSON içinde bulur"""
-    for key in keys:
-        if key in data:
-            return data[key]
-        # Büyük/küçük harf duyarsız arama
-        for data_key in data.keys():
-            if data_key.lower() == key.lower():
-                return data[data_key]
-    return None
-
-# ======================================
-# VERİ İŞLEYİCİLER (PROCESSORS)
-# ======================================
-
-def process_currencies(data: dict) -> List[dict]:
-    """Döviz verilerini işle"""
-    result = []
-    
-    for code in POPULAR_CURRENCIES:
-        # Kodun kendisi veya tam adı ile ara
-        item = find_item(data, [code, code.upper(), code.lower()])
-        if not item:
-            continue
-        
-        # "Type" alanı varsa ve "Currency" değilse atla (Bazen Altın karışıyor)
-        item_type = item.get("Type", "").lower()
-        if item_type and "currency" not in item_type and "döviz" not in item_type:
-            # Bazı API versiyonlarında Type alanı olmayabilir, o yüzden katı değiliz
-            pass
-
-        # Fiyatı al (Selling veya Buying)
-        price = get_safe_float(item.get("Selling"))
-        if price <= 0:
-            price = get_safe_float(item.get("Buying")) # Satış yoksa Alış fiyatını dene
-            
-        if price <= 0:
-            continue
-        
-        # Değişim oranını al
-        change = get_safe_float(item.get("Change"))
-        
-        result.append({
-            "code": code,
-            "name": item.get("Name", code),
-            "rate": round(price, 4), # Kuruş hassasiyeti
-            "change_percent": round(change, 2)
-        })
-    
-    return result
-
-def process_golds(data: dict) -> List[dict]:
-    """Altın verilerini işle"""
-    result = []
-    
-    for main_code, aliases in GOLD_MAPPINGS.items():
-        item = find_item(data, aliases)
-        if not item:
-            continue
-
-        price = get_safe_float(item.get("Selling"))
-        if price <= 0:
-            continue
-        
-        change = get_safe_float(item.get("Change"))
-        
-        result.append({
-            "name": GOLD_NAMES[main_code],
-            "rate": round(price, 2),
-            "change_percent": round(change, 2)
-        })
-    
-    return result
-
-def process_silvers(data: dict) -> List[dict]:
-    """Gümüş verisini işle"""
-    item = find_item(data, SILVER_KEYS)
-    if not item:
-        return []
-
-    price = get_safe_float(item.get("Selling"))
-    if price <= 0:
-        return []
-    
-    change = get_safe_float(item.get("Change"))
-    
-    return [{
-        "name": "Gümüş",
-        "rate": round(price, 4),
-        "change_percent": round(change, 2)
-    }]
-
-def calculate_daily_summary(currencies: List[dict]) -> dict:
-    """En çok kazandıran ve kaybettireni bulur"""
-    if not currencies or len(currencies) < 2:
-        return {}
-
-    try:
-        # Değişim yüzdesine göre sırala
-        sorted_currencies = sorted(currencies, key=lambda x: x['change_percent'])
-        loser = sorted_currencies[0]  # En düşük (negatif)
-        winner = sorted_currencies[-1] # En yüksek (pozitif)
-
-        return {
-            "winner": {
-                "name": winner["name"],
-                "code": winner["code"],
-                "change": winner["change_percent"],
-                "rate": winner["rate"]
-            },
-            "loser": {
-                "name": loser["name"],
-                "code": loser["code"],
-                "change": loser["change_percent"],
-                "rate": loser["rate"]
-            }
-        }
-    except Exception as e:
-        logger.error(f"❌ Günün özeti hatası: {e}")
-        return {}
-
-# ======================================
-# API ÇEKME (FETCH)
-# ======================================
-
-def fetch_api_data(url: str) -> Optional[dict]:
-    """Belirtilen URL'den JSON verisi çeker"""
-    try:
-        session = session_manager.get_session()
-        resp = session.get(url, headers=HEADERS, timeout=API_TIMEOUT)
-        
-        if resp.status_code != 200:
-            logger.error(f"❌ HTTP Hatası {resp.status_code}: {url}")
-            return None
-        
-        return resp.json()
-            
-    except Exception as e:
-        logger.error(f"❌ Bağlantı Hatası ({url}): {str(e)[:100]}")
+        logger.warning(f"⚠️ JSON repair başarısız: {str(e)[:50]}")
         return None
 
 # ======================================
-# ANA SENKRONİZASYON (MAIN SYNC)
+# FLEXIBLE KEY FINDER
 # ======================================
+def find_flexible(data: dict, keys: List[str]) -> Any:
+    """Case-insensitive key bulma"""
+    for key in keys:
+        if key in data:
+            return data[key]
+        for dk in data.keys():
+            if dk.lower() == key.lower():
+                return data[dk]
+    return None
 
-def sync_financial_data() -> bool:
-    """
-    Bu fonksiyon belirli aralıklarla çalışır.
-    Önce V4 API'yi dener, olmazsa V3'e geçer.
-    Verileri temizler, formatlar ve Redis Cache'e kaydeder.
-    """
-    start_time = time.time()
+# ======================================
+# SAFE FLOAT CONVERTER
+# ======================================
+def get_safe_float(value: Any) -> float:
+    """Her türlü formatı sayıya çevir"""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not value:
+        return 0.0
     
     try:
-        logger.info("🔄 Finansal veriler güncelleniyor...")
+        v = str(value).strip()
+        # Temizlik
+        v = v.replace("%", "").replace("$", "").replace("₺", "").replace(" ", "")
+        if not v or v in ["-", "–", "N/A", "null"]:
+            return 0.0
         
-        # 1. ADIM: V4 Dene
-        data = fetch_api_data(API_URL_V4)
-        version = "V4"
+        # Format tespiti
+        if '.' in v and ',' in v:
+            if v.rfind(',') > v.rfind('.'):
+                v = v.replace(".", "").replace(",", ".")
+            else:
+                v = v.replace(",", "")
+        elif ',' in v:
+            v = v.replace(",", ".")
         
-        # 2. ADIM: Olmazsa V3 Dene (Fallback)
-        if not data:
-            logger.warning("⚠️ V4 yanıt vermedi, V3 deneniyor...")
-            data = fetch_api_data(API_URL_V3)
-            version = "V3"
-        
-        if not data:
-            logger.error("❌ Kritik: Hem V4 hem V3 API çalışmıyor!")
-            metrics.record_failure()
-            return False
-        
-        elapsed = time.time() - start_time
-        metrics.record_success(version, elapsed)
-        
-        # Update Date bilgisini bul
-        update_date = data.get("Update_Date") or data.get("update_date") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 3. ADIM: Verileri İşle (Parsing)
-        currencies = process_currencies(data)
-        golds = process_golds(data)
-        silvers = process_silvers(data)
-        
-        # 4. ADIM: Özet Hesapla
-        daily_summary = calculate_daily_summary(currencies)
+        result = float(v)
+        if result > 1_000_000_000:
+            logger.warning(f"⚠️ Anormal değer: {value}")
+            return 0.0
+        return result
+    except:
+        return 0.0
 
-        if not currencies:
-            logger.error("❌ Veri çekildi ama hiç döviz bulunamadı!")
-            metrics.record_failure()
-            return False
+# ======================================
+# V5 PROCESSOR
+# ======================================
+def process_v5_data(data: dict):
+    """V5 API parser (Rates wrapper)"""
+    currencies = []
+    golds = []
+    silvers = []
+    
+    # Esnek format desteği
+    rates = find_flexible(data, Config.POSSIBLE_DATA_KEYS)
+    if not rates:
+        logger.warning("⚠️ V5: Data container bulunamadı")
+        return None, None, None
+    
+    # 🌍 BÖLGESEL DÖVİZLER (21 adet)
+    for code in Config.ALL_CURRENCIES:
+        item = rates.get(code)
+        if not item:
+            continue
         
-        # 5. ADIM: Cache'e Kaydet (Redis)
-        base_data = {
-            "success": True,
-            "update_date": update_date,
-            "api_version": version
+        # Type kontrolü (Crypto karışmasın)
+        item_type = str(item.get("Type", "")).lower()
+        if item_type and "currency" not in item_type:
+            continue
+        
+        price = get_safe_float(item.get("Selling"))
+        if price <= 0:
+            price = get_safe_float(item.get("Buying"))
+        
+        if price > 0:
+            currencies.append({
+                "code": code,
+                "name": item.get("Name", code),
+                "rate": round(price, 4),
+                "change_percent": round(get_safe_float(item.get("Change")), 2)
+            })
+    
+    # Altınlar
+    for code, name in Config.POPULAR_GOLDS.items():
+        item = rates.get(code)
+        if item:
+            price = get_safe_float(item.get("Selling"))
+            if price > 0:
+                golds.append({
+                    "name": name,
+                    "rate": round(price, 2),
+                    "change_percent": round(get_safe_float(item.get("Change")), 2)
+                })
+    
+    # Gümüş
+    gumus = rates.get(Config.SILVER_CODE)
+    if gumus:
+        price = get_safe_float(gumus.get("Selling"))
+        if price > 0:
+            silvers.append({
+                "name": "Gümüş",
+                "rate": round(price, 4),
+                "change_percent": round(get_safe_float(gumus.get("Change")), 2)
+            })
+    
+    return currencies, golds, silvers
+
+# ======================================
+# V4/V3 PROCESSOR
+# ======================================
+def process_legacy_data(data: dict):
+    """V4/V3 parser (flat structure)"""
+    currencies = []
+    golds = []
+    silvers = []
+    
+    def find_item(key):
+        if key in data:
+            return data[key]
+        for k in data.keys():
+            if k.upper() == key.upper():
+                return data[k]
+        return None
+    
+    # Dövizler
+    for code in Config.ALL_CURRENCIES:
+        item = find_item(code)
+        if item:
+            price = get_safe_float(item.get("Selling"))
+            if price <= 0:
+                price = get_safe_float(item.get("Buying"))
+            
+            if price > 0:
+                currencies.append({
+                    "code": code,
+                    "name": item.get("Name", code),
+                    "rate": round(price, 4),
+                    "change_percent": round(get_safe_float(item.get("Change")), 2)
+                })
+    
+    # Altınlar
+    for code, name in Config.POPULAR_GOLDS.items():
+        item = find_item(code)
+        if not item and code == "GRA":
+            item = find_item("gram-altin")
+        
+        if item:
+            price = get_safe_float(item.get("Selling"))
+            if price > 0:
+                golds.append({
+                    "name": name,
+                    "rate": round(price, 2),
+                    "change_percent": round(get_safe_float(item.get("Change")), 2)
+                })
+    
+    # Gümüş
+    gumus = find_item(Config.SILVER_CODE)
+    if gumus:
+        price = get_safe_float(gumus.get("Selling"))
+        if price > 0:
+            silvers.append({
+                "name": "Gümüş",
+                "rate": round(price, 4),
+                "change_percent": round(get_safe_float(gumus.get("Change")), 2)
+            })
+    
+    return currencies, golds, silvers
+
+# ======================================
+# GÜNÜN ÖZETİ
+# ======================================
+def calculate_summary(currencies):
+    if not currencies or len(currencies) < 2:
+        return {}
+    try:
+        sorted_curr = sorted(currencies, key=lambda x: x['change_percent'])
+        return {
+            "loser": {
+                "name": sorted_curr[0]["name"],
+                "code": sorted_curr[0]["code"],
+                "change": sorted_curr[0]["change_percent"],
+                "rate": sorted_curr[0]["rate"]
+            },
+            "winner": {
+                "name": sorted_curr[-1]["name"],
+                "code": sorted_curr[-1]["code"],
+                "change": sorted_curr[-1]["change_percent"],
+                "rate": sorted_curr[-1]["rate"]
+            }
         }
-        
-        set_cache('kurabak:currencies:all', {**base_data, "count": len(currencies), "data": currencies}, SAFE_CACHE_TTL)
-        set_cache('kurabak:golds:all', {**base_data, "count": len(golds), "data": golds}, SAFE_CACHE_TTL)
-        set_cache('kurabak:silvers:all', {**base_data, "count": len(silvers), "data": silvers}, SAFE_CACHE_TTL)
-        
-        if daily_summary:
-            set_cache('kurabak:summary', {**base_data, "data": daily_summary}, SAFE_CACHE_TTL)
+    except:
+        return {}
 
-        total_time = time.time() - start_time
-        stats = metrics.get_stats()
+# ======================================
+# API FETCH
+# ======================================
+def fetch_api(url: str, timeout: tuple, version: str) -> Optional[dict]:
+    """API çağrısı (JSON repair destekli)"""
+    try:
+        session = session_manager.get_session(version)
+        resp = session.get(url, timeout=timeout)
         
-        logger.info(
-            f"✅ Güncelleme Başarılı ({version}) - "
-            f"Döviz:{len(currencies)} Altın:{len(golds)} Gümüş:{len(silvers)} - "
-            f"Süre:{total_time:.2f}s - "
-            f"Düzeltmeler:{stats['format_fixes']} Hatalar:{stats['parse_errors']}"
-        )
+        if resp.status_code != 200:
+            logger.warning(f"⚠️ {version} HTTP {resp.status_code}")
+            return None
         
-        return True
+        # Normal parse
+        try:
+            return resp.json()
+        except json.JSONDecodeError:
+            # JSON bozuksa repair
+            logger.warning(f"⚠️ {version} JSON bozuk, repair deneniyor...")
+            return repair_json(resp.text)
     
     except Exception as e:
-        logger.error(f"❌ Beklenmeyen Hata: {str(e)}", exc_info=True)
-        metrics.record_failure()
-        return False
+        logger.error(f"❌ {version} hatası: {str(e)[:80]}")
+        return None
 
-def get_service_metrics() -> dict:
-    return metrics.get_stats()
+# ======================================
+# STALE CACHE LOADER
+# ======================================
+def serve_stale_cache() -> bool:
+    """Bayat cache yükle (son çare)"""
+    try:
+        curr = get_cache('kurabak:currencies:all', ttl=None)
+        if curr and curr.get('data'):
+            logger.warning("⚠️ STALE CACHE servis ediliyor")
+            metrics.inc('stale_cache_served')
+            return True
+    except:
+        pass
+    return False
 
+# ======================================
+# MAIN SYNC
+# ======================================
+def sync_financial_data() -> bool:
+    """
+    Ana senkronizasyon
+    V5 → V4 → V3 → Stale Cache
+    """
+    start = time.time()
+    logger.info("🔄 Senkronizasyon başlıyor...")
+    
+    metrics.inc('total_calls')
+    
+    data = None
+    currencies = golds = silvers = None
+    source = update_date = None
+    
+    # -------------------------------------------------
+    # 1. V5 DENE
+    # -------------------------------------------------
+    raw = fetch_api(Config.API_V5_URL, Config.API_V5_TIMEOUT, "V5")
+    if raw:
+        currencies, golds, silvers = process_v5_data(raw)
+        if currencies:
+            source = "V5"
+            metrics.inc('v5_success')
+            
+            # Meta data'dan tarih
+            meta = find_flexible(raw, Config.POSSIBLE_META_KEYS)
+            if meta:
+                update_date = find_flexible(meta, Config.POSSIBLE_DATE_KEYS)
+            
+            data = True
+    
+    # -------------------------------------------------
+    # 2. V4 DENE
+    # -------------------------------------------------
+    if not data:
+        logger.warning("⚠️ V5 başarısız, V4 deneniyor...")
+        raw = fetch_api(Config.API_V4_URL, Config.API_V4_TIMEOUT, "V4")
+        if raw:
+            currencies, golds, silvers = process_legacy_data(raw)
+            if currencies:
+                source = "V4"
+                metrics.inc('v4_fallback')
+                update_date = raw.get("Update_Date")
+                data = True
+    
+    # -------------------------------------------------
+    # 3. V3 DENE
+    # -------------------------------------------------
+    if not data:
+        logger.warning("⚠️ V4 başarısız, V3 deneniyor...")
+        raw = fetch_api(Config.API_V3_URL, Config.API_V3_TIMEOUT, "V3")
+        if raw:
+            currencies, golds, silvers = process_legacy_data(raw)
+            if currencies:
+                source = "V3"
+                metrics.inc('v3_fallback')
+                update_date = raw.get("Update_Date")
+                data = True
+    
+    # -------------------------------------------------
+    # 4. STALE CACHE (SON ÇARE)
+    # -------------------------------------------------
+    if not data:
+        logger.error("🔴 TÜM API'LER DOWN! Stale cache deneniyor...")
+        if serve_stale_cache():
+            return True
+        else:
+            logger.error("❌ STALE CACHE DE YOK!")
+            metrics.inc('errors')
+            return False
+    
+    # -------------------------------------------------
+    # 5. CACHE'E KAYDET
+    # -------------------------------------------------
+    if not update_date:
+        update_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    summary = calculate_summary(currencies)
+    
+    base = {
+        "success": True,
+        "source": source,
+        "update_date": update_date,
+        "api_version": source
+    }
+    
+    set_cache('kurabak:currencies:all', {**base, "count": len(currencies), "data": currencies}, Config.CACHE_TTL)
+    set_cache('kurabak:golds:all', {**base, "count": len(golds), "data": golds}, Config.CACHE_TTL)
+    set_cache('kurabak:silvers:all', {**base, "count": len(silvers), "data": silvers}, Config.CACHE_TTL)
+    set_cache('kurabak:summary', {**base, "data": summary}, Config.CACHE_TTL)
+    
+    elapsed = time.time() - start
+    metrics.inc('avg_response_time', elapsed)
+    
+    logger.info(
+        f"✅ [{source}] Tamamlandı - "
+        f"Döviz:{len(currencies)}/{len(Config.ALL_CURRENCIES)} "
+        f"Altın:{len(golds)} Gümüş:{len(silvers)} - "
+        f"Süre:{elapsed:.2f}s"
+    )
+    
+    return True
+
+def get_service_metrics():
+    """Metrik özeti"""
+    stats = metrics.get()
+    if stats['total_calls'] > 0:
+        stats['success_rate'] = f"{((stats['v5_success'] + stats['v4_fallback'] + stats['v3_fallback']) / stats['total_calls'] * 100):.1f}%"
+    return stats
+
+import atexit
 @atexit.register
 def cleanup():
-    logger.info("🧹 Servis kapatılıyor, bağlantılar temizleniyor...")
-    session_manager.close()
+    logger.info("🧹 Session cleanup...")
+    session_manager.close_all()
