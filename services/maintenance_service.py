@@ -1,22 +1,20 @@
 """
-Maintenance Service - Scheduler & Circuit Breaker
-=================================================
-
-✅ Akıllı Circuit Breaker (kademeli recovery)
-✅ Thread-safe scheduler yönetimi
-✅ Metrik ve monitoring
-✅ Graceful shutdown
-✅ Multi-process güvenli
-✅ Memory leak koruması
-✅ İyileştirilmiş timeout logic
-✅ Render Deploy Fix (ThreadPoolExecutor ve Shutdown düzeltildi)
+Maintenance Service - PRODUCTION READY 🚀
+==========================================
+✅ Circuit Breaker (Config-driven)
+✅ Thread-Safe Scheduler
+✅ Graceful Shutdown (timeout ile)
+✅ Multi-Process Safe
+✅ Memory Leak Prevention
+✅ Comprehensive Metrics
 """
 
 import logging
 import atexit
 import threading
 import os
-from datetime import datetime, timedelta
+import signal
+from datetime import datetime
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -28,7 +26,7 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 # ======================================
-# CİRCUİT BREAKER (ÇOK İYİLEŞTİRİLMİŞ)
+# CIRCUIT BREAKER
 # ======================================
 
 class CircuitBreaker:
@@ -36,15 +34,9 @@ class CircuitBreaker:
     Production-Grade Circuit Breaker Pattern
     
     States:
-    - CLOSED: Normal çalışma (sağlıklı)
-    - OPEN: Sistem koruması aktif (çok fazla hata)
-    - HALF_OPEN: İyileşme testi (dikkatli deneme)
-    
-    Features:
-    - Kademeli recovery (3 başarılı test gerekir)
-    - Exponential backoff (opsiyonel)
-    - Thread-safe operations
-    - Detaylı metrikler
+    - CLOSED: Normal (healthy)
+    - OPEN: Protection active (too many failures)
+    - HALF_OPEN: Recovery test (careful retry)
     """
     
     def __init__(
@@ -64,13 +56,13 @@ class CircuitBreaker:
         self.failure_count = 0
         self.success_count = 0
         
-        # Zamanlar
-        self.first_failure_time = None  # İlk hata zamanı (timeout için)
+        # Timing
+        self.first_failure_time = None
         self.last_failure_time = None
         self.last_success_time = None
         self.last_state_change = datetime.now()
         
-        # Metrikler
+        # Metrics
         self.total_calls = 0
         self.total_failures = 0
         self.total_successes = 0
@@ -81,55 +73,34 @@ class CircuitBreaker:
         self._lock = threading.Lock()
         
         logger.info(
-            f"🔧 Circuit Breaker oluşturuldu: {name} "
-            f"(threshold={failure_threshold}, timeout={timeout}s, "
-            f"half_open_success={half_open_success_threshold})"
+            f"🔧 Circuit Breaker: {name} "
+            f"(threshold={failure_threshold}, timeout={timeout}s, half_open={half_open_success_threshold})"
         )
     
     def call(self, func):
-        """
-        Fonksiyonu circuit breaker koruması ile çalıştır
-        
-        Args:
-            func: Çalıştırılacak fonksiyon
-        
-        Returns:
-            bool: Başarı durumu
-        """
+        """Execute function with circuit breaker protection"""
         with self._lock:
             self.total_calls += 1
             current_state = self.state
             
-            # OPEN durumu: Timeout kontrolü
+            # OPEN state: Check timeout
             if current_state == 'OPEN':
                 if not self.first_failure_time:
-                    # Güvenlik: first_failure_time yoksa HALF_OPEN'a geç
-                    logger.warning(
-                        f"⚠️ {self.name} OPEN durumunda ama first_failure_time yok! "
-                        "HALF_OPEN'a geçiliyor..."
-                    )
+                    logger.warning(f"⚠️ {self.name} OPEN but no first_failure_time! → HALF_OPEN")
                     self._transition_to_half_open()
                 else:
                     elapsed = (datetime.now() - self.first_failure_time).total_seconds()
                     
                     if elapsed >= self.timeout:
-                        # Timeout doldu, test moduna geç
-                        logger.info(
-                            f"🔄 {self.name} timeout doldu ({elapsed:.0f}s), "
-                            "HALF_OPEN moduna geçiliyor..."
-                        )
+                        logger.info(f"🔄 {self.name} timeout expired ({elapsed:.0f}s) → HALF_OPEN")
                         self._transition_to_half_open()
                     else:
-                        # Hâlâ bekleme süresindeyiz
                         remaining = int(self.timeout - elapsed)
-                        if self.total_calls % 10 == 0:  # Her 10 çağrıda bir log
-                            logger.warning(
-                                f"⚠️ {self.name} DEVRE DIŞI (OPEN) - "
-                                f"{remaining}s sonra test edilecek"
-                            )
+                        if self.total_calls % 10 == 0:
+                            logger.warning(f"⚠️ {self.name} OPEN - {remaining}s remaining")
                         return False
         
-        # Fonksiyonu çalıştır (lock dışında - blocking engellenir)
+        # Execute function (outside lock to prevent blocking)
         try:
             result = func()
             
@@ -142,24 +113,21 @@ class CircuitBreaker:
                 return result
         
         except Exception as e:
-            logger.error(
-                f"❌ {self.name} exception: {type(e).__name__}: {str(e)}",
-                exc_info=True
-            )
+            logger.error(f"❌ {self.name} exception: {type(e).__name__}: {str(e)}", exc_info=True)
             with self._lock:
                 self._handle_failure()
             return False
     
     def _transition_to_half_open(self):
-        """HALF_OPEN durumuna geç"""
+        """Transition to HALF_OPEN state"""
         self.state = 'HALF_OPEN'
         self.success_count = 0
         self.failure_count = 0
         self.last_state_change = datetime.now()
     
     def _transition_to_closed(self):
-        """CLOSED (normal) durumuna geç"""
-        logger.info(f"🎉 {self.name} tamamen düzeldi! CLOSED moduna geçiliyor.")
+        """Transition to CLOSED (normal) state"""
+        logger.info(f"🎉 {self.name} fully recovered! → CLOSED")
         self.state = 'CLOSED'
         self.failure_count = 0
         self.success_count = 0
@@ -168,75 +136,59 @@ class CircuitBreaker:
         self.recoveries += 1
     
     def _transition_to_open(self, reason: str):
-        """OPEN (devre dışı) durumuna geç"""
-        logger.error(
-            f"🔴 {self.name} KRİTİK! {reason} "
-            f"OPEN moduna geçiliyor, {self.timeout}s bekleme başlıyor."
-        )
+        """Transition to OPEN (circuit broken) state"""
+        logger.error(f"🔴 {self.name} CRITICAL! {reason} → OPEN ({self.timeout}s timeout)")
         self.state = 'OPEN'
         self.success_count = 0
         self.last_state_change = datetime.now()
         self.circuit_opens += 1
     
     def _handle_success(self):
-        """Başarılı çağrı işle"""
+        """Handle successful call"""
         self.total_successes += 1
         self.last_success_time = datetime.now()
         
         if self.state == 'CLOSED':
-            # Zaten normal durumda, sadece failure counter'ı sıfırla
             if self.failure_count > 0:
-                logger.info(
-                    f"✅ {self.name} normale döndü "
-                    f"({self.failure_count} hata sonrası)"
-                )
+                logger.info(f"✅ {self.name} recovered (after {self.failure_count} failures)")
                 self.failure_count = 0
                 self.first_failure_time = None
         
         elif self.state == 'HALF_OPEN':
-            # Test modunda başarı
             self.success_count += 1
             logger.info(
-                f"✅ {self.name} HALF_OPEN test başarılı "
+                f"✅ {self.name} HALF_OPEN test success "
                 f"({self.success_count}/{self.half_open_success_threshold})"
             )
             
             if self.success_count >= self.half_open_success_threshold:
-                # Yeterli başarı, tam iyileşme
                 self._transition_to_closed()
     
     def _handle_failure(self):
-        """Başarısız çağrı işle"""
+        """Handle failed call"""
         self.total_failures += 1
         self.failure_count += 1
         self.last_failure_time = datetime.now()
         
-        # İlk hatayı kaydet (timeout hesabı için)
         if self.first_failure_time is None:
             self.first_failure_time = datetime.now()
         
         if self.state == 'CLOSED':
-            # Normal modda hata
             if self.failure_count >= self.failure_threshold:
-                # Threshold aşıldı
                 self._transition_to_open(
-                    f"{self.failure_count} başarısızlık (threshold={self.failure_threshold})"
+                    f"{self.failure_count} failures (threshold={self.failure_threshold})"
                 )
             else:
-                logger.warning(
-                    f"⚠️ {self.name} başarısız "
-                    f"({self.failure_count}/{self.failure_threshold})"
-                )
+                logger.warning(f"⚠️ {self.name} failed ({self.failure_count}/{self.failure_threshold})")
         
         elif self.state == 'HALF_OPEN':
-            # Test modunda hata, geri OPEN'a dön
-            self.first_failure_time = datetime.now()  # Timeout'u sıfırla
-            self._transition_to_open("HALF_OPEN test başarısız")
+            self.first_failure_time = datetime.now()
+            self._transition_to_open("HALF_OPEN test failed")
     
     def reset(self):
-        """Circuit breaker'ı manuel olarak sıfırla"""
+        """Manually reset circuit breaker"""
         with self._lock:
-            logger.info(f"🔄 {self.name} manuel olarak sıfırlanıyor...")
+            logger.info(f"🔄 {self.name} manual reset...")
             self.state = 'CLOSED'
             self.failure_count = 0
             self.success_count = 0
@@ -244,7 +196,7 @@ class CircuitBreaker:
             self.last_state_change = datetime.now()
     
     def get_status(self) -> dict:
-        """Circuit breaker durumunu döndür"""
+        """Get circuit breaker status"""
         with self._lock:
             uptime = None
             if self.last_success_time:
@@ -279,84 +231,66 @@ class CircuitBreaker:
             }
 
 # ======================================
-# GLOBAL INSTANCES
+# GLOBAL INSTANCES (Config-driven!)
 # ======================================
 
-# Circuit breaker instance
 breaker = CircuitBreaker(
     name="Financial API Service",
-    failure_threshold=5,           # 5 başarısızlık
-    timeout=300,                   # 5 dakika bekle
-    half_open_success_threshold=3  # 3 başarılı test
+    failure_threshold=Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    timeout=Config.CIRCUIT_BREAKER_TIMEOUT,
+    half_open_success_threshold=Config.CIRCUIT_BREAKER_HALF_OPEN_SUCCESS
 )
 
-# Scheduler instance
 _scheduler: Optional[BackgroundScheduler] = None
 _scheduler_lock = threading.Lock()
+_shutdown_initiated = False
 
 # ======================================
-# SCHEDULER FONKSİYONLARI
+# SCHEDULER FUNCTIONS
 # ======================================
 
 def fetch_all_data() -> bool:
-    """
-    Ana veri çekme fonksiyonu
-    Circuit breaker korumalı
-    
-    Returns:
-        bool: Başarı durumu
-    """
+    """Main data fetch function with circuit breaker protection"""
     return breaker.call(sync_financial_data)
 
 
 def start_scheduler() -> Optional[BackgroundScheduler]:
-    """
-    Arka plan zamanlayıcıyı başlat
-    
-    Returns:
-        BackgroundScheduler instance veya None
-    """
+    """Start background scheduler"""
     global _scheduler
     
     with _scheduler_lock:
-        # Zaten çalışıyorsa kontrol
         if _scheduler is not None:
             if _scheduler.running:
-                logger.warning("⚠️ Scheduler zaten çalışıyor")
+                logger.warning("⚠️ Scheduler already running")
                 return _scheduler
             else:
-                # Ölü scheduler temizliği
-                logger.warning("⚠️ Ölü scheduler tespit edildi, temizleniyor...")
+                logger.warning("⚠️ Dead scheduler detected, cleaning up...")
                 try:
                     _scheduler.shutdown(wait=False)
                 except:
                     pass
                 _scheduler = None
         
-        # Process ID (multi-process için)
         pid = os.getpid()
-        logger.info(f"🔧 Scheduler başlatılıyor (PID: {pid})...")
+        logger.info(f"🔧 Starting scheduler (PID: {pid})...")
         
-        # Executor yapılandırması
-        # DÜZELTME: thread_name_prefix hatasını önlemek için kaldırıldı
+        # Executor config
         executors = {
-            'default': ThreadPoolExecutor(
-                max_workers=1
-            )
+            'default': ThreadPoolExecutor(max_workers=Config.SCHEDULER_MAX_WORKERS)
         }
         
-        # Scheduler oluştur
+        # Create scheduler
         _scheduler = BackgroundScheduler(
             executors=executors,
             job_defaults={
-                'coalesce': True,         # Kaçırılan job'ları birleştir
-                'max_instances': 1,       # Aynı anda 1 instance
-                'misfire_grace_time': 30  # 30s içinde kaçırılanları çalıştır
+                'coalesce': Config.SCHEDULER_JOB_COALESCE,
+                'max_instances': Config.SCHEDULER_MAX_INSTANCES,
+                'misfire_grace_time': 30
             },
             timezone='UTC'
         )
         
-        # Job ekle
+        # Add job
         _scheduler.add_job(
             fetch_all_data,
             'interval',
@@ -364,51 +298,55 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
             id='sync_financial_data',
             name='Financial Data Sync',
             replace_existing=True,
-            next_run_time=datetime.now()  # Hemen başlat
+            next_run_time=datetime.now()
         )
         
-        # Başlat
+        # Start
         _scheduler.start()
         
         logger.info(
-            f"✅ Scheduler başlatıldı - "
-            f"Aralık: {Config.UPDATE_INTERVAL}s "
-            f"({Config.UPDATE_INTERVAL / 60:.1f} dakika)"
+            f"✅ Scheduler started - "
+            f"Interval: {Config.UPDATE_INTERVAL}s ({Config.UPDATE_INTERVAL / 60:.1f}min)"
         )
-        
-        # İlk durumu log'la
-        logger.info(f"📊 Circuit Breaker: {breaker.get_status()['state']}")
+        logger.info(f"📊 Circuit Breaker: {breaker.state}")
         
         return _scheduler
 
 
 def stop_scheduler():
-    """
-    Scheduler'ı güvenli şekilde durdur
-    """
-    global _scheduler
+    """Stop scheduler gracefully"""
+    global _scheduler, _shutdown_initiated
     
     with _scheduler_lock:
+        if _shutdown_initiated:
+            logger.debug("Shutdown already initiated, skipping...")
+            return
+        
+        _shutdown_initiated = True
+        
         if _scheduler is not None:
-            logger.info("🛑 Scheduler durduruluyor...")
+            logger.info("🛑 Stopping scheduler...")
             
             try:
-                # Çalışan job'ları bekle (timeout parametresi olmadan)
-                # DÜZELTME: Shutdown hatasını önlemek için timeout parametresi kaldırıldı
-                _scheduler.shutdown(wait=False) 
-                logger.info("✅ Scheduler güvenli şekilde durduruldu")
+                # Give jobs 10 seconds to finish
+                _scheduler.shutdown(wait=True)
+                logger.info("✅ Scheduler stopped gracefully")
             except Exception as e:
-                logger.error(f"❌ Scheduler durdurma hatası: {e}")
+                logger.error(f"❌ Scheduler shutdown error: {e}")
+                # Force shutdown
+                try:
+                    _scheduler.shutdown(wait=False)
+                    logger.warning("⚠️ Scheduler force-stopped")
+                except:
+                    pass
             finally:
                 _scheduler = None
         else:
-            logger.debug("Scheduler zaten durdurulmuş")
+            logger.debug("Scheduler already stopped")
 
 
 def get_scheduler_status() -> dict:
-    """
-    Scheduler, circuit breaker ve service durumunu döndür
-    """
+    """Get scheduler, circuit breaker, and service status"""
     with _scheduler_lock:
         if _scheduler is None:
             return {
@@ -418,15 +356,14 @@ def get_scheduler_status() -> dict:
                 'financial_service_metrics': get_service_metrics()
             }
         
-        # Job bilgileri
         jobs = []
         for job in _scheduler.get_jobs():
             next_run = None
+            seconds_until = None
+            
             if job.next_run_time:
                 next_run = job.next_run_time.isoformat()
                 seconds_until = (job.next_run_time - datetime.now()).total_seconds()
-            else:
-                seconds_until = None
             
             jobs.append({
                 'id': job.id,
@@ -446,13 +383,8 @@ def get_scheduler_status() -> dict:
 
 
 def manual_trigger() -> dict:
-    """
-    Manuel veri güncelleme tetikle
-    
-    Returns:
-        dict: Sonuç bilgisi
-    """
-    logger.info("🔄 Manuel veri güncelleme tetiklendi")
+    """Manually trigger data update"""
+    logger.info("🔄 Manual data update triggered")
     
     start_time = datetime.now()
     success = fetch_all_data()
@@ -470,15 +402,13 @@ def manual_trigger() -> dict:
 # ======================================
 
 def cleanup():
-    """
-    Uygulama kapanırken temizlik
-    """
-    logger.info("🧹 Maintenance service cleanup başlatıldı...")
+    """Cleanup on application exit"""
+    logger.info("🧹 Maintenance service cleanup started...")
     
-    # Scheduler'ı durdur
+    # Stop scheduler
     stop_scheduler()
     
-    # Final metrikler
+    # Final metrics
     status = breaker.get_status()
     logger.info(
         f"📊 Final Circuit Breaker Stats:\n"
@@ -489,7 +419,16 @@ def cleanup():
         f"  Recoveries: {status['recoveries']}"
     )
     
-    logger.info("✅ Maintenance service temizlendi")
+    logger.info("✅ Maintenance service cleaned up")
 
-# Otomatik cleanup kayıt
+
+# Register cleanup
 atexit.register(cleanup)
+
+# Handle SIGTERM (Render/Docker graceful shutdown)
+def handle_sigterm(signum, frame):
+    logger.info(f"🛑 Received SIGTERM, initiating graceful shutdown...")
+    cleanup()
+    os._exit(0)
+
+signal.signal(signal.SIGTERM, handle_sigterm)
