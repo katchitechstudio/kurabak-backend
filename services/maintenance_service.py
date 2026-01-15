@@ -7,6 +7,9 @@ Maintenance Service - PRODUCTION READY 🚀
 ✅ Multi-Process Safe
 ✅ Memory Leak Prevention
 ✅ Comprehensive Metrics
+✅ Config Validation
+✅ Optimized Scheduler Settings
+✅ Timezone Bug Fixed (Critical)
 """
 
 import logging
@@ -14,7 +17,8 @@ import atexit
 import threading
 import os
 import signal
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -24,6 +28,50 @@ from services.financial_service import sync_financial_data, get_service_metrics
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# ======================================
+# CONFIG VALIDATION
+# ======================================
+
+def validate_service_config():
+    """Validate critical configuration values on startup"""
+    warnings = []
+    errors = []
+    
+    # UPDATE_INTERVAL validation
+    if Config.UPDATE_INTERVAL < 30:
+        warnings.append(f"UPDATE_INTERVAL ({Config.UPDATE_INTERVAL}s) düşük! Production için 60s+ önerilir.")
+    
+    # CIRCUIT BREAKER validation
+    if Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD < 2:
+        errors.append(f"CIRCUIT_BREAKER_FAILURE_THRESHOLD ({Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD}) çok düşük! Minimum 2.")
+    
+    if Config.CIRCUIT_BREAKER_TIMEOUT < 60:
+        errors.append(f"CIRCUIT_BREAKER_TIMEOUT ({Config.CIRCUIT_BREAKER_TIMEOUT}s) çok kısa! Minimum 60s.")
+    
+    if Config.CIRCUIT_BREAKER_HALF_OPEN_SUCCESS < 2:
+        errors.append(f"CIRCUIT_BREAKER_HALF_OPEN_SUCCESS ({Config.CIRCUIT_BREAKER_HALF_OPEN_SUCCESS}) düşük! Minimum 2.")
+    
+    # SCHEDULER validation
+    if Config.SCHEDULER_MAX_WORKERS < 1:
+        errors.append(f"SCHEDULER_MAX_WORKERS ({Config.SCHEDULER_MAX_WORKERS}) geçersiz! Minimum 1.")
+    
+    if Config.SCHEDULER_MAX_INSTANCES < 1:
+        errors.append(f"SCHEDULER_MAX_INSTANCES ({Config.SCHEDULER_MAX_INSTANCES}) geçersiz! Minimum 1.")
+    
+    # Log results
+    for warning in warnings:
+        logger.warning(f"⚠️ Config Warning: {warning}")
+    
+    if errors:
+        for error in errors:
+            logger.error(f"❌ Config Error: {error}")
+        raise ValueError("Critical configuration errors detected!")
+    
+    logger.info("✅ Service configuration validated successfully")
+
+# Run validation on import
+validate_service_config()
 
 # ======================================
 # CIRCUIT BREAKER
@@ -60,7 +108,7 @@ class CircuitBreaker:
         self.first_failure_time = None
         self.last_failure_time = None
         self.last_success_time = None
-        self.last_state_change = datetime.now()
+        self.last_state_change = datetime.now(timezone.utc)
         
         # Metrics
         self.total_calls = 0
@@ -89,7 +137,7 @@ class CircuitBreaker:
                     logger.warning(f"⚠️ {self.name} OPEN but no first_failure_time! → HALF_OPEN")
                     self._transition_to_half_open()
                 else:
-                    elapsed = (datetime.now() - self.first_failure_time).total_seconds()
+                    elapsed = (datetime.now(timezone.utc) - self.first_failure_time).total_seconds()
                     
                     if elapsed >= self.timeout:
                         logger.info(f"🔄 {self.name} timeout expired ({elapsed:.0f}s) → HALF_OPEN")
@@ -123,7 +171,7 @@ class CircuitBreaker:
         self.state = 'HALF_OPEN'
         self.success_count = 0
         self.failure_count = 0
-        self.last_state_change = datetime.now()
+        self.last_state_change = datetime.now(timezone.utc)
     
     def _transition_to_closed(self):
         """Transition to CLOSED (normal) state"""
@@ -132,7 +180,7 @@ class CircuitBreaker:
         self.failure_count = 0
         self.success_count = 0
         self.first_failure_time = None
-        self.last_state_change = datetime.now()
+        self.last_state_change = datetime.now(timezone.utc)
         self.recoveries += 1
     
     def _transition_to_open(self, reason: str):
@@ -140,13 +188,13 @@ class CircuitBreaker:
         logger.error(f"🔴 {self.name} CRITICAL! {reason} → OPEN ({self.timeout}s timeout)")
         self.state = 'OPEN'
         self.success_count = 0
-        self.last_state_change = datetime.now()
+        self.last_state_change = datetime.now(timezone.utc)
         self.circuit_opens += 1
     
     def _handle_success(self):
         """Handle successful call"""
         self.total_successes += 1
-        self.last_success_time = datetime.now()
+        self.last_success_time = datetime.now(timezone.utc)
         
         if self.state == 'CLOSED':
             if self.failure_count > 0:
@@ -168,10 +216,10 @@ class CircuitBreaker:
         """Handle failed call"""
         self.total_failures += 1
         self.failure_count += 1
-        self.last_failure_time = datetime.now()
+        self.last_failure_time = datetime.now(timezone.utc)
         
         if self.first_failure_time is None:
-            self.first_failure_time = datetime.now()
+            self.first_failure_time = datetime.now(timezone.utc)
         
         if self.state == 'CLOSED':
             if self.failure_count >= self.failure_threshold:
@@ -182,7 +230,7 @@ class CircuitBreaker:
                 logger.warning(f"⚠️ {self.name} failed ({self.failure_count}/{self.failure_threshold})")
         
         elif self.state == 'HALF_OPEN':
-            self.first_failure_time = datetime.now()
+            self.first_failure_time = datetime.now(timezone.utc)
             self._transition_to_open("HALF_OPEN test failed")
     
     def reset(self):
@@ -193,16 +241,16 @@ class CircuitBreaker:
             self.failure_count = 0
             self.success_count = 0
             self.first_failure_time = None
-            self.last_state_change = datetime.now()
+            self.last_state_change = datetime.now(timezone.utc)
     
     def get_status(self) -> dict:
         """Get circuit breaker status"""
         with self._lock:
             uptime = None
             if self.last_success_time:
-                uptime = (datetime.now() - self.last_success_time).total_seconds()
+                uptime = (datetime.now(timezone.utc) - self.last_success_time).total_seconds()
             
-            time_in_state = (datetime.now() - self.last_state_change).total_seconds()
+            time_in_state = (datetime.now(timezone.utc) - self.last_state_change).total_seconds()
             
             success_rate = 0
             if self.total_calls > 0:
@@ -283,22 +331,24 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
         _scheduler = BackgroundScheduler(
             executors=executors,
             job_defaults={
-                'coalesce': Config.SCHEDULER_JOB_COALESCE,
-                'max_instances': Config.SCHEDULER_MAX_INSTANCES,
+                'coalesce': True,  # Misfire'ları birleştir
+                'max_instances': 1,  # Aynı anda sadece 1 instance
                 'misfire_grace_time': 30
             },
             timezone='UTC'
         )
         
-        # Add job
+        # Add job with PRODUCTION-READY settings
         _scheduler.add_job(
             fetch_all_data,
             'interval',
             seconds=Config.UPDATE_INTERVAL,
             id='sync_financial_data',
             name='Financial Data Sync',
-            replace_existing=True,
-            next_run_time=datetime.now()
+            replace_existing=True,  # CRITICAL: Aynı ID'li job'ı replace et
+            coalesce=True,          # Misfire'ları birleştir
+            max_instances=1,        # Aynı anda sadece 1 instance
+            next_run_time=datetime.now(timezone.utc)
         )
         
         # Start
@@ -306,7 +356,8 @@ def start_scheduler() -> Optional[BackgroundScheduler]:
         
         logger.info(
             f"✅ Scheduler started - "
-            f"Interval: {Config.UPDATE_INTERVAL}s ({Config.UPDATE_INTERVAL / 60:.1f}min)"
+            f"Interval: {Config.UPDATE_INTERVAL}s ({Config.UPDATE_INTERVAL / 60:.1f}min), "
+            f"Max Workers: {Config.SCHEDULER_MAX_WORKERS}"
         )
         logger.info(f"📊 Circuit Breaker: {breaker.state}")
         
@@ -348,12 +399,15 @@ def stop_scheduler():
 def get_scheduler_status() -> dict:
     """Get scheduler, circuit breaker, and service status"""
     with _scheduler_lock:
-        if _scheduler is None:
+        now_utc = datetime.now(timezone.utc)
+        
+        if _scheduler is None or not _scheduler.running:
             return {
                 'scheduler_running': False,
                 'jobs': [],
                 'circuit_breaker': breaker.get_status(),
-                'financial_service_metrics': get_service_metrics()
+                'financial_service_metrics': get_service_metrics(),
+                'timestamp_utc': now_utc.isoformat()
             }
         
         jobs = []
@@ -363,7 +417,8 @@ def get_scheduler_status() -> dict:
             
             if job.next_run_time:
                 next_run = job.next_run_time.isoformat()
-                seconds_until = (job.next_run_time - datetime.now()).total_seconds()
+                # ✅ KRİTİK DÜZELTME: TimeZone Aware datetime kullan
+                seconds_until = (job.next_run_time - now_utc).total_seconds()
             
             jobs.append({
                 'id': job.id,
@@ -378,7 +433,8 @@ def get_scheduler_status() -> dict:
             'scheduler_state': _scheduler.state,
             'jobs': jobs,
             'circuit_breaker': breaker.get_status(),
-            'financial_service_metrics': get_service_metrics()
+            'financial_service_metrics': get_service_metrics(),
+            'timestamp_utc': now_utc.isoformat()
         }
 
 
@@ -386,14 +442,14 @@ def manual_trigger() -> dict:
     """Manually trigger data update"""
     logger.info("🔄 Manual data update triggered")
     
-    start_time = datetime.now()
+    start_time = datetime.now(timezone.utc)
     success = fetch_all_data()
-    duration = (datetime.now() - start_time).total_seconds()
+    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
     
     return {
         'success': success,
         'duration_seconds': duration,
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'circuit_breaker_state': breaker.state
     }
 
@@ -432,3 +488,10 @@ def handle_sigterm(signum, frame):
     os._exit(0)
 
 signal.signal(signal.SIGTERM, handle_sigterm)
+
+# ======================================
+# INITIALIZATION LOG
+# ======================================
+logger.info("🎯 Maintenance Service initialized successfully")
+logger.info(f"📋 Config Summary: UPDATE_INTERVAL={Config.UPDATE_INTERVAL}s, "
+           f"CIRCUIT_BREAKER={Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD}/{Config.CIRCUIT_BREAKER_TIMEOUT}s")
