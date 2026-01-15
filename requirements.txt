@@ -4,38 +4,34 @@
 # ======================================
 # WEB FRAMEWORK
 # ======================================
-Flask==3.0.0
-Flask-CORS==4.0.0
-Werkzeug==3.0.1
+Flask==3.0.0              # Ana web framework
+Flask-CORS==4.0.0         # CORS headers için
+Werkzeug==3.0.1           # WSGI utilities (Flask dependency)
 
 # ======================================
-# TASK SCHEDULING
+# TASK SCHEDULING & TIME (CRITICAL!)
 # ======================================
-APScheduler==3.10.4
+APScheduler==3.10.4       # Background job scheduler
+pytz==2023.3.post1        # ⏰ TIMEZONE FIX için ŞART!
 
 # ======================================
 # HTTP CLIENT
 # ======================================
-requests==2.32.3
-urllib3==2.2.0
+requests==2.32.3          # API istekleri için
+urllib3==2.2.0            # HTTP client alt yapısı
+certifi==2023.11.17       # 🔒 SSL CERT FIX için ŞART!
 
 # ======================================
 # CACHE & DATABASE
 # ======================================
-redis==5.0.1
+redis==5.0.1              # Redis cache client
 
 # ======================================
 # CONFIGURATION
 # ======================================
-python-dotenv==1.0.0
+python-dotenv==1.0.0      # .env dosyalarını okumak için
 
 # ======================================
 # WSGI SERVER (PRODUCTION)
 # ======================================
-gunicorn==21.2.0
-
-# ======================================
-# OPTIONAL: MONITORING (Opsiyonel)
-# ======================================
-# sentry-sdk[flask]==1.40.0  # Hata tracking için
-# prometheus-flask-exporter==0.22.4  # Metrik export için
+gunicorn==21.2.0          # 🚀 Production web server
