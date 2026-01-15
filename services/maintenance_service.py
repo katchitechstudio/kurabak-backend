@@ -1,15 +1,11 @@
 """
 Maintenance Service - PRODUCTION READY 🚀
 ==========================================
-✅ Circuit Breaker (Config-driven)
+✅ Circuit Breaker (Config-driven + Telegram Alert)
 ✅ Thread-Safe Scheduler
-✅ Graceful Shutdown (timeout ile)
+✅ Graceful Shutdown
 ✅ Multi-Process Safe
-✅ Memory Leak Prevention
-✅ Comprehensive Metrics
-✅ Config Validation
-✅ Optimized Scheduler Settings
-✅ Timezone Bug Fixed (Critical)
+✅ Timezone Bug Fixed
 """
 
 import logging
@@ -26,6 +22,9 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 
 from services.financial_service import sync_financial_data, get_service_metrics
 from config import Config
+
+# Telegram Monitor entegrasyonu
+from utils.telegram_monitor import telegram_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +189,10 @@ class CircuitBreaker:
         self.success_count = 0
         self.last_state_change = datetime.now(timezone.utc)
         self.circuit_opens += 1
+        
+        # 🔥 TELEGRAM ALERT EKLENDİ!
+        if telegram_monitor:
+            telegram_monitor.alert_circuit_open(self.get_status())
     
     def _handle_success(self):
         """Handle successful call"""
