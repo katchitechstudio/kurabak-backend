@@ -71,16 +71,20 @@ def setup_logging() -> logging.Logger:
     
     # JSON format for production (structured logging)
     if os.environ.get('FLASK_ENV') == 'production':
-        import json_log_formatter
-        formatter = json_log_formatter.JSONFormatter()
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(formatter)
-        
-        root_logger = logging.getLogger()
-        root_logger.addHandler(handler)
-        root_logger.setLevel(getattr(logging, log_level, logging.INFO))
-        
-        return logging.getLogger(__name__)
+        try:
+            import json_log_formatter
+            formatter = json_log_formatter.JSONFormatter()
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setFormatter(formatter)
+            
+            root_logger = logging.getLogger()
+            root_logger.addHandler(handler)
+            root_logger.setLevel(getattr(logging, log_level, logging.INFO))
+            
+            return logging.getLogger(__name__)
+        except ImportError:
+            # Fallback if json_log_formatter is not installed
+            print("⚠️ json_log_formatter not found, using standard logging")
     
     # Gunicorn integration
     if os.environ.get('GUNICORN_CMD_ARGS'):
@@ -437,11 +441,12 @@ def health() -> Tuple[Response, int]:
         ]
         
         try:
-            cache_results = get_multiple_cache(cache_keys, Config.CACHE_TTL)
+            # get_multiple_cache yerine tek tek get_cache kullan
+            currencies = get_cache(cache_keys[0], Config.CACHE_TTL)
+            golds = get_cache(cache_keys[1], Config.CACHE_TTL)
+            silvers = get_cache(cache_keys[2], Config.CACHE_TTL)
             
-            if cache_results and len(cache_results) == 3:
-                currencies, golds, silvers = cache_results
-                
+            if currencies or golds or silvers:
                 c_count = len(currencies.get('data', [])) if currencies else 0
                 g_count = len(golds.get('data', [])) if golds else 0
                 s_count = len(silvers.get('data', [])) if silvers else 0
