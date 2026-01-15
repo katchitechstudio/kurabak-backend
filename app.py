@@ -37,7 +37,8 @@ from services.maintenance_service import (
     manual_trigger
 )
 from routes.general_routes import api_bp
-from utils.cache import get_cache, get_multiple_cache, REDIS_ENABLED, redis_client
+# ✅ DÜZELTİLDİ: get_multiple_cache kaldırıldı
+from utils.cache import get_cache, REDIS_ENABLED, redis_client
 from utils.telegram_monitor import init_telegram_monitor, telegram_monitor
 
 # ======================================
