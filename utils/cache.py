@@ -9,7 +9,6 @@ Features:
 ✅ TTL-based memory cleanup
 ✅ Metrics and monitoring
 ✅ Config integration
-✅ Batch operations (multi-get)
 ✅ Connection pooling
 """
 
@@ -19,8 +18,7 @@ import logging
 import time
 import threading
 from datetime import datetime
-from typing import Optional, Any, Dict, List, Tuple, Union
-from collections import defaultdict
+from typing import Optional, Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +48,7 @@ class RedisClient:
             'ram_misses': 0,
             'connection_attempts': 0,
             'last_connection_attempt': None,
-            'last_error': None,
-            'pipeline_operations': 0,
-            'bulk_operations': 0
+            'last_error': None
         }
     
     def _create_client(self) -> Optional[Any]:
@@ -66,20 +62,17 @@ class RedisClient:
         try:
             import redis
             
-            # Connection pool oluştur
+            # Connection pool oluştur (Sade ve Güvenli Ayarlar)
             client = redis.from_url(
                 redis_url,
                 decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5,
+                socket_connect_timeout=5,  # Integer
+                socket_timeout=5,          # Integer
                 socket_keepalive=True,
                 health_check_interval=30,
                 retry_on_timeout=True,
                 max_connections=10,
-                retry_on_error=[redis.exceptions.ConnectionError],
-                socket_keepalive_options={
-                    'interval': 60,  # 60 saniyede bir keepalive
-                }
+                retry_on_error=[redis.exceptions.ConnectionError]
             )
             
             # Bağlantı testi
@@ -98,9 +91,7 @@ class RedisClient:
             return None
     
     def get_client(self) -> Optional[Any]:
-        """
-        Redis client'ı al (lazy initialization + auto-reconnect)
-        """
+        """Redis client'ı al (lazy initialization + auto-reconnect)"""
         # Zaten bağlıysa ve yakın zamanda kontrol edildiyse direkt dön
         if self._client and self._enabled:
             now = time.time()
@@ -195,25 +186,6 @@ class RedisClient:
             logger.error(f"❌ Redis DELETE hatası: {e}")
             self.metrics['redis_errors'] += 1
             return 0
-    
-    def get_info(self) -> Dict[str, Any]:
-        """Redis server info al"""
-        client = self.get_client()
-        if not client:
-            return {"status": "disabled"}
-        
-        try:
-            info = client.info()
-            return {
-                "status": "connected",
-                "version": info.get("redis_version", "unknown"),
-                "used_memory": info.get("used_memory_human", "unknown"),
-                "connected_clients": info.get("connected_clients", 0),
-                "uptime_days": info.get("uptime_in_days", 0)
-            }
-        except Exception as e:
-            logger.error(f"❌ Redis INFO hatası: {e}")
-            return {"status": "error", "error": str(e)}
 
 # ======================================
 # GLOBAL INSTANCE & INIT
@@ -234,7 +206,7 @@ REDIS_ENABLED = redis_client.is_enabled()
 class RAMCache:
     """
     Thread-safe RAM cache
-    Features: TTL-based expiration, automatic cleanup, LRU-like behavior
+    Features: TTL-based expiration, automatic cleanup
     """
     
     def __init__(self, max_size_mb: int = 50):
@@ -242,7 +214,6 @@ class RAMCache:
         self._lock = threading.RLock()
         self._last_cleanup = time.time()
         self._cleanup_interval = 60  # 1 dakikada bir cleanup
-        self._max_size_bytes = max_size_mb * 1024 * 1024
         
         # Statistics
         self._stats = {
@@ -280,23 +251,14 @@ class RAMCache:
     def set(self, key: str, data: Any) -> bool:
         """RAM'e veri yaz"""
         with self._lock:
-            # Eğer cache doluysa, temizle
-            if len(self._cache) > 1000: # Basit limit
+            # Eğer cache çok şiştiyse temizle (Basit koruma)
+            if len(self._cache) > 2000:
                 self._cache.clear()
             
             self._cache[key] = (time.time(), data)
             self._stats['total_stored'] += 1
             self._cleanup_if_needed()
             return True
-    
-    def clear(self) -> int:
-        """Tüm cache'i temizle"""
-        with self._lock:
-            count = len(self._cache)
-            self._cache.clear()
-            if count > 0:
-                logger.info(f"🗑️ RAM cache temizlendi ({count} key)")
-            return count
     
     def _cleanup_if_needed(self):
         """Expired key'leri temizle (periyodik)"""
@@ -308,7 +270,7 @@ class RAMCache:
         # Cleanup zamanı
         expired_keys = []
         for key, (timestamp, _) in list(self._cache.items()):
-            if now - timestamp > 600:
+            if now - timestamp > 600: # 10dk'dan eski her şeyi sil
                 expired_keys.append(key)
         
         for key in expired_keys:
@@ -324,9 +286,7 @@ ram_cache = RAMCache(max_size_mb=50)
 # ======================================
 
 def get_cache(key: str, ttl: Optional[int] = None) -> Optional[Any]:
-    """
-    Cache'den veri al (Redis → RAM fallback)
-    """
+    """Cache'den veri al (Redis → RAM fallback)"""
     # TTL default değeri
     if ttl is None:
         try:
@@ -350,9 +310,7 @@ def get_cache(key: str, ttl: Optional[int] = None) -> Optional[Any]:
     return ram_cache.get(key, ttl)
 
 def set_cache(key: str, data: Any, ttl: Optional[int] = None) -> bool:
-    """
-    Cache'e veri yaz (Redis + RAM fallback)
-    """
+    """Cache'e veri yaz (Redis + RAM fallback)"""
     # TTL default değeri
     if ttl is None:
         try:
@@ -386,18 +344,3 @@ def set_cache(key: str, data: Any, ttl: Optional[int] = None) -> bool:
         success = True
     
     return success
-
-def delete_cache(key: str):
-    """Cache'ten sil"""
-    if redis_client.is_enabled():
-        redis_client.delete(key)
-    # RAM'den de silmek gerekirse ram_cache.delete(key) eklenebilir ama şu an yok.
-
-def initialize_cache_system() -> bool:
-    """Başlangıç testi"""
-    logger.info("🔄 Cache sistemi başlatılıyor...")
-    if REDIS_ENABLED:
-        logger.info("✅ Redis cache aktif")
-    else:
-        logger.warning("⚠️ Redis yok, RAM fallback aktif")
-    return True
