@@ -4,9 +4,9 @@
 # ======================================
 # WEB FRAMEWORK
 # ======================================
-Flask==3.0.0              # Ana web framework
+Flask==2.3.3              # 3.0.0 çok yeni, uyumsuzluk yapabilir
 Flask-CORS==4.0.0         # CORS headers için
-Werkzeug==3.0.1           # WSGI utilities (Flask dependency)
+Werkzeug==2.3.7           # Flask 2.3.3 ile uyumlu versiyon
 
 # ======================================
 # TASK SCHEDULING & TIME (CRITICAL!)
@@ -17,14 +17,24 @@ pytz==2023.3.post1        # ⏰ TIMEZONE FIX için ŞART!
 # ======================================
 # HTTP CLIENT
 # ======================================
-requests==2.32.3          # API istekleri için
-urllib3==2.2.0            # HTTP client alt yapısı
+requests==2.31.0          # API istekleri için
+urllib3==2.0.7            # HTTP client alt yapısı
 certifi==2023.11.17       # 🔒 SSL CERT FIX için ŞART!
 
 # ======================================
 # CACHE & DATABASE
 # ======================================
 redis==5.0.1              # Redis cache client
+
+# ======================================
+# LOGGING (KRİTİK EKSİK!)
+# ======================================
+json-log-formatter==1.0.2 # app.py'de json_log_formatter için GEREKLİ!
+
+# ======================================
+# TELEGRAM (GEREKLİ!)
+# ======================================
+python-telegram-bot==20.6 # Telegram monitor için GEREKLİ!
 
 # ======================================
 # CONFIGURATION
