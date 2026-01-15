@@ -15,7 +15,7 @@ import time
 import json
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from typing import Optional, List, Any, Dict
@@ -183,9 +183,19 @@ def process_v5_data(data: dict):
         if item_type and "currency" not in item_type:
             continue
         
-        price = get_safe_float(item.get("Selling"))
-        if price <= 0:
-            price = get_safe_float(item.get("Buying"))
+        # Fiyat alımı - Selling öncelikli
+        selling_price = get_safe_float(item.get("Selling"))
+        buying_price = get_safe_float(item.get("Buying"))
+        
+        if selling_price > 0:
+            price = selling_price
+        elif buying_price > 0:
+            price = buying_price
+            logger.debug(f"⚠️ {code}: Selling yok, Buying kullanıldı")
+        else:
+            price = 0.0
+            logger.debug(f"⚠️ {code}: Fiyat bulunamadı")
+            continue
         
         if price > 0:
             currencies.append({
@@ -241,9 +251,19 @@ def process_legacy_data(data: dict):
     for code in Config.ALL_CURRENCIES:
         item = find_item(code)
         if item:
-            price = get_safe_float(item.get("Selling"))
-            if price <= 0:
-                price = get_safe_float(item.get("Buying"))
+            # Fiyat alımı - Selling öncelikli
+            selling_price = get_safe_float(item.get("Selling"))
+            buying_price = get_safe_float(item.get("Buying"))
+            
+            if selling_price > 0:
+                price = selling_price
+            elif buying_price > 0:
+                price = buying_price
+                logger.debug(f"⚠️ {code}: Selling yok, Buying kullanıldı")
+            else:
+                price = 0.0
+                logger.debug(f"⚠️ {code}: Fiyat bulunamadı")
+                continue
             
             if price > 0:
                 currencies.append({
@@ -347,6 +367,15 @@ def serve_stale_cache() -> bool:
     return False
 
 # ======================================
+# TÜRKİYE SAATİ (UTC+3)
+# ======================================
+def get_turkey_time() -> str:
+    """UTC'yi Türkiye saatine (UTC+3) çevir"""
+    utc_now = datetime.utcnow()
+    turkey_time = utc_now + timedelta(hours=3)
+    return turkey_time.strftime("%Y-%m-%d %H:%M:%S")
+
+# ======================================
 # MAIN SYNC
 # ======================================
 def sync_financial_data() -> bool:
@@ -424,7 +453,8 @@ def sync_financial_data() -> bool:
     # 5. CACHE'E KAYDET
     # -------------------------------------------------
     if not update_date:
-        update_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # TÜRKİYE SAATİ (UTC+3) - KRİTİK DÜZELTME
+        update_date = get_turkey_time()
     
     summary = calculate_summary(currencies)
     
@@ -432,6 +462,8 @@ def sync_financial_data() -> bool:
         "success": True,
         "source": source,
         "update_date": update_date,
+        "update_date_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": "UTC+3",
         "api_version": source
     }
     
@@ -447,7 +479,8 @@ def sync_financial_data() -> bool:
         f"✅ [{source}] Tamamlandı - "
         f"Döviz:{len(currencies)}/{len(Config.ALL_CURRENCIES)} "
         f"Altın:{len(golds)} Gümüş:{len(silvers)} - "
-        f"Süre:{elapsed:.2f}s"
+        f"Süre:{elapsed:.2f}s - "
+        f"TR Time:{update_date}"
     )
     
     return True
@@ -456,7 +489,8 @@ def get_service_metrics():
     """Metrik özeti"""
     stats = metrics.get()
     if stats['total_calls'] > 0:
-        stats['success_rate'] = f"{((stats['v5_success'] + stats['v4_fallback'] + stats['v3_fallback']) / stats['total_calls'] * 100):.1f}%"
+        success_count = stats['v5_success'] + stats['v4_fallback'] + stats['v3_fallback']
+        stats['success_rate'] = f"{(success_count / stats['total_calls'] * 100):.1f}%"
     return stats
 
 import atexit
