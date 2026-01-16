@@ -354,7 +354,7 @@ class Config:
         print("=" * 70)
         print(f"📱 Environment: {cls.ENVIRONMENT.upper()}")
         print(f"🐍 Python: {platform.python_version()}")
-        print(f"🌐 Server: {cls.HOST}:{runtime_port}")  # ✅ Runtime PORT kullanılıyor
+        print(f"🌐 Server: {cls.HOST}:{runtime_port}")
         
         print(f"\n⚡ API Configuration:")
         print(f"  • Primary: V5 ({cls.API_V5_TIMEOUT[0]}+{cls.API_V5_TIMEOUT[1]}s)")
@@ -461,11 +461,14 @@ class Config:
         """File logging aktif mi?"""
         return cls.is_production() and cls.LOG_FILE
 
+# ======================================
+# 🔥 BANNER DEVRE DIŞI - app.py'de gösterilecek
+# ======================================
 # Auto-validate on import
 try:
     Config.validate()
-    if not Config.DEBUG:
-        Config.display()
+    # ❌ Config.display() KALDIRILDI - PORT sorununu çözer
+    # Banner artık app.py -> initialize_application() içinde gösterilecek
 except Exception as e:
     logger.critical(f"❌ CRITICAL: Configuration validation failed: {e}")
     if Config.is_production():
