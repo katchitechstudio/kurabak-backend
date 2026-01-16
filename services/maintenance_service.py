@@ -1,5 +1,5 @@
 """
-Maintenance Service - PRODUCTION READY (FINAL) 🚀
+Maintenance Service - PRODUCTION READY (FINAL FIXED) 🚀
 ==================================================
 ✅ Circuit Breaker (Config-driven + Telegram Alert) ✅ FIXED
 ✅ Thread-Safe Scheduler
@@ -10,6 +10,7 @@ Maintenance Service - PRODUCTION READY (FINAL) 🚀
 ✅ Safe Cache Preservation
 ✅ TELEGRAM ENTEGRASYONU TAMAMLANDI ✅
 ✅ GÜNLÜK RAPOR SİSTEMİ EKLENDİ ✅
+✅ CLEANUP HATASI DÜZELTİLDİ ✅
 """
 
 import logging
@@ -26,9 +27,6 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 
 from services.financial_service import sync_financial_data, get_service_metrics
 from config import Config
-
-# ⚠️ KRİTİK DÜZELTME: Telegram monitor import'u
-from utils.telegram_monitor import init_telegram_monitor, telegram_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -48,17 +46,19 @@ _daily_report_lock = threading.Lock()
 _telegram_monitor = None
 
 # ======================================
-# TELEGRAM HELPER FUNCTIONS
+# TELEGRAM HELPER FUNCTIONS (SAFE VERSION)
 # ======================================
 
 def get_telegram_monitor():
-    """Get Telegram monitor instance safely"""
+    """Get Telegram monitor instance safely (without circular imports)"""
     global _telegram_monitor
     
     if _telegram_monitor is None:
-        # app.py'den gelmemişse kendimiz başlatalım
         try:
+            # Lazy import to avoid circular dependencies
+            from utils.telegram_monitor import init_telegram_monitor
             _telegram_monitor = init_telegram_monitor()
+            
             if _telegram_monitor:
                 logger.info("✅ Telegram monitor (maintenance) initialized")
             else:
@@ -70,14 +70,18 @@ def get_telegram_monitor():
 
 def send_telegram_notification(message: str, alert_level: str = 'info') -> bool:
     """Send notification to Telegram (with safety checks)"""
-    monitor = get_telegram_monitor()
-    if monitor:
-        try:
-            return monitor.send_message(message, alert_level)
-        except Exception as e:
-            logger.error(f"❌ Telegram notification error: {e}")
-            return False
-    return False
+    try:
+        monitor = get_telegram_monitor()
+        if monitor and hasattr(monitor, 'send_message'):
+            try:
+                return monitor.send_message(message, alert_level)
+            except Exception as e:
+                logger.error(f"❌ Telegram send error: {e}")
+                return False
+        return False
+    except Exception as e:
+        logger.error(f"❌ Telegram notification error: {e}")
+        return False
 
 # ======================================
 # CONFIG VALIDATION
@@ -327,7 +331,7 @@ class CircuitBreaker:
             return {
                 'name': self.name,
                 'state': self.state,
-                'time_in_state_seconds': time_in_state,
+                'time_in_state_seconds': round(time_in_state, 2),
                 'failure_count': self.failure_count,
                 'success_count': self.success_count,
                 'total_calls': self.total_calls,
@@ -338,7 +342,7 @@ class CircuitBreaker:
                 'success_rate': f"{success_rate:.2f}%",
                 'last_success': self.last_success_time.isoformat() if self.last_success_time else None,
                 'last_failure': self.last_failure_time.isoformat() if self.last_failure_time else None,
-                'uptime_seconds': uptime,
+                'uptime_seconds': round(uptime, 2) if uptime else None,
                 'config': {
                     'failure_threshold': self.failure_threshold,
                     'timeout': self.timeout,
@@ -369,7 +373,6 @@ def fetch_all_data_safe() -> bool:
     """
     Safe data fetch that preserves old cache if new fetch fails
     """
-    import time
     start_time = time.time()
     
     # Import'ları fonksiyon içinde yap (circular import önlemek için)
@@ -393,19 +396,14 @@ def fetch_all_data_safe() -> bool:
                 fetch_all_data_safe.last_success_notification = 0
             
             if current_time - fetch_all_data_safe.last_success_notification > 600:  # 10 dakika
-                monitor = get_telegram_monitor()
-                if monitor:
-                    try:
-                        monitor.send_message(
-                            f"✅ Otomatik güncelleme başarılı\n"
-                            f"• Kaynak: {get_service_metrics().get('source', 'unknown')}\n"
-                            f"• Süre: {time.time() - start_time:.2f}s\n"
-                            f"• Circuit Breaker: {breaker.state}",
-                            alert_level='success'
-                        )
-                        fetch_all_data_safe.last_success_notification = current_time
-                    except Exception as e:
-                        logger.error(f"Telegram notification error: {e}")
+                if send_telegram_notification(
+                    f"✅ Otomatik güncelleme başarılı\n"
+                    f"• Kaynak: {get_service_metrics().get('source', 'unknown')}\n"
+                    f"• Süre: {time.time() - start_time:.2f}s\n"
+                    f"• Circuit Breaker: {breaker.state}",
+                    alert_level='success'
+                ):
+                    fetch_all_data_safe.last_success_notification = current_time
         
         if not success:
             logger.warning("⚠️ Data fetch failed, restoring old cache...")
@@ -688,7 +686,7 @@ def _get_cooldown_status() -> dict:
     
     return {
         'cooldown_seconds': 60,
-        'cooldown_remaining_seconds': cooldown_remaining,
+        'cooldown_remaining_seconds': round(cooldown_remaining, 1),
         'last_manual_trigger_time': _last_manual_trigger_time,
         'is_available': cooldown_remaining == 0
     }
@@ -766,7 +764,7 @@ def manual_trigger() -> dict:
     
     return {
         'success': success,
-        'duration_seconds': duration,
+        'duration_seconds': round(duration, 2),
         'timestamp': datetime.now(timezone.utc).isoformat(),
         'circuit_breaker_state': breaker.state,
         'message': "Manual update completed" if success else "Manual update failed",
@@ -798,38 +796,66 @@ def safe_manual_trigger() -> dict:
     }
 
 # ======================================
-# GRACEFUL SHUTDOWN
+# GRACEFUL SHUTDOWN - FIXED VERSION ✅
 # ======================================
 
 def cleanup():
-    """Cleanup on application exit"""
+    """Cleanup on application exit - SAFE VERSION"""
     logger.info("🧹 Maintenance service cleanup started...")
     
-    # Stop scheduler
-    stop_scheduler()
-    
-    # Final metrics
-    status = breaker.get_status()
-    logger.info(
-        f"📊 Final Circuit Breaker Stats:\n"
-        f"  State: {status['state']}\n"
-        f"  Success Rate: {status['success_rate']}\n"
-        f"  Total Calls: {status['total_calls']}\n"
-        f"  Circuit Opens: {status['circuit_opens']}\n"
-        f"  Recoveries: {status['recoveries']}"
-    )
-    
-    # 🔥 TELEGRAM: Shutdown bildirimi
-    send_telegram_notification(
-        f"🛑 Sistem Kapanıyor\n"
-        f"• Uptime: {status.get('uptime_seconds', 0):.0f}s\n"
-        f"• Toplam İstek: {status['total_calls']}\n"
-        f"• Başarı Oranı: {status['success_rate']}",
-        alert_level='info'
-    )
-    
-    logger.info("✅ Maintenance service cleaned up")
+    try:
+        # 1. Stop scheduler
+        stop_scheduler()
+        
+        # 2. Final metrics
+        if 'breaker' in globals():
+            status = breaker.get_status()
+            logger.info(
+                f"📊 Final Circuit Breaker Stats:\n"
+                f"  State: {status['state']}\n"
+                f"  Success Rate: {status['success_rate']}\n"
+                f"  Total Calls: {status['total_calls']}\n"
+                f"  Circuit Opens: {status['circuit_opens']}\n"
+                f"  Recoveries: {status['recoveries']}"
+            )
+            
+            # 3. SAFE Telegram: Shutdown bildirimi
+            try:
+                # Config'e güvenli erişim
+                app_name = "KuraBak"
+                try:
+                    from config import Config
+                    app_name = Config.APP_NAME
+                except:
+                    pass
+                
+                send_telegram_notification(
+                    f"🛑 {app_name} Sistem Kapanıyor\n"
+                    f"• Toplam İstek: {status['total_calls']}\n"
+                    f"• Başarı Oranı: {status['success_rate']}\n"
+                    f"• Saat: {datetime.now(timezone.utc).strftime('%H:%M:%S')}",
+                    alert_level='info'
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Telegram shutdown notification skipped: {e}")
+        
+        # 4. Cleanup financial service sessions
+        try:
+            from services.financial_service import cleanup_sessions
+            cleanup_sessions()
+            logger.info("✅ Session cleanup completed")
+        except Exception as e:
+            logger.warning(f"⚠️ Session cleanup skipped: {e}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error during cleanup: {e}")
+    finally:
+        logger.info("✅ Maintenance service cleaned up")
 
+
+# ======================================
+# INITIALIZATION
+# ======================================
 
 # Register cleanup
 atexit.register(cleanup)
