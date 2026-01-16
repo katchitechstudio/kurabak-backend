@@ -6,6 +6,8 @@ Maintenance Service - PRODUCTION READY 🚀
 ✅ Graceful Shutdown
 ✅ Multi-Process Safe
 ✅ Timezone Bug Fixed
+✅ Manual Update Cooldown (60s) 🔥 YENİ
+✅ Safe Cache Preservation (Circular Import Fixed) 🔥 FIXED
 """
 
 import logging
@@ -14,7 +16,7 @@ import threading
 import os
 import signal
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -22,11 +24,20 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 
 from services.financial_service import sync_financial_data, get_service_metrics
 from config import Config
+# ⚠️ KRİTİK: utils.cache import'u KALDIRILDI (Circular import riski)
 
 # Telegram Monitor entegrasyonu
 from utils.telegram_monitor import telegram_monitor
 
 logger = logging.getLogger(__name__)
+
+# ======================================
+# GLOBAL VARIABLES
+# ======================================
+
+# 🔥 YENİ: Manuel update cooldown için
+_last_manual_trigger_time = 0
+_manual_trigger_lock = threading.Lock()
 
 # ======================================
 # CONFIG VALIDATION
@@ -297,13 +308,69 @@ _scheduler_lock = threading.Lock()
 _shutdown_initiated = False
 
 # ======================================
-# SCHEDULER FUNCTIONS
+# IMPROVED FETCH FUNCTIONS
 # ======================================
+
+def fetch_all_data_safe() -> bool:
+    """
+    🔥 YENİ: Safe data fetch that preserves old cache if new fetch fails
+    Prevents 503 errors during manual updates
+    """
+    import time
+    start_time = time.time()
+    
+    # ⚠️ DÖNGÜSEL IMPORT ÖNLENDİ: Import'ları fonksiyon içinde yap
+    from utils.cache import get_cache, set_cache
+    
+    # Önce mevcut cache'i yedekle
+    old_currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
+    old_golds = get_cache(Config.CACHE_KEYS['golds_all'])
+    old_silvers = get_cache(Config.CACHE_KEYS['silvers_all'])
+    
+    logger.debug(f"📦 Cache backup complete: "
+                 f"Currencies={bool(old_currencies)}, "
+                 f"Golds={bool(old_golds)}, "
+                 f"Silvers={bool(old_silvers)}")
+    
+    try:
+        success = sync_financial_data()
+        
+        if not success:
+            logger.warning("⚠️ Data fetch failed, restoring old cache...")
+            
+            # Eski cache'i geri yükle (kullanıcılar hala eski veriyi görsün)
+            if old_currencies:
+                set_cache(Config.CACHE_KEYS['currencies_all'], old_currencies, ttl=Config.CACHE_TTL)
+            if old_golds:
+                set_cache(Config.CACHE_KEYS['golds_all'], old_golds, ttl=Config.CACHE_TTL)
+            if old_silvers:
+                set_cache(Config.CACHE_KEYS['silvers_all'], old_silvers, ttl=Config.CACHE_TTL)
+            
+            logger.info("✅ Old cache restored successfully")
+        
+        duration = time.time() - start_time
+        logger.info(f"📊 Data fetch completed in {duration:.2f}s - Success: {success}")
+        
+        return success
+        
+    except Exception as e:
+        logger.error(f"❌ Critical error in data fetch: {e}", exc_info=True)
+        
+        # Eski cache'i geri yükle
+        if old_currencies:
+            set_cache(Config.CACHE_KEYS['currencies_all'], old_currencies, ttl=Config.CACHE_TTL)
+        
+        return False
+
 
 def fetch_all_data() -> bool:
     """Main data fetch function with circuit breaker protection"""
-    return breaker.call(sync_financial_data)
+    return breaker.call(fetch_all_data_safe)  # 🔥 Değişti: fetch_all_data_safe kullanıyor
 
+
+# ======================================
+# SCHEDULER FUNCTIONS
+# ======================================
 
 def start_scheduler() -> Optional[BackgroundScheduler]:
     """Start background scheduler"""
@@ -410,7 +477,8 @@ def get_scheduler_status() -> dict:
                 'jobs': [],
                 'circuit_breaker': breaker.get_status(),
                 'financial_service_metrics': get_service_metrics(),
-                'timestamp_utc': now_utc.isoformat()
+                'timestamp_utc': now_utc.isoformat(),
+                'manual_trigger_cooldown': _get_cooldown_status()
             }
         
         jobs = []
@@ -420,7 +488,6 @@ def get_scheduler_status() -> dict:
             
             if job.next_run_time:
                 next_run = job.next_run_time.isoformat()
-                # ✅ KRİTİK DÜZELTME: TimeZone Aware datetime kullan
                 seconds_until = (job.next_run_time - now_utc).total_seconds()
             
             jobs.append({
@@ -437,23 +504,104 @@ def get_scheduler_status() -> dict:
             'jobs': jobs,
             'circuit_breaker': breaker.get_status(),
             'financial_service_metrics': get_service_metrics(),
-            'timestamp_utc': now_utc.isoformat()
+            'timestamp_utc': now_utc.isoformat(),
+            'manual_trigger_cooldown': _get_cooldown_status()
         }
 
 
+def _get_cooldown_status() -> dict:
+    """Get manual trigger cooldown status"""
+    global _last_manual_trigger_time
+    current_time = time.time()
+    
+    cooldown_remaining = max(0, 60 - (current_time - _last_manual_trigger_time))
+    
+    return {
+        'cooldown_seconds': 60,
+        'cooldown_remaining_seconds': cooldown_remaining,
+        'last_manual_trigger_time': _last_manual_trigger_time,
+        'is_available': cooldown_remaining == 0
+    }
+
+
 def manual_trigger() -> dict:
-    """Manually trigger data update"""
+    """
+    🔥 YENİ: Manually trigger data update with cooldown protection
+    60 saniye cooldown ile çok sık manuel update'leri önler
+    """
+    global _last_manual_trigger_time
+    
+    with _manual_trigger_lock:
+        current_time = time.time()
+        
+        # Cooldown kontrolü (60 saniye)
+        if current_time - _last_manual_trigger_time < 60:
+            remaining = 60 - int(current_time - _last_manual_trigger_time)
+            logger.warning(f"⚠️ Manual trigger cooldown: {remaining}s remaining")
+            
+            return {
+                'success': False,
+                'duration_seconds': 0,
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'circuit_breaker_state': breaker.state,
+                'error': "Too frequent. Wait 60 seconds between manual updates.",
+                'next_available_in': remaining,
+                'cooldown_active': True
+            }
+        
+        _last_manual_trigger_time = current_time
+    
     logger.info("🔄 Manual data update triggered")
     
     start_time = datetime.now(timezone.utc)
     success = fetch_all_data()
     duration = (datetime.now(timezone.utc) - start_time).total_seconds()
     
+    # Manuel update sonrası scheduled job'u resetle (bir sonraki periyottan başlasın)
+    with _scheduler_lock:
+        if _scheduler and _scheduler.running:
+            try:
+                job = _scheduler.get_job('sync_financial_data')
+                if job:
+                    # Schedule'i manuel update sonrası sıfırla
+                    next_run = datetime.now(timezone.utc) + timedelta(seconds=Config.UPDATE_INTERVAL)
+                    job.modify(next_run_time=next_run)
+                    logger.debug(f"⏱️ Next scheduled run reset to: {next_run.isoformat()}")
+            except Exception as e:
+                logger.warning(f"Could not reset scheduler job: {e}")
+    
     return {
         'success': success,
         'duration_seconds': duration,
         'timestamp': datetime.now(timezone.utc).isoformat(),
-        'circuit_breaker_state': breaker.state
+        'circuit_breaker_state': breaker.state,
+        'message': "Manual update completed" if success else "Manual update failed",
+        'next_scheduled_in': Config.UPDATE_INTERVAL,
+        'cooldown_active': False
+    }
+
+
+def safe_manual_trigger() -> dict:
+    """
+    🔥 YENİ: Safe manual trigger - doesn't block HTTP requests
+    Hızlı response döner, update arka planda çalışır
+    """
+    # Thread'de çalıştır, hemen HTTP response dön
+    trigger_thread = threading.Thread(
+        target=manual_trigger, 
+        daemon=True,
+        name="manual_trigger_thread"
+    )
+    trigger_thread.start()
+    
+    logger.info("🚀 Manual update started in background thread")
+    
+    return {
+        'success': True,
+        'message': "Manual update started in background",
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'background_thread': True,
+        'thread_name': trigger_thread.name
     }
 
 # ======================================
@@ -498,3 +646,4 @@ signal.signal(signal.SIGTERM, handle_sigterm)
 logger.info("🎯 Maintenance Service initialized successfully")
 logger.info(f"📋 Config Summary: UPDATE_INTERVAL={Config.UPDATE_INTERVAL}s, "
            f"CIRCUIT_BREAKER={Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD}/{Config.CIRCUIT_BREAKER_TIMEOUT}s")
+logger.info(f"🛡️  Safety Features: Manual Update Cooldown=60s, Cache Backup=Enabled (Circular Import Fixed)")
