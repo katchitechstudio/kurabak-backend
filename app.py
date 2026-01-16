@@ -8,7 +8,7 @@ KuraBak Backend - v6.0 (Production Ready Edition)
 ✅ Comprehensive error handling
 ✅ Config-driven architecture
 ✅ Graceful shutdown
-✅ Telemetry & monitoring
+✅ Telemetry & monitoring (Telegram FIXED) ✅
 ✅ Security headers
 ✅ Async scheduler initialization (Render port fix)
 
@@ -42,20 +42,38 @@ from utils.cache import get_cache, REDIS_ENABLED, redis_client
 from utils.telegram_monitor import init_telegram_monitor, telegram_monitor
 
 # ======================================
-# TELEMETRY & MONITORING SETUP
+# TELEMETRY & MONITORING SETUP (FIXED)
 # ======================================
 
 def setup_telemetry():
-    """Application telemetry and monitoring initialization"""
+    """
+    Application telemetry and monitoring initialization
+    ✅ FIXED: Sets global telegram_monitor variable
+    """
+    global telegram_monitor
+    
+    logger.info("🤖 Initializing Telegram monitoring...")
+    
+    # Get token and chat_id from environment for debugging
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    
+    if not token or not chat_id:
+        logger.warning(f"📵 Telegram config missing - Token: {'Present' if token else 'Missing'}, Chat ID: {'Present' if chat_id else 'Missing'}")
+        telegram_monitor = None
+        return None
+    
     # Initialize Telegram monitor
-    telegram = init_telegram_monitor()
+    monitor = init_telegram_monitor()
     
-    if telegram:
-        logger.info("🤖 Telegram monitoring initialized")
+    if monitor:
+        logger.info(f"✅ Telegram monitoring initialized (Chat ID: {chat_id})")
+        telegram_monitor = monitor  # ✅ CRITICAL: Set global variable
+        return monitor
     else:
-        logger.warning("📵 Telegram monitoring disabled (config missing)")
-    
-    return telegram
+        logger.error("❌ Failed to initialize Telegram monitoring")
+        telegram_monitor = None
+        return None
 
 # ======================================
 # LOGGING CONFIGURATION (Production Grade)
@@ -609,19 +627,26 @@ def manual_update() -> Tuple[Response, int]:
         client_ip = request.remote_addr or "unknown"
         logger.info(f"Manual update requested by {client_ip}")
         
+        # Debug: Log Telegram status
+        logger.info(f"🔍 Telegram monitor status: {'Enabled' if telegram_monitor else 'Disabled'}")
+        
         # Trigger update through maintenance service
         result = manual_trigger()
         
         if result.get('success', False):
             # Send Telegram notification if enabled
             if telegram_monitor:
-                telegram_monitor.send_message(
-                    f"✅ Manuel güncelleme başarılı\n"
-                    f"• IP: {client_ip}\n"
-                    f"• Süre: {result.get('duration_seconds', 0):.2f}s\n"
-                    f"• Circuit Breaker: {result.get('circuit_breaker_state', 'unknown')}",
-                    alert_level='info'
-                )
+                try:
+                    success = telegram_monitor.send_message(
+                        f"✅ Manuel güncelleme başarılı\n"
+                        f"• IP: {client_ip}\n"
+                        f"• Süre: {result.get('duration_seconds', 0):.2f}s\n"
+                        f"• Circuit Breaker: {result.get('circuit_breaker_state', 'unknown')}",
+                        alert_level='info'
+                    )
+                    logger.info(f"📤 Telegram notification sent: {'Success' if success else 'Failed'}")
+                except Exception as e:
+                    logger.error(f"❌ Telegram notification error: {e}")
             
             response = {
                 "success": True,
@@ -752,6 +777,7 @@ def initialize_application():
     """
     Thread-safe application initialization
     ✅ FIX: Non-blocking scheduler start for Render
+    ✅ FIX: Telegram initialization BEFORE scheduler
     """
     with app_state._lock:
         if app_state.initialized:
@@ -762,6 +788,10 @@ def initialize_application():
             pid = os.getpid()
             worker_id = os.environ.get('GUNICORN_WORKER_ID', 'main')
             port = int(os.environ.get('PORT', 5001))
+            
+            # 🔥 CRITICAL FIX: Initialize Telegram FIRST
+            logger.info("🔧 Step 1: Setting up telemetry...")
+            setup_telemetry()
             
             # Show startup banner with correct port
             Config.display()
@@ -779,16 +809,31 @@ def initialize_application():
             ==========================================
             """)
             
-            # 1. Start scheduler (NON-BLOCKING for Render)
-            logger.info("🔄 Starting background scheduler...")
+            # 🔥 CRITICAL FIX: Send Telegram startup message BEFORE scheduler
+            if telegram_monitor:
+                try:
+                    logger.info("📤 Sending Telegram startup notification...")
+                    telegram_monitor.send_message(
+                        f"🚀 {Config.APP_NAME} Backend Started\n"
+                        f"• Version: {Config.APP_VERSION}\n"
+                        f"• Environment: {Config.ENVIRONMENT}\n"
+                        f"• Port: {port}\n"
+                        f"• Worker: {worker_id}\n"
+                        f"• Redis: {'Enabled' if REDIS_ENABLED else 'Disabled'}\n"
+                        f"• PID: {pid}",
+                        alert_level='success'
+                    )
+                    logger.info("✅ Telegram startup notification sent")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send Telegram startup notification: {e}")
+            
+            # 2. Start scheduler (NON-BLOCKING for Render)
+            logger.info("🔧 Step 2: Starting background scheduler...")
             scheduler = start_scheduler()
             if scheduler:
                 logger.info("✅ Background scheduler started")
             else:
                 logger.error("❌ Failed to start scheduler")
-            
-            # 2. Initialize telemetry
-            setup_telemetry()
             
             # 3. Register cleanup handlers
             atexit.register(cleanup_application)
@@ -797,22 +842,6 @@ def initialize_application():
             app_state.initialized = True
             
             logger.info("✅ Application initialization complete")
-            
-            # 5. Send startup notification (async, doesn't block)
-            if telegram_monitor:
-                try:
-                    telegram_monitor.send_message(
-                        f"🚀 {Config.APP_NAME} Backend Started\n"
-                        f"• Version: {Config.APP_VERSION}\n"
-                        f"• Environment: {Config.ENVIRONMENT}\n"
-                        f"• Port: {port}\n"
-                        f"• Worker: {worker_id}\n"
-                        f"• Redis: {'Enabled' if REDIS_ENABLED else 'Disabled'}\n"
-                        f"• Scheduler: {'Running' if scheduler else 'Stopped'}",
-                        alert_level='success'
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to send startup notification: {e}")
             
         except Exception as e:
             logger.critical(f"❌ Application initialization failed: {e}", exc_info=True)
@@ -853,6 +882,7 @@ def cleanup_application():
                     f"• Failed: {metrics['failed_requests']}",
                     alert_level='info'
                 )
+                logger.info("✅ Telegram shutdown notification sent")
             except Exception as e:
                 logger.warning(f"Failed to send shutdown notification: {e}")
         
