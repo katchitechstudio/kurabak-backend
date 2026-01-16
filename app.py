@@ -8,9 +8,10 @@ KuraBak Backend - v6.0 (Production Ready Edition)
 ✅ Comprehensive error handling
 ✅ Config-driven architecture
 ✅ Graceful shutdown
-✅ Telemetry & monitoring (Telegram FIXED) ✅
+✅ Telemetry & monitoring (Telegram FIXED & TESTED) ✅
 ✅ Security headers
 ✅ Async scheduler initialization (Render port fix)
+✅ Cache backup system (503 fix)
 
 Architecture: Flask + Redis + APScheduler
 Deployment: Gunicorn (Render/Docker ready)
@@ -39,41 +40,6 @@ from services.maintenance_service import (
 )
 from routes.general_routes import api_bp
 from utils.cache import get_cache, REDIS_ENABLED, redis_client
-from utils.telegram_monitor import init_telegram_monitor, telegram_monitor
-
-# ======================================
-# TELEMETRY & MONITORING SETUP (FIXED)
-# ======================================
-
-def setup_telemetry():
-    """
-    Application telemetry and monitoring initialization
-    ✅ FIXED: Sets global telegram_monitor variable
-    """
-    global telegram_monitor
-    
-    logger.info("🤖 Initializing Telegram monitoring...")
-    
-    # Get token and chat_id from environment for debugging
-    token = os.environ.get('TELEGRAM_BOT_TOKEN')
-    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-    
-    if not token or not chat_id:
-        logger.warning(f"📵 Telegram config missing - Token: {'Present' if token else 'Missing'}, Chat ID: {'Present' if chat_id else 'Missing'}")
-        telegram_monitor = None
-        return None
-    
-    # Initialize Telegram monitor
-    monitor = init_telegram_monitor()
-    
-    if monitor:
-        logger.info(f"✅ Telegram monitoring initialized (Chat ID: {chat_id})")
-        telegram_monitor = monitor  # ✅ CRITICAL: Set global variable
-        return monitor
-    else:
-        logger.error("❌ Failed to initialize Telegram monitoring")
-        telegram_monitor = None
-        return None
 
 # ======================================
 # LOGGING CONFIGURATION (Production Grade)
@@ -127,6 +93,134 @@ def setup_logging() -> logging.Logger:
     return logging.getLogger(__name__)
 
 logger = setup_logging()
+
+# ======================================
+# TELEGRAM MONITOR GLOBAL
+# ======================================
+
+# Global Telegram monitor instance
+telegram_monitor = None
+
+def setup_telemetry():
+    """
+    Application telemetry and monitoring initialization
+    🔥 FIXED: No circular imports, immediate test message
+    """
+    global telegram_monitor
+    
+    logger.info("🔧 [TELEGRAM] Initializing monitoring...")
+    
+    # Debug: Check environment variables
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    
+    logger.debug(f"🔍 [TELEGRAM] Token present: {'✅' if token else '❌'}")
+    logger.debug(f"🔍 [TELEGRAM] Chat ID present: {'✅' if chat_id else '❌'}")
+    
+    if not token or not chat_id:
+        logger.error("❌ [TELEGRAM] Missing config - Check Render environment variables!")
+        telegram_monitor = None
+        return None
+    
+    # Lazy import to avoid circular dependencies
+    try:
+        from utils.telegram_monitor import init_telegram_monitor
+        
+        # Initialize Telegram monitor
+        monitor = init_telegram_monitor()
+        
+        if monitor:
+            logger.info(f"✅ [TELEGRAM] Monitoring initialized (Chat ID: {chat_id[-4:]})")
+            telegram_monitor = monitor
+            
+            # 🔥 CRITICAL: Send immediate test message
+            try:
+                logger.info("📤 [TELEGRAM] Sending startup test message...")
+                test_success = telegram_monitor.send_message(
+                    f"🚀 {Config.APP_NAME} v{Config.APP_VERSION}\n"
+                    f"• Environment: {Config.ENVIRONMENT}\n"
+                    f"• Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                    f"• Status: Initialized successfully",
+                    'success'
+                )
+                
+                if test_success:
+                    logger.info("✅ [TELEGRAM] Startup test message sent!")
+                else:
+                    logger.warning("⚠️ [TELEGRAM] Startup test message failed (cooldown?)")
+                    
+            except Exception as e:
+                logger.error(f"❌ [TELEGRAM] Startup test error: {e}")
+            
+            return monitor
+        else:
+            logger.error("❌ [TELEGRAM] Failed to initialize monitor")
+            telegram_monitor = None
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ [TELEGRAM] Initialization error: {e}")
+        telegram_monitor = None
+        return None
+
+# ======================================
+# CACHE BACKUP SYSTEM (503 FIX)
+# ======================================
+
+def get_cache_with_fallback(key: str, ttl: int = None):
+    """
+    Get cache with stale data fallback (prevents 503 errors)
+    
+    Args:
+        key: Cache key
+        ttl: Time to live in seconds
+        
+    Returns:
+        Cached data or None
+    """
+    try:
+        # First try normal cache
+        data = get_cache(key, ttl)
+        
+        if data:
+            return data
+        
+        # If no data, try stale backup
+        stale_key = f"{key}:stale"
+        stale_data = get_cache(stale_key, 300)  # 5 minutes for stale data
+        
+        if stale_data:
+            logger.warning(f"⚠️ Using STALE cache for {key}")
+            return stale_data
+            
+        return None
+        
+    except Exception as e:
+        logger.error(f"Cache fallback error: {e}")
+        return None
+
+def set_cache_with_backup(key: str, value: Any, ttl: int = None):
+    """
+    Set cache with stale backup (prevents 503 during updates)
+    
+    Args:
+        key: Cache key
+        value: Data to cache
+        ttl: Time to live in seconds
+    """
+    try:
+        # Set normal cache
+        from utils.cache import set_cache
+        set_cache(key, value, ttl)
+        
+        # Create stale backup (longer TTL for emergencies)
+        stale_key = f"{key}:stale"
+        set_cache(stale_key, value, 600)  # 10 minutes backup
+        
+        logger.debug(f"📦 Cache set with backup: {key}")
+        
+    except Exception as e:
+        logger.error(f"Cache backup error: {e}")
 
 # ======================================
 # RATE LIMITING (Redis-based Production)
@@ -352,7 +446,7 @@ app_state = AppState()
 app.register_blueprint(api_bp)
 
 # ======================================
-# CORE ROUTES
+# CORE ROUTES (WITH CACHE FALLBACK)
 # ======================================
 
 @app.route("/", methods=["GET"])
@@ -423,13 +517,20 @@ def health() -> Tuple[Response, int]:
         "redis": {"status": "unknown", "latency_ms": None},
         "cache_data": {"status": "unknown", "counts": {}},
         "scheduler": {"status": "unknown", "running": False},
-        "data_freshness": {"status": "unknown", "age_seconds": None}
+        "data_freshness": {"status": "unknown", "age_seconds": None},
+        "telegram": {"status": "unknown"}
     }
     
     overall_healthy = True
     start_time = time.time()
     
     try:
+        # 0. Check Telegram status
+        health_checks["telegram"] = {
+            "status": "enabled" if telegram_monitor else "disabled",
+            "initialized": telegram_monitor is not None
+        }
+        
         # 1. Check Redis connectivity (if enabled)
         redis_ok = False
         redis_latency = None
@@ -452,7 +553,7 @@ def health() -> Tuple[Response, int]:
                 }
                 overall_healthy = False
         
-        # 2. Check cache data (optimized single call)
+        # 2. Check cache data (WITH FALLBACK)
         cache_keys = [
             Config.CACHE_KEYS['currencies_all'],
             Config.CACHE_KEYS['golds_all'],
@@ -460,9 +561,9 @@ def health() -> Tuple[Response, int]:
         ]
         
         try:
-            currencies = get_cache(cache_keys[0], Config.CACHE_TTL)
-            golds = get_cache(cache_keys[1], Config.CACHE_TTL)
-            silvers = get_cache(cache_keys[2], Config.CACHE_TTL)
+            currencies = get_cache_with_fallback(cache_keys[0], Config.CACHE_TTL)
+            golds = get_cache_with_fallback(cache_keys[1], Config.CACHE_TTL)
+            silvers = get_cache_with_fallback(cache_keys[2], Config.CACHE_TTL)
             
             if currencies or golds or silvers:
                 c_count = len(currencies.get('data', [])) if currencies else 0
@@ -628,7 +729,8 @@ def manual_update() -> Tuple[Response, int]:
         logger.info(f"Manual update requested by {client_ip}")
         
         # Debug: Log Telegram status
-        logger.info(f"🔍 Telegram monitor status: {'Enabled' if telegram_monitor else 'Disabled'}")
+        telegram_status = "Enabled ✅" if telegram_monitor else "Disabled ❌"
+        logger.info(f"🔍 Telegram monitor status: {telegram_status}")
         
         # Trigger update through maintenance service
         result = manual_trigger()
@@ -644,7 +746,7 @@ def manual_update() -> Tuple[Response, int]:
                         f"• Circuit Breaker: {result.get('circuit_breaker_state', 'unknown')}",
                         alert_level='info'
                     )
-                    logger.info(f"📤 Telegram notification sent: {'Success' if success else 'Failed'}")
+                    logger.info(f"📤 Telegram notification sent: {'Success ✅' if success else 'Failed ❌'}")
                 except Exception as e:
                     logger.error(f"❌ Telegram notification error: {e}")
             
@@ -761,7 +863,7 @@ def internal_error(error) -> Tuple[Response, int]:
 @app.errorhandler(Exception)
 def handle_unexpected_error(error) -> Tuple[Response, int]:
     """Catch-all exception handler"""
-    logger.critical(f"Unexpected error: {error}", exc_info=True)
+    logger.critical(f"Unexpected error: {e}", exc_info=True)
     
     return jsonify({
         "error": "Unexpected server error",
@@ -776,8 +878,7 @@ def handle_unexpected_error(error) -> Tuple[Response, int]:
 def initialize_application():
     """
     Thread-safe application initialization
-    ✅ FIX: Non-blocking scheduler start for Render
-    ✅ FIX: Telegram initialization BEFORE scheduler
+    ✅ FIX: Telegram first, then scheduler, with detailed logging
     """
     with app_state._lock:
         if app_state.initialized:
@@ -789,8 +890,11 @@ def initialize_application():
             worker_id = os.environ.get('GUNICORN_WORKER_ID', 'main')
             port = int(os.environ.get('PORT', 5001))
             
-            # 🔥 CRITICAL FIX: Initialize Telegram FIRST
-            logger.info("🔧 Step 1: Setting up telemetry...")
+            # 🔥 CRITICAL FIX 1: Telegram FIRST with detailed logging
+            logger.info("=" * 60)
+            logger.info("🔧 STEP 1: TELEGRAM INITIALIZATION")
+            logger.info("=" * 60)
+            
             setup_telemetry()
             
             # Show startup banner with correct port
@@ -809,26 +913,11 @@ def initialize_application():
             ==========================================
             """)
             
-            # 🔥 CRITICAL FIX: Send Telegram startup message BEFORE scheduler
-            if telegram_monitor:
-                try:
-                    logger.info("📤 Sending Telegram startup notification...")
-                    telegram_monitor.send_message(
-                        f"🚀 {Config.APP_NAME} Backend Started\n"
-                        f"• Version: {Config.APP_VERSION}\n"
-                        f"• Environment: {Config.ENVIRONMENT}\n"
-                        f"• Port: {port}\n"
-                        f"• Worker: {worker_id}\n"
-                        f"• Redis: {'Enabled' if REDIS_ENABLED else 'Disabled'}\n"
-                        f"• PID: {pid}",
-                        alert_level='success'
-                    )
-                    logger.info("✅ Telegram startup notification sent")
-                except Exception as e:
-                    logger.error(f"❌ Failed to send Telegram startup notification: {e}")
+            # 🔥 CRITICAL FIX 2: Scheduler AFTER Telegram
+            logger.info("=" * 60)
+            logger.info("🔧 STEP 2: SCHEDULER INITIALIZATION")
+            logger.info("=" * 60)
             
-            # 2. Start scheduler (NON-BLOCKING for Render)
-            logger.info("🔧 Step 2: Starting background scheduler...")
             scheduler = start_scheduler()
             if scheduler:
                 logger.info("✅ Background scheduler started")
@@ -838,10 +927,27 @@ def initialize_application():
             # 3. Register cleanup handlers
             atexit.register(cleanup_application)
             
-            # 4. Mark as initialized IMMEDIATELY (don't wait for first data fetch)
+            # 4. Mark as initialized
             app_state.initialized = True
             
-            logger.info("✅ Application initialization complete")
+            logger.info("=" * 60)
+            logger.info("✅ APPLICATION INITIALIZATION COMPLETE")
+            logger.info("=" * 60)
+            
+            # 🔥 CRITICAL FIX 3: Final startup notification
+            if telegram_monitor:
+                try:
+                    telegram_monitor.send_message(
+                        f"🚀 {Config.APP_NAME} Backend Fully Initialized\n"
+                        f"• Version: {Config.APP_VERSION}\n"
+                        f"• Port: {port}\n"
+                        f"• Redis: {'✅ Enabled' if REDIS_ENABLED else '⚠️ Disabled'}\n"
+                        f"• Scheduler: {'✅ Running' if scheduler else '❌ Stopped'}\n"
+                        f"• Time: {datetime.now().strftime('%H:%M:%S')}",
+                        alert_level='success'
+                    )
+                except Exception as e:
+                    logger.warning(f"Final startup notification failed: {e}")
             
         except Exception as e:
             logger.critical(f"❌ Application initialization failed: {e}", exc_info=True)
