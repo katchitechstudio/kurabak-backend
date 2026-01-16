@@ -10,6 +10,7 @@ KuraBak Backend Configuration - PRODUCTION READY
 ✅ Health Check System
 ✅ Enhanced Security
 ✅ No Hardcoded Secrets
+✅ Dynamic Port Configuration
 """
 
 import os
@@ -339,15 +340,21 @@ class Config:
     
     @classmethod
     def display(cls) -> None:
-        """Başlangıç banner'ı ve config özeti"""
+        """
+        Başlangıç banner'ı ve config özeti
+        ✅ FIX: Runtime PORT değerini dinamik olarak alır (Render uyumlu)
+        """
         import platform
+        
+        # 🔥 FIX: Runtime'da PORT'u al (Gunicorn/Render uyumlu)
+        runtime_port = int(os.environ.get("PORT", cls.PORT))
         
         print("\n" + "=" * 70)
         print(f"🚀 {cls.APP_NAME} v{cls.APP_VERSION}")
         print("=" * 70)
         print(f"📱 Environment: {cls.ENVIRONMENT.upper()}")
         print(f"🐍 Python: {platform.python_version()}")
-        print(f"🌐 Server: {cls.HOST}:{cls.PORT}")
+        print(f"🌐 Server: {cls.HOST}:{runtime_port}")  # ✅ Runtime PORT kullanılıyor
         
         print(f"\n⚡ API Configuration:")
         print(f"  • Primary: V5 ({cls.API_V5_TIMEOUT[0]}+{cls.API_V5_TIMEOUT[1]}s)")
