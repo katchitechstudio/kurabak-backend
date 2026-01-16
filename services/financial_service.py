@@ -9,6 +9,7 @@ Financial Service - PRODUCTION READY (FINAL) 🚀
 ✅ Cache-first architecture
 ✅ 20 DÖVİZ SABİT LİSTESİ (USD, EUR, GBP, ...)
 ✅ SELLING FİYAT KONTROLÜ EKLENDİ ✅
+✅ CLEANUP FIX (cleanup_sessions) ✅
 """
 
 import requests
@@ -17,6 +18,7 @@ import time
 import json
 import re
 import threading
+import atexit
 from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -182,9 +184,23 @@ def validate_selling_price(selling_price: float, buying_price: float, currency_c
         # Buying fiyatını döndür (daha güvenilir)
         return buying_price, False
     
-    # 3. Anormal yüksek fiyat kontrolü
-    if selling_price > 1000 and currency_code not in ["JPY", "KWD", "BHD", "OMR"]:
-        logger.warning(f"⚠️ {currency_code}: Anormal yüksek selling price ({selling_price})")
+    # 3. Anormal yüksek fiyat kontrolü (altınlar ve bazı dövizler için farklı limitler)
+    # Yüksek değere izin verilen kodlar
+    HIGH_VALUE_CODES = ["JPY", "KWD", "BHD", "OMR"]  # Bu dövizler yüksek olabilir
+    
+    # Altın kodları için limit yüksek tutulmalı
+    GOLD_CODES = list(POPULAR_GOLDS.keys())
+    
+    # Limit belirleme
+    if currency_code in HIGH_VALUE_CODES or currency_code in GOLD_CODES:
+        limit = 50000  # Altın ve yüksek değerli dövizler için yüksek limit
+    elif currency_code == SILVER_CODE:
+        limit = 20000  # Gümüş için orta limit
+    else:
+        limit = 1000   # Normal dövizler için düşük limit
+    
+    if selling_price > limit:
+        logger.warning(f"⚠️ {currency_code}: Anormal yüksek selling price ({selling_price} > {limit})")
         return buying_price if buying_price > 0 else 0.0, False
     
     # 4. Geçerli fiyat
@@ -691,12 +707,11 @@ def get_fixed_currencies() -> List[str]:
     return FIXED_CURRENCIES.copy()
 
 # ======================================
-# CLEANUP
+# CLEANUP - FIXED VERSION ✅
 # ======================================
 
-import atexit
-
 @atexit.register
-def cleanup():
-    logger.info("🧹 Session cleanup...")
+def cleanup_sessions():
+    """Uygulama kapanırken sessionları temizle - maintenance_service.py tarafından çağrılır"""
+    logger.info("🧹 Session cleanup (cleanup_sessions) çağrıldı...")
     session_manager.close_all()
