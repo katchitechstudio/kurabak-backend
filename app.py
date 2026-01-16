@@ -46,30 +46,8 @@ from utils.cache import get_cache, REDIS_ENABLED, redis_client
 # ======================================
 
 def setup_logging() -> logging.Logger:
-    """
-    Production-grade logging setup with Gunicorn support
-    
-    Returns:
-        logging.Logger: Configured logger instance
-    """
+    """Production-grade logging setup with Gunicorn support"""
     log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
-    
-    # JSON format for production (structured logging)
-    if os.environ.get('FLASK_ENV') == 'production':
-        try:
-            import json_log_formatter
-            formatter = json_log_formatter.JSONFormatter()
-            handler = logging.StreamHandler(sys.stdout)
-            handler.setFormatter(formatter)
-            
-            root_logger = logging.getLogger()
-            root_logger.addHandler(handler)
-            root_logger.setLevel(getattr(logging, log_level, logging.INFO))
-            
-            return logging.getLogger(__name__)
-        except ImportError:
-            # Fallback if json_log_formatter is not installed
-            print("⚠️ json_log_formatter not found, using standard logging")
     
     # Gunicorn integration
     if os.environ.get('GUNICORN_CMD_ARGS'):
@@ -81,7 +59,7 @@ def setup_logging() -> logging.Logger:
         )
         return logging.getLogger(__name__)
     
-    # Development logging
+    # Standard logging
     numeric_level = getattr(logging, log_level, logging.INFO)
     
     logging.basicConfig(
@@ -102,15 +80,12 @@ logger = setup_logging()
 telegram_monitor = None
 
 def setup_telemetry():
-    """
-    Application telemetry and monitoring initialization
-    🔥 FIXED: No circular imports, immediate test message
-    """
+    """Application telemetry and monitoring initialization"""
     global telegram_monitor
     
     logger.info("🔧 [TELEGRAM] Initializing monitoring...")
     
-    # Debug: Check environment variables
+    # Check environment variables
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
     
@@ -133,7 +108,7 @@ def setup_telemetry():
             logger.info(f"✅ [TELEGRAM] Monitoring initialized (Chat ID: {chat_id[-4:]})")
             telegram_monitor = monitor
             
-            # 🔥 CRITICAL: Send immediate test message
+            # Send immediate test message
             try:
                 logger.info("📤 [TELEGRAM] Sending startup test message...")
                 test_success = telegram_monitor.send_message(
@@ -168,16 +143,7 @@ def setup_telemetry():
 # ======================================
 
 def get_cache_with_fallback(key: str, ttl: int = None):
-    """
-    Get cache with stale data fallback (prevents 503 errors)
-    
-    Args:
-        key: Cache key
-        ttl: Time to live in seconds
-        
-    Returns:
-        Cached data or None
-    """
+    """Get cache with stale data fallback (prevents 503 errors)"""
     try:
         # First try normal cache
         data = get_cache(key, ttl)
@@ -200,14 +166,7 @@ def get_cache_with_fallback(key: str, ttl: int = None):
         return None
 
 def set_cache_with_backup(key: str, value: Any, ttl: int = None):
-    """
-    Set cache with stale backup (prevents 503 during updates)
-    
-    Args:
-        key: Cache key
-        value: Data to cache
-        ttl: Time to live in seconds
-    """
+    """Set cache with stale backup (prevents 503 during updates)"""
     try:
         # Set normal cache
         from utils.cache import set_cache
@@ -234,17 +193,7 @@ class RateLimiter:
         self.prefix = "rate_limit:"
     
     def is_rate_limited(self, key: str, limit: int, window: int) -> Tuple[bool, Dict[str, Any]]:
-        """
-        Check if request is rate limited
-        
-        Args:
-            key: Rate limit key (e.g., "update:192.168.1.1")
-            limit: Maximum requests per window
-            window: Time window in seconds
-            
-        Returns:
-            Tuple[bool, Dict]: (is_limited, rate_info)
-        """
+        """Check if request is rate limited"""
         if not self.redis:
             return False, {"remaining": limit, "reset": 0}
         
@@ -282,14 +231,7 @@ class RateLimiter:
 rate_limiter = RateLimiter(redis_client)
 
 def rate_limit(limit: int = 5, window: int = 60, key_func=None):
-    """
-    Decorator for rate limiting endpoints
-    
-    Args:
-        limit: Max requests per window
-        window: Time window in seconds
-        key_func: Function to generate rate limit key
-    """
+    """Decorator for rate limiting endpoints"""
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
@@ -509,10 +451,7 @@ def home() -> Tuple[Response, int]:
 
 @app.route("/health", methods=["GET", "HEAD"])
 def health() -> Tuple[Response, int]:
-    """
-    Comprehensive health check endpoint
-    Returns 200 if healthy, 503 if degraded
-    """
+    """Comprehensive health check endpoint"""
     health_checks = {
         "redis": {"status": "unknown", "latency_ms": None},
         "cache_data": {"status": "unknown", "counts": {}},
@@ -675,9 +614,7 @@ def health() -> Tuple[Response, int]:
 
 @app.route("/status", methods=["GET"])
 def status() -> Tuple[Response, int]:
-    """
-    Detailed system status with scheduler and circuit breaker info
-    """
+    """Detailed system status with scheduler and circuit breaker info"""
     try:
         scheduler_status = get_scheduler_status()
         
@@ -721,9 +658,7 @@ def status() -> Tuple[Response, int]:
 @app.route("/api/update", methods=["POST"])
 @rate_limit(limit=Config.RATE_LIMIT_REQUESTS, window=Config.RATE_LIMIT_WINDOW)
 def manual_update() -> Tuple[Response, int]:
-    """
-    Manual data update trigger with rate limiting
-    """
+    """Manual data update trigger with rate limiting"""
     try:
         client_ip = request.remote_addr or "unknown"
         logger.info(f"Manual update requested by {client_ip}")
@@ -863,7 +798,7 @@ def internal_error(error) -> Tuple[Response, int]:
 @app.errorhandler(Exception)
 def handle_unexpected_error(error) -> Tuple[Response, int]:
     """Catch-all exception handler"""
-    logger.critical(f"Unexpected error: {e}", exc_info=True)
+    logger.critical(f"Unexpected error: {error}", exc_info=True)
     
     return jsonify({
         "error": "Unexpected server error",
@@ -876,10 +811,7 @@ def handle_unexpected_error(error) -> Tuple[Response, int]:
 # ======================================
 
 def initialize_application():
-    """
-    Thread-safe application initialization
-    ✅ FIX: Telegram first, then scheduler, with detailed logging
-    """
+    """Thread-safe application initialization"""
     with app_state._lock:
         if app_state.initialized:
             logger.debug("Application already initialized, skipping")
@@ -959,9 +891,7 @@ def initialize_application():
 
 
 def cleanup_application():
-    """
-    Graceful application shutdown
-    """
+    """Graceful application shutdown"""
     logger.info("🛑 Application shutdown initiated")
     
     try:
