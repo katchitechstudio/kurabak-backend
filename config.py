@@ -2,7 +2,7 @@
 KuraBak Backend Configuration - PRODUCTION READY
 ================================================
 ✅ V5 Primary, V4/V3 Fallback
-✅ Regional Currencies (21 döviz)
+✅ Regional Currencies (20 döviz)  
 ✅ Agresif Circuit Breaker
 ✅ RAM Cache Limiti
 ✅ DDoS Koruması
@@ -129,8 +129,8 @@ class Config:
     UPDATE_INTERVAL = 120  # 2 dakika
     CACHE_TTL = 300        # 5 dakika
     
-    # Bayat veri toleransı (API çökerse eski veri göster)
-    STALE_CACHE_MAX_AGE = 600  # 10 dakika
+    # 🚀 KRİTİK DEĞİŞİKLİK: Bayat veri 30 dakika (API çökerse eski veri göster)
+    STALE_CACHE_MAX_AGE = 1800  # 30 dakika (10dk → 30dk)
     
     # RAM Cache limiti (memory leak önleme)
     RAM_CACHE_MAX_ENTRIES = 100
@@ -175,22 +175,23 @@ class Config:
     # ======================================
     # DATA CONFIGURATION (REGIONAL)
     # ======================================
-    # 🌍 BÖLGESEL DÖVİZLER (21 adet)
+    # 🌍 BÖLGESEL DÖVİZLER (20 adet)  🔥 GÜNCELLENDİ: 21 → 20
     REGIONAL_CURRENCIES = {
         "north_america": ["USD", "CAD"],
         "europe": ["EUR", "GBP", "CHF", "SEK", "NOK", "DKK", "PLN", "HUF"],
         "east_europe": ["RUB", "AZN", "BGN", "RON"],
         "middle_east": ["SAR", "AED", "KWD", "QAR"],
-        "asia_pacific": ["CNY", "AUD"]
+        "asia_pacific": ["CNY", "AUD"]  # 🔥 JPY ÇIKARILDI
     }
     
-    # Tüm dövizler (flat list)
+    # 🚀 KRİTİK DEĞİŞİKLİK: 20 döviz (Android ile tam uyumlu)
     ALL_CURRENCIES = [
         "USD", "CAD",  # Kuzey Amerika
         "EUR", "GBP", "CHF", "SEK", "NOK", "DKK", "PLN", "HUF",  # Avrupa
         "RUB", "AZN", "BGN", "RON",  # Doğu Avrupa
         "SAR", "AED", "KWD", "QAR",  # Orta Doğu
         "CNY", "AUD"  # Asya-Pasifik
+        # 🔥 NOT: JPY ÇIKARILDI (Android ile uyum için)
     ]
     
     # Popüler altınlar (değişmedi)
@@ -214,7 +215,7 @@ class Config:
     # ======================================
     # HEALTH CHECK & MONITORING
     # ======================================
-    HEALTH_MIN_CURRENCIES = 15  # 21'in çoğu olmalı
+    HEALTH_MIN_CURRENCIES = 15  # 20'in çoğu olmalı
     HEALTH_MIN_GOLDS = 3
     HEALTH_MIN_SILVERS = 1
     HEALTH_MAX_DATA_AGE = 300  # 5 dakika
@@ -305,8 +306,8 @@ class Config:
         security_warnings = cls.SECURITY.validate_secrets()
         warnings.extend(security_warnings)
         
-        # Döviz sayısı kontrolü
-        expected_currency_count = 21
+        # 🚀 KRİTİK DEĞİŞİKLİK: Artık 20 döviz bekliyoruz (21 değil)
+        expected_currency_count = 20  # 🔥 21 → 20
         if len(cls.ALL_CURRENCIES) != expected_currency_count:
             warnings.append(f"Döviz sayısı {expected_currency_count} olmalı, şu an: {len(cls.ALL_CURRENCIES)}")
         
@@ -365,12 +366,13 @@ class Config:
         print(f"  • Timeout: {cls.CIRCUIT_BREAKER_TIMEOUT}s")
         
         print(f"\n🌍 Data Configuration:")
-        print(f"  • Currencies: {len(cls.ALL_CURRENCIES)} regional")
+        print(f"  • Currencies: {len(cls.ALL_CURRENCIES)} regional")  # ✅ Artık 20 gösterir
         print(f"  • Golds: {len(cls.POPULAR_GOLDS)} types")
         
         print(f"\n📦 Cache & Performance:")
         print(f"  • Update Interval: {cls.UPDATE_INTERVAL}s")
         print(f"  • Cache TTL: {cls.CACHE_TTL}s")
+        print(f"  • Stale Cache: {cls.STALE_CACHE_MAX_AGE//60} dakika")  # 🔥 YENİ: 30dk gösterir
         print(f"  • Redis: {'✅ Enabled' if cls.SECURITY.has_redis() else '⚠️ RAM Fallback'}")
         
         print(f"\n🤖 Monitoring:")
