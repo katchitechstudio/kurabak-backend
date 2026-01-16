@@ -66,6 +66,7 @@ class Config:
     
     # Server Configuration
     HOST = "0.0.0.0"
+    # Render otomatik atadığı portu kullanır, yoksa 5001
     PORT = int(os.environ.get("PORT", 5001))
     WORKER_COUNT = int(os.environ.get("WORKER_COUNT", 2))
     
