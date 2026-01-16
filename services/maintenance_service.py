@@ -11,6 +11,7 @@ Maintenance Service - PRODUCTION READY (FINAL FIXED) 🚀
 ✅ TELEGRAM ENTEGRASYONU TAMAMLANDI ✅
 ✅ GÜNLÜK RAPOR SİSTEMİ EKLENDİ ✅
 ✅ CLEANUP HATASI DÜZELTİLDİ ✅
+✅ GERİYE DÖNÜK UYUMLULUK ✅
 """
 
 import logging
@@ -841,11 +842,19 @@ def cleanup():
             except Exception as e:
                 logger.warning(f"⚠️ Telegram shutdown notification skipped: {e}")
         
-        # 4. Cleanup financial service sessions
+        # 4. Cleanup financial service sessions - SAFE VERSION (GERİYE DÖNÜK UYUMLULUK)
         try:
             from services.financial_service import cleanup_sessions
             cleanup_sessions()
-            logger.info("✅ Session cleanup completed")
+            logger.info("✅ Session cleanup completed (cleanup_sessions)")
+        except ImportError:
+            # Eski versiyon için geriye dönük uyumluluk
+            try:
+                from services.financial_service import cleanup
+                cleanup()
+                logger.info("✅ Session cleanup completed (legacy cleanup)")
+            except ImportError as e:
+                logger.warning(f"⚠️ Session cleanup skipped: {e}")
         except Exception as e:
             logger.warning(f"⚠️ Session cleanup skipped: {e}")
             
