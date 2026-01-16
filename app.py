@@ -42,6 +42,26 @@ from routes.general_routes import api_bp
 from utils.cache import get_cache, REDIS_ENABLED, redis_client
 
 # ======================================
+# 🔥 ACİL TELEGRAM DEBUG - UYGULAMA BAŞLARKEN
+# ======================================
+print("\n" + "=" * 70)
+print("🚀 KURABAK BACKEND BAŞLIYOR - DEBUG MODE")
+print("=" * 70)
+
+# Kritik ortam değişkenlerini kontrol et
+token = os.environ.get('TELEGRAM_BOT_TOKEN')
+chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+
+print(f"📱 TELEGRAM_BOT_TOKEN: {'✅ VAR' if token else '❌ YOK'}")
+print(f"📱 TELEGRAM_CHAT_ID: {'✅ VAR' if chat_id else '❌ YOK'}")
+print(f"📱 TOKEN uzunluk: {len(token) if token else 0}")
+print(f"📱 CHAT_ID değeri: {chat_id}")
+print(f"📱 FLASK_ENV: {os.environ.get('FLASK_ENV', 'not set')}")
+print(f"📱 PORT: {os.environ.get('PORT', 'not set')}")
+print(f"📱 GUNICORN_CMD_ARGS: {'✅ SET' if os.environ.get('GUNICORN_CMD_ARGS') else '❌ NOT SET'}")
+print("=" * 70 + "\n")
+
+# ======================================
 # LOGGING CONFIGURATION (Production Grade)
 # ======================================
 
@@ -83,11 +103,18 @@ def setup_telemetry():
     """Application telemetry and monitoring initialization"""
     global telegram_monitor
     
-    logger.info("🔧 [TELEGRAM] Initializing monitoring...")
+    # 🔥 ACİL DEBUG
+    print("\n" + "=" * 60)
+    print("🔥 setup_telemetry() FONKSİYONU ÇAĞRILDI!")
+    print("=" * 60)
     
-    # Check environment variables
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    
+    print(f"📋 TELEGRAM_BOT_TOKEN (setup): {'✅ VAR' if token else '❌ YOK'}")
+    print(f"📋 TELEGRAM_CHAT_ID (setup): {'✅ VAR' if chat_id else '❌ YOK'}")
+    
+    logger.info("🔧 [TELEGRAM] Initializing monitoring...")
     
     logger.debug(f"🔍 [TELEGRAM] Token present: {'✅' if token else '❌'}")
     logger.debug(f"🔍 [TELEGRAM] Chat ID present: {'✅' if chat_id else '❌'}")
@@ -110,6 +137,7 @@ def setup_telemetry():
             
             # Send immediate test message
             try:
+                print("📤 TELEGRAM TEST MESAJI GÖNDERİLİYOR...")
                 logger.info("📤 [TELEGRAM] Sending startup test message...")
                 test_success = telegram_monitor.send_message(
                     f"🚀 {Config.APP_NAME} v{Config.APP_VERSION}\n"
@@ -120,23 +148,31 @@ def setup_telemetry():
                 )
                 
                 if test_success:
+                    print("✅ TELEGRAM TEST MESAJI GÖNDERİLDİ!")
                     logger.info("✅ [TELEGRAM] Startup test message sent!")
                 else:
+                    print("⚠️ TELEGRAM TEST MESAJI GÖNDERİLEMEDİ")
                     logger.warning("⚠️ [TELEGRAM] Startup test message failed (cooldown?)")
                     
             except Exception as e:
+                print(f"❌ TELEGRAM TEST HATASI: {e}")
                 logger.error(f"❌ [TELEGRAM] Startup test error: {e}")
             
             return monitor
         else:
+            print("❌ init_telegram_monitor() None döndü!")
             logger.error("❌ [TELEGRAM] Failed to initialize monitor")
             telegram_monitor = None
             return None
             
     except Exception as e:
+        print(f"❌ TELEGRAM IMPORT HATASI: {e}")
         logger.error(f"❌ [TELEGRAM] Initialization error: {e}")
         telegram_monitor = None
         return None
+    
+    finally:
+        print("=" * 60 + "\n")
 
 # ======================================
 # CACHE BACKUP SYSTEM (503 FIX)
@@ -812,8 +848,21 @@ def handle_unexpected_error(error) -> Tuple[Response, int]:
 
 def initialize_application():
     """Thread-safe application initialization"""
+    
+    # 🔥 ACİL DEBUG
+    print("\n" + "=" * 70)
+    print("🔥 initialize_application() FONKSİYONU ÇAĞRILDI!")
+    print("=" * 70)
+    
+    import os
+    print(f"📋 PID: {os.getpid()}")
+    print(f"📋 Worker: {os.environ.get('GUNICORN_WORKER_ID', 'main')}")
+    print(f"📋 PORT: {os.environ.get('PORT', '5001')}")
+    print("=" * 70)
+    
     with app_state._lock:
         if app_state.initialized:
+            print("⚠️ App zaten initialized, geçiliyor...")
             logger.debug("Application already initialized, skipping")
             return
         
@@ -823,6 +872,7 @@ def initialize_application():
             port = int(os.environ.get('PORT', 5001))
             
             # 🔥 CRITICAL FIX 1: Telegram FIRST with detailed logging
+            print("\n🔧 STEP 1: TELEGRAM INITIALIZATION")
             logger.info("=" * 60)
             logger.info("🔧 STEP 1: TELEGRAM INITIALIZATION")
             logger.info("=" * 60)
@@ -831,6 +881,19 @@ def initialize_application():
             
             # Show startup banner with correct port
             Config.display()
+            
+            print(f"""
+            🚀 Initializing {Config.APP_NAME} v{Config.APP_VERSION}
+            ==========================================
+            • PID: {pid}
+            • Worker: {worker_id}
+            • Port: {port}
+            • Environment: {Config.ENVIRONMENT.upper()}
+            • Python: {sys.version.split()[0]}
+            • Redis: {'✅ Enabled' if REDIS_ENABLED else '⚠️ Disabled (fallback)'}
+            • Telegram Monitor: {'✅ Enabled' if telegram_monitor else '❌ Disabled'}
+            ==========================================
+            """)
             
             logger.info(f"""
             🚀 Initializing {Config.APP_NAME} v{Config.APP_VERSION}
@@ -846,14 +909,17 @@ def initialize_application():
             """)
             
             # 🔥 CRITICAL FIX 2: Scheduler AFTER Telegram
+            print("\n🔧 STEP 2: SCHEDULER INITIALIZATION")
             logger.info("=" * 60)
             logger.info("🔧 STEP 2: SCHEDULER INITIALIZATION")
             logger.info("=" * 60)
             
             scheduler = start_scheduler()
             if scheduler:
+                print("✅ Background scheduler started")
                 logger.info("✅ Background scheduler started")
             else:
+                print("❌ Failed to start scheduler")
                 logger.error("❌ Failed to start scheduler")
             
             # 3. Register cleanup handlers
@@ -862,6 +928,7 @@ def initialize_application():
             # 4. Mark as initialized
             app_state.initialized = True
             
+            print("\n✅ APPLICATION INITIALIZATION COMPLETE")
             logger.info("=" * 60)
             logger.info("✅ APPLICATION INITIALIZATION COMPLETE")
             logger.info("=" * 60)
@@ -878,13 +945,17 @@ def initialize_application():
                         f"• Time: {datetime.now().strftime('%H:%M:%S')}",
                         alert_level='success'
                     )
+                    print("✅ Telegram startup notification sent")
                 except Exception as e:
+                    print(f"⚠️ Final startup notification failed: {e}")
                     logger.warning(f"Final startup notification failed: {e}")
             
         except Exception as e:
+            print(f"❌ Application initialization failed: {e}")
             logger.critical(f"❌ Application initialization failed: {e}", exc_info=True)
             if Config.is_production():
                 # Don't exit - let the app try to serve requests anyway
+                print("⚠️ Continuing despite initialization error...")
                 logger.error("Continuing despite initialization error...")
             else:
                 raise
@@ -927,7 +998,6 @@ def cleanup_application():
     except Exception as e:
         logger.error(f"❌ Error during cleanup: {e}")
 
-
 # ======================================
 # REQUEST HOOKS
 # ======================================
@@ -962,19 +1032,84 @@ def after_request(response: Response) -> Response:
     return response
 
 # ======================================
+# 🔥 KESİN ÇÖZÜM: TELEGRAM'I DOĞRUDAN BAŞLAT
+# ======================================
+
+# App başlarken TELEGRAM'I HEMEN TEST ET
+print("\n" + "=" * 70)
+print("🔥 DOĞRUDAN TELEGRAM TEST")
+print("=" * 70)
+
+token = os.environ.get('TELEGRAM_BOT_TOKEN')
+chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+
+if token and chat_id:
+    print(f"✅ Token ve Chat ID var")
+    print(f"📱 Token: {token[:20]}...")
+    print(f"📱 Chat ID: {chat_id}")
+    
+    # Direkt Telegram başlatmayı dene
+    try:
+        from utils.telegram_monitor import init_telegram_monitor
+        
+        print("🚀 init_telegram_monitor() çağrılıyor...")
+        monitor = init_telegram_monitor()
+        
+        if monitor:
+            print("✅ Telegram monitor oluşturuldu!")
+            
+            # Test mesajı gönder
+            print("📤 Test mesajı gönderiliyor...")
+            success = monitor.send_message(
+                f"🧪 DOĞRUDAN TELEGRAM TEST\n"
+                f"• Uygulama: {Config.APP_NAME}\n"
+                f"• Zaman: {datetime.now().strftime('%H:%M:%S')}\n"
+                f"• Durum: App başlıyor",
+                'success'
+            )
+            
+            if success:
+                print("🎉 TELEGRAM ÇALIŞIYOR! Test mesajı gönderildi.")
+            else:
+                print("⚠️ Telegram mesaj gönderilemedi (cooldown olabilir)")
+        else:
+            print("❌ init_telegram_monitor() None döndü!")
+    except Exception as e:
+        print(f"❌ Telegram test hatası: {e}")
+        import traceback
+        traceback.print_exc()
+else:
+    print("❌ Token veya Chat ID eksik!")
+
+print("=" * 70 + "\n")
+
+# ======================================
 # APPLICATION ENTRY POINTS
 # ======================================
 
-# 🔥 CRITICAL FIX: Background initialization for Render
-# This ensures the app starts serving HTTP immediately
+# 🔥 KESİN ÇÖZÜM: Initialize'i her durumda çağır
+print("\n" + "=" * 70)
+print("🚀 UYGULAMA BAŞLATILIYOR - KESİN ÇÖZÜM")
+print("=" * 70)
+
+# Her durumda initialize_application'ı çağır
 if os.environ.get('GUNICORN_CMD_ARGS'):
-    # Production: Start initialization in background thread
-    logger.info("✅ Gunicorn detected - starting background initialization")
-    init_thread = threading.Thread(target=initialize_application, daemon=True)
-    init_thread.start()
+    # Production: HEMEN initialize et (thread'de değil, doğrudan)
+    print("✅ Gunicorn tespit edildi - DOĞRUDAN başlatılıyor")
+    try:
+        # Direkt initialize et (thread'de değil)
+        initialize_application()
+    except Exception as e:
+        print(f"⚠️ Initialize hatası (devam ediliyor): {e}")
 elif os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     # Development with reloader
     initialize_application()
+else:
+    # Diğer tüm durumlar
+    initialize_application()
+
+print("✅ Uygulama başlatma tamamlandı")
+print("=" * 70 + "\n")
 
 # Development entry point (Local testler için)
 if __name__ == "__main__":
