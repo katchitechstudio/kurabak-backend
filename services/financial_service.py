@@ -10,6 +10,7 @@ Financial Service - PRODUCTION READY (FINAL) 🚀
 ✅ 20 DÖVİZ SABİT LİSTESİ (USD, EUR, GBP, ...)
 ✅ SELLING FİYAT KONTROLÜ EKLENDİ ✅
 ✅ CLEANUP FIX (cleanup_sessions) ✅
+✅ GÜMÜŞ FIX (GUMUS kodu) ✅
 """
 
 import requests
@@ -74,7 +75,8 @@ POPULAR_GOLDS = {
     "ATA": "Atatürk Altını"
 }
 
-SILVER_CODE = "AG"  # Gümüş kodu
+# GÜMÜŞ KODU FIX: API "GUMUS" olarak gönderiyor, "AG" değil!
+SILVER_CODE = "GUMUS"  # "AG" yerine "GUMUS" çünkü API bu şekilde gönderiyor
 
 # ======================================
 # METRICS
@@ -273,11 +275,11 @@ def get_safe_float(value: Any) -> float:
         return 0.0
 
 # ======================================
-# V5 PROCESSOR (20 DÖVİZ İLE)
+# V5 PROCESSOR (20 DÖVİZ İLE) - GÜMÜŞ FIX'Lİ
 # ======================================
 
 def process_v5_data(data: dict):
-    """V5 API parser - 20 döviz ile"""
+    """V5 API parser - 20 döviz ile (Gümüş fix'li)"""
     currencies = []
     golds = []
     silvers = []
@@ -342,7 +344,7 @@ def process_v5_data(data: dict):
                     "change_percent": round(get_safe_float(item.get("Change")), 2)
                 })
     
-    # Gümüş
+    # GÜMÜŞ FIX: API "GUMUS" olarak gönderiyor, biz de ona göre arayalım
     gumus = rates.get(SILVER_CODE)
     if gumus:
         selling_price = get_safe_float(gumus.get("Selling"))
@@ -352,7 +354,7 @@ def process_v5_data(data: dict):
         
         if valid_price > 0:
             silvers.append({
-                "code": SILVER_CODE,
+                "code": "AG",  # Mobil uygulama için standart kod
                 "name": "Gümüş",
                 "rate": round(valid_price, 4),
                 "selling_price": round(selling_price, 4) if selling_price > 0 else None,
@@ -360,15 +362,40 @@ def process_v5_data(data: dict):
                 "price_valid": is_valid,
                 "change_percent": round(get_safe_float(gumus.get("Change")), 2)
             })
+            logger.info(f"✅ Gümüş bulundu: {valid_price:.2f} TL (API kodu: {SILVER_CODE})")
+    else:
+        logger.debug(f"⚠️ Gümüş bulunamadı (aranan kod: {SILVER_CODE})")
+        # Alternatif gümüş kodlarını da kontrol edelim
+        alternative_silver_codes = ["SILVER", "AG", "GUM", "SIL"]
+        for alt_code in alternative_silver_codes:
+            alt_item = rates.get(alt_code)
+            if alt_item:
+                logger.info(f"⚠️ Gümüş alternatif kodla bulundu: {alt_code}")
+                selling_price = get_safe_float(alt_item.get("Selling"))
+                buying_price = get_safe_float(alt_item.get("Buying"))
+                
+                valid_price, is_valid = validate_selling_price(selling_price, buying_price, alt_code)
+                
+                if valid_price > 0:
+                    silvers.append({
+                        "code": "AG",
+                        "name": "Gümüş",
+                        "rate": round(valid_price, 4),
+                        "selling_price": round(selling_price, 4) if selling_price > 0 else None,
+                        "buying_price": round(buying_price, 4) if buying_price > 0 else None,
+                        "price_valid": is_valid,
+                        "change_percent": round(get_safe_float(alt_item.get("Change")), 2)
+                    })
+                break
     
     return currencies, golds, silvers
 
 # ======================================
-# V4/V3 PROCESSOR (20 DÖVİZ İLE)
+# V4/V3 PROCESSOR (20 DÖVİZ İLE) - GÜMÜŞ FIX'Lİ
 # ======================================
 
 def process_legacy_data(data: dict):
-    """V4/V3 parser - 20 döviz ile"""
+    """V4/V3 parser - 20 döviz ile (Gümüş fix'li)"""
     currencies = []
     golds = []
     silvers = []
@@ -426,17 +453,25 @@ def process_legacy_data(data: dict):
                     "change_percent": round(get_safe_float(item.get("Change")), 2)
                 })
     
-    # Gümüş
-    gumus = find_item(SILVER_CODE)
+    # GÜMÜŞ FIX: Eski API'lerde farklı kodlar olabilir
+    silver_codes_to_try = [SILVER_CODE, "AG", "GUM", "SILVER", "gumus", "silver"]
+    gumus = None
+    
+    for silver_code in silver_codes_to_try:
+        gumus = find_item(silver_code)
+        if gumus:
+            logger.debug(f"✅ Gümüş bulundu (kod: {silver_code})")
+            break
+    
     if gumus:
         selling_price = get_safe_float(gumus.get("Selling"))
         buying_price = get_safe_float(gumus.get("Buying"))
         
-        valid_price, is_valid = validate_selling_price(selling_price, buying_price, SILVER_CODE)
+        valid_price, is_valid = validate_selling_price(selling_price, buying_price, "AG")
         
         if valid_price > 0:
             silvers.append({
-                "code": SILVER_CODE,
+                "code": "AG",
                 "name": "Gümüş",
                 "rate": round(valid_price, 4),
                 "selling_price": round(selling_price, 4) if selling_price > 0 else None,
@@ -658,11 +693,18 @@ def sync_financial_data() -> bool:
     if metrics.stats['total_calls'] > 0:
         metrics.stats['avg_response_time'] = (metrics.stats['avg_response_time'] * (metrics.stats['total_calls'] - 1) + elapsed) / metrics.stats['total_calls']
     
+    # Gümüş bilgisi logla
+    silver_info = ""
+    if silvers and len(silvers) > 0:
+        silver_rate = silvers[0].get('rate', 0)
+        silver_info = f"Gümüş: {silver_rate:.2f} TL"
+    
     logger.info(
         f"✅ [{source}] Tamamlandı - "
         f"Döviz: {len(currencies)}/{len(FIXED_CURRENCIES)} "
         f"Altın: {len(golds)} Gümüş: {len(silvers)} - "
         f"Fiyat Geçerlilik: {price_stats} - "
+        f"{silver_info} - "
         f"Süre: {elapsed:.2f}s"
     )
     
@@ -675,6 +717,7 @@ def sync_financial_data() -> bool:
                 f"• Kaynak: {source}\n"
                 f"• Döviz: {len(currencies)}/{len(FIXED_CURRENCIES)}\n"
                 f"• Fiyat Geçerlilik: {price_stats}\n"
+                f"• Gümüş: {'Var' if len(silvers) > 0 else 'Yok'}\n"
                 f"• Süre: {elapsed:.2f}s",
                 alert_level='info'
             )
