@@ -398,7 +398,7 @@ def fetch_all_data_safe() -> bool:
             if current_time - fetch_all_data_safe.last_success_notification > 600:  # 10 dakika
                 if send_telegram_notification(
                     f"✅ Otomatik güncelleme başarılı\n"
-                    f"• Kaynak: {get_service_metrics().get('source', 'unknown')}\n"
+                    f"• Kaynak: {get_service_metrics().get('source') or 'unknown'}\n"
                     f"• Süre: {time.time() - start_time:.2f}s\n"
                     f"• Circuit Breaker: {breaker.state}",
                     alert_level='success'
@@ -473,6 +473,8 @@ def check_and_send_daily_report():
                     report_message += f"• V5 Başarı: `{metrics.get('v5_success', 0)}`\n"
                     report_message += f"• V4 Fallback: `{metrics.get('v4_fallback', 0)}`\n"
                     report_message += f"• Hatalar: `{metrics.get('errors', 0)}`\n\n"
+                    
+                    report_message += f"• Kaynak: `{metrics.get('source') or 'unknown'}`\n\n"
                     
                     report_message += f"*⚡ Circuit Breaker*\n"
                     report_message += f"• Durum: `{breaker_status['state']}`\n"
