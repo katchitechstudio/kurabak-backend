@@ -37,7 +37,7 @@ from services.maintenance_service import (
     manual_trigger
 )
 from routes.general_routes import api_bp
-# ✅ DÜZELTİLDİ: get_multiple_cache kaldırıldı
+# ✅ DÜZELTME: get_multiple_cache silindi, sadece var olanlar kaldı
 from utils.cache import get_cache, REDIS_ENABLED, redis_client
 from utils.telegram_monitor import init_telegram_monitor, telegram_monitor
 
@@ -889,26 +889,26 @@ def after_request(response: Response) -> Response:
 # APPLICATION ENTRY POINTS
 # ======================================
 
-# Development entry point
+# Production entry point (Gunicorn)
+if os.environ.get('GUNICORN_CMD_ARGS') or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    # Sadece ana worker başlatsın
+    worker_id = os.environ.get('GUNICORN_WORKER_ID')
+    if worker_id is None or worker_id == '0':
+        initialize_application()
+
+# Development entry point (Local testler için)
 if __name__ == "__main__":
     initialize_application()
     
-    port = Config.PORT
-    debug = Config.DEBUG
+    # Environment'dan PORT al, yoksa 10000 kullan
+    port = int(os.environ.get('PORT', 10000))
+    debug = Config.ENVIRONMENT != 'production'
     
     logger.info(f"🌍 Starting development server on port {port} (debug={debug})")
     
     app.run(
-        host=Config.HOST,
+        host='0.0.0.0',
         port=port,
         debug=debug,
         use_reloader=False  # Disable reloader to prevent double initialization
     )
-
-else:
-    # Production entry point (Gunicorn)
-    # Initialize only in the main process or first worker
-    worker_id = os.environ.get('GUNICORN_WORKER_ID')
-    
-    if worker_id is None or worker_id == '0' or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-        initialize_application()
