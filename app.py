@@ -1084,35 +1084,65 @@ else:
 print("=" * 70 + "\n")
 
 # ======================================
-# APPLICATION ENTRY POINTS
+# 🔥🔥🔥 PORT FIX: RENDER İÇİN ASENKRON BAŞLATMA
 # ======================================
 
-# 🔥 KESİN ÇÖZÜM: Initialize'i her durumda çağır
+# App başlarken PORT HEMEN AÇILSIN, ağır işler ARKA PLANDAN yapılsın
 print("\n" + "=" * 70)
-print("🚀 UYGULAMA BAŞLATILIYOR - KESİN ÇÖZÜM")
+print("🚀 RENDER PORT FIX - ASENKRON BAŞLATMA")
 print("=" * 70)
 
-# Her durumda initialize_application'ı çağır
+# Her durumda initialize_application'ı çağır, ama Render'da ASENKRON yap
 if os.environ.get('GUNICORN_CMD_ARGS'):
-    # Production: HEMEN initialize et (thread'de değil, doğrudan)
-    print("✅ Gunicorn tespit edildi - DOĞRUDAN başlatılıyor")
-    try:
-        # Direkt initialize et (thread'de değil)
-        initialize_application()
-    except Exception as e:
-        print(f"⚠️ Initialize hatası (devam ediliyor): {e}")
+    # Production: Render'da portu hemen aç, işleri arka planda yap
+    print("✅ Gunicorn tespit edildi - ASENKRON başlatılıyor")
+    
+    def async_initialize():
+        """Arka planda ağır işleri yapar, Flask'ı bloklamaz"""
+        try:
+            # Render'ın portu bulması için 2 saniye bekle
+            time.sleep(2)
+            print("🔄 Arka plan başlatma başlıyor...")
+            initialize_application()
+        except Exception as e:
+            print(f"⚠️ Arka plan başlatma hatası: {e}")
+    
+    # Ağır işleri arka plan thread'ine al
+    init_thread = threading.Thread(target=async_initialize, daemon=True)
+    init_thread.start()
+    print("✅ Flask ANINDA ayağa kalktı, arka plan işlemleri başlatıldı")
+    
 elif os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     # Development with reloader
+    print("🛠️ Development modu - Doğrudan başlatılıyor")
     initialize_application()
 else:
     # Diğer tüm durumlar
+    print("🔧 Standart mod - Doğrudan başlatılıyor")
     initialize_application()
 
-print("✅ Uygulama başlatma tamamlandı")
+print("✅ Uygulama başlatma başlatıldı")
 print("=" * 70 + "\n")
 
-# Development entry point (Local testler için)
+# ======================================
+# CRITICAL: HEMEN RESPONSE VEREN ROUTE
+# ======================================
+@app.route("/api/instant", methods=["GET"])
+def instant():
+    """Render port taraması için ANINDA cevap veren route"""
+    return jsonify({
+        "status": "ready",
+        "message": "Application is starting up",
+        "timestamp": datetime.now().isoformat(),
+        "port": os.environ.get('PORT', '10000')
+    }), 200
+
+# ======================================
+# DEVELOPMENT ENTRY POINT
+# ======================================
+
 if __name__ == "__main__":
+    # Development: Doğrudan başlat
     initialize_application()
     
     # Environment'dan PORT al, yoksa 5001 kullan
