@@ -10,6 +10,7 @@ KuraBak Backend - v6.0 (Production Ready Edition)
 ✅ Graceful shutdown
 ✅ Telemetry & monitoring
 ✅ Security headers
+✅ Async scheduler initialization (Render port fix)
 
 Architecture: Flask + Redis + APScheduler
 Deployment: Gunicorn (Render/Docker ready)
@@ -20,10 +21,10 @@ import os
 import sys
 import atexit
 import time
+import threading
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Dict, List, Any, Optional, Tuple
-import threading
 
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
@@ -37,7 +38,6 @@ from services.maintenance_service import (
     manual_trigger
 )
 from routes.general_routes import api_bp
-# ✅ DÜZELTME: get_multiple_cache silindi, sadece var olanlar kaldı
 from utils.cache import get_cache, REDIS_ENABLED, redis_client
 from utils.telegram_monitor import init_telegram_monitor, telegram_monitor
 
@@ -442,7 +442,6 @@ def health() -> Tuple[Response, int]:
         ]
         
         try:
-            # get_multiple_cache yerine tek tek get_cache kullan
             currencies = get_cache(cache_keys[0], Config.CACHE_TTL)
             golds = get_cache(cache_keys[1], Config.CACHE_TTL)
             silvers = get_cache(cache_keys[2], Config.CACHE_TTL)
@@ -752,7 +751,7 @@ def handle_unexpected_error(error) -> Tuple[Response, int]:
 def initialize_application():
     """
     Thread-safe application initialization
-    Ensures single initialization in multi-worker environments
+    ✅ FIX: Non-blocking scheduler start for Render
     """
     with app_state._lock:
         if app_state.initialized:
@@ -762,12 +761,17 @@ def initialize_application():
         try:
             pid = os.getpid()
             worker_id = os.environ.get('GUNICORN_WORKER_ID', 'main')
+            port = int(os.environ.get('PORT', 5001))
+            
+            # Show startup banner with correct port
+            Config.display()
             
             logger.info(f"""
             🚀 Initializing {Config.APP_NAME} v{Config.APP_VERSION}
             ==========================================
             • PID: {pid}
             • Worker: {worker_id}
+            • Port: {port}
             • Environment: {Config.ENVIRONMENT.upper()}
             • Python: {sys.version.split()[0]}
             • Redis: {'✅ Enabled' if REDIS_ENABLED else '⚠️ Disabled (fallback)'}
@@ -775,7 +779,8 @@ def initialize_application():
             ==========================================
             """)
             
-            # 1. Start scheduler
+            # 1. Start scheduler (NON-BLOCKING for Render)
+            logger.info("🔄 Starting background scheduler...")
             scheduler = start_scheduler()
             if scheduler:
                 logger.info("✅ Background scheduler started")
@@ -788,30 +793,32 @@ def initialize_application():
             # 3. Register cleanup handlers
             atexit.register(cleanup_application)
             
-            # 4. Perform initial health check
-            logger.info("🏥 Performing initial system health check...")
-            
-            # 5. Mark as initialized
+            # 4. Mark as initialized IMMEDIATELY (don't wait for first data fetch)
             app_state.initialized = True
             
             logger.info("✅ Application initialization complete")
             
-            # 6. Send startup notification
+            # 5. Send startup notification (async, doesn't block)
             if telegram_monitor:
-                telegram_monitor.send_message(
-                    f"🚀 {Config.APP_NAME} Backend Started\n"
-                    f"• Version: {Config.APP_VERSION}\n"
-                    f"• Environment: {Config.ENVIRONMENT}\n"
-                    f"• Worker: {worker_id}\n"
-                    f"• Redis: {'Enabled' if REDIS_ENABLED else 'Disabled'}\n"
-                    f"• Scheduler: {'Running' if scheduler else 'Stopped'}",
-                    alert_level='success'
-                )
+                try:
+                    telegram_monitor.send_message(
+                        f"🚀 {Config.APP_NAME} Backend Started\n"
+                        f"• Version: {Config.APP_VERSION}\n"
+                        f"• Environment: {Config.ENVIRONMENT}\n"
+                        f"• Port: {port}\n"
+                        f"• Worker: {worker_id}\n"
+                        f"• Redis: {'Enabled' if REDIS_ENABLED else 'Disabled'}\n"
+                        f"• Scheduler: {'Running' if scheduler else 'Stopped'}",
+                        alert_level='success'
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send startup notification: {e}")
             
         except Exception as e:
             logger.critical(f"❌ Application initialization failed: {e}", exc_info=True)
             if Config.is_production():
-                sys.exit(1)
+                # Don't exit - let the app try to serve requests anyway
+                logger.error("Continuing despite initialization error...")
             else:
                 raise
 
@@ -838,13 +845,16 @@ def cleanup_application():
         
         # 3. Send shutdown notification
         if telegram_monitor:
-            telegram_monitor.send_message(
-                f"🛑 {Config.APP_NAME} Backend Shutting Down\n"
-                f"• Uptime: {app_state.get_uptime():.2f}s\n"
-                f"• Total Requests: {metrics['total_requests']}\n"
-                f"• Failed: {metrics['failed_requests']}",
-                alert_level='info'
-            )
+            try:
+                telegram_monitor.send_message(
+                    f"🛑 {Config.APP_NAME} Backend Shutting Down\n"
+                    f"• Uptime: {app_state.get_uptime():.2f}s\n"
+                    f"• Total Requests: {metrics['total_requests']}\n"
+                    f"• Failed: {metrics['failed_requests']}",
+                    alert_level='info'
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send shutdown notification: {e}")
         
         logger.info("✅ Application shutdown complete")
         
@@ -889,19 +899,23 @@ def after_request(response: Response) -> Response:
 # APPLICATION ENTRY POINTS
 # ======================================
 
-# Production entry point (Gunicorn)
-if os.environ.get('GUNICORN_CMD_ARGS') or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-    # Sadece ana worker başlatsın
-    worker_id = os.environ.get('GUNICORN_WORKER_ID')
-    if worker_id is None or worker_id == '0':
-        initialize_application()
+# 🔥 CRITICAL FIX: Background initialization for Render
+# This ensures the app starts serving HTTP immediately
+if os.environ.get('GUNICORN_CMD_ARGS'):
+    # Production: Start initialization in background thread
+    logger.info("✅ Gunicorn detected - starting background initialization")
+    init_thread = threading.Thread(target=initialize_application, daemon=True)
+    init_thread.start()
+elif os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    # Development with reloader
+    initialize_application()
 
 # Development entry point (Local testler için)
 if __name__ == "__main__":
     initialize_application()
     
-    # Environment'dan PORT al, yoksa 10000 kullan
-    port = int(os.environ.get('PORT', 10000))
+    # Environment'dan PORT al, yoksa 5001 kullan
+    port = int(os.environ.get('PORT', 5001))
     debug = Config.ENVIRONMENT != 'production'
     
     logger.info(f"🌍 Starting development server on port {port} (debug={debug})")
