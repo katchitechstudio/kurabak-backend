@@ -1,888 +1,308 @@
 """
-Maintenance Service - PRODUCTION READY (FINAL FIXED) 🚀
-==================================================
-✅ Circuit Breaker (Config-driven + Telegram Alert) ✅ FIXED
-✅ Thread-Safe Scheduler
-✅ Graceful Shutdown
-✅ Multi-Process Safe
-✅ Timezone Bug Fixed
-✅ Manual Update Cooldown (60s)
-✅ Safe Cache Preservation
-✅ TELEGRAM ENTEGRASYONU TAMAMLANDI ✅
-✅ GÜNLÜK RAPOR SİSTEMİ EKLENDİ ✅
-✅ CLEANUP HATASI DÜZELTİLDİ ✅
-✅ GERİYE DÖNÜK UYUMLULUK ✅
+Maintenance Service - PRODUCTION READY (ULTIMATE EDITION) 🚀
+===========================================================
+✅ SCHEDULER: Otomatik güncelleme motoru (APScheduler)
+✅ CIRCUIT BREAKER: Hata durumunda sistemi koruyan sigorta
+✅ MANUAL TRIGGER: Admin/API tetiklemeleri için güvenli kapı
+✅ DAILY REPORT: Günlük özet raporlama sistemi (Circuit Breaker dahil)
+✅ THREAD-SAFE: Çoklu işlem (Worker) uyumlu yapı
+✅ TELEGRAM INTEGRATION: Kritik durumlarda bildirim gönderir
 """
 
 import logging
-import atexit
 import threading
-import os
-import signal
 import time
+import atexit
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
+# Servisler ve Config
 from services.financial_service import sync_financial_data, get_service_metrics
 from config import Config
 
 logger = logging.getLogger(__name__)
 
 # ======================================
-# GLOBAL VARIABLES
+# GLOBAL DEĞİŞKENLER & KİLİTLER
 # ======================================
 
-# Manuel update cooldown
-_last_manual_trigger_time = 0
-_manual_trigger_lock = threading.Lock()
+_scheduler: Optional[BackgroundScheduler] = None
+_scheduler_lock = threading.Lock()
 
-# Günlük rapor için
-_last_daily_report_time = None
-_daily_report_lock = threading.Lock()
-
-# Global Telegram monitor instance (app.py'den geliyor)
-_telegram_monitor = None
+# Manuel tetikleme için cooldown
+_last_manual_time = 0
+_manual_lock = threading.Lock()
 
 # ======================================
-# TELEGRAM HELPER FUNCTIONS (SAFE VERSION)
-# ======================================
-
-def get_telegram_monitor():
-    """Get Telegram monitor instance safely (without circular imports)"""
-    global _telegram_monitor
-    
-    if _telegram_monitor is None:
-        try:
-            # Lazy import to avoid circular dependencies
-            from utils.telegram_monitor import init_telegram_monitor
-            _telegram_monitor = init_telegram_monitor()
-            
-            if _telegram_monitor:
-                logger.info("✅ Telegram monitor (maintenance) initialized")
-            else:
-                logger.warning("⚠️ Telegram monitor initialization failed")
-        except Exception as e:
-            logger.error(f"❌ Telegram monitor error: {e}")
-    
-    return _telegram_monitor
-
-def send_telegram_notification(message: str, alert_level: str = 'info') -> bool:
-    """Send notification to Telegram (with safety checks)"""
-    try:
-        monitor = get_telegram_monitor()
-        if monitor and hasattr(monitor, 'send_message'):
-            try:
-                return monitor.send_message(message, alert_level)
-            except Exception as e:
-                logger.error(f"❌ Telegram send error: {e}")
-                return False
-        return False
-    except Exception as e:
-        logger.error(f"❌ Telegram notification error: {e}")
-        return False
-
-# ======================================
-# CONFIG VALIDATION
-# ======================================
-
-def validate_service_config():
-    """Validate critical configuration values on startup"""
-    warnings = []
-    errors = []
-    
-    # UPDATE_INTERVAL validation
-    if Config.UPDATE_INTERVAL < 30:
-        warnings.append(f"UPDATE_INTERVAL ({Config.UPDATE_INTERVAL}s) düşük! Production için 60s+ önerilir.")
-    
-    # CIRCUIT BREAKER validation
-    if Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD < 2:
-        errors.append(f"CIRCUIT_BREAKER_FAILURE_THRESHOLD ({Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD}) çok düşük! Minimum 2.")
-    
-    if Config.CIRCUIT_BREAKER_TIMEOUT < 60:
-        errors.append(f"CIRCUIT_BREAKER_TIMEOUT ({Config.CIRCUIT_BREAKER_TIMEOUT}s) çok kısa! Minimum 60s.")
-    
-    if Config.CIRCUIT_BREAKER_HALF_OPEN_SUCCESS < 2:
-        errors.append(f"CIRCUIT_BREAKER_HALF_OPEN_SUCCESS ({Config.CIRCUIT_BREAKER_HALF_OPEN_SUCCESS}) düşük! Minimum 2.")
-    
-    # SCHEDULER validation
-    if Config.SCHEDULER_MAX_WORKERS < 1:
-        errors.append(f"SCHEDULER_MAX_WORKERS ({Config.SCHEDULER_MAX_WORKERS}) geçersiz! Minimum 1.")
-    
-    if Config.SCHEDULER_MAX_INSTANCES < 1:
-        errors.append(f"SCHEDULER_MAX_INSTANCES ({Config.SCHEDULER_MAX_INSTANCES}) geçersiz! Minimum 1.")
-    
-    # Log results
-    for warning in warnings:
-        logger.warning(f"⚠️ Config Warning: {warning}")
-    
-    if errors:
-        for error in errors:
-            logger.error(f"❌ Config Error: {error}")
-        raise ValueError("Critical configuration errors detected!")
-    
-    logger.info("✅ Service configuration validated successfully")
-
-# Run validation on import
-validate_service_config()
-
-# ======================================
-# CIRCUIT BREAKER (IMPROVED WITH TELEGRAM)
+# CIRCUIT BREAKER (SİGORTA)
 # ======================================
 
 class CircuitBreaker:
     """
-    Production-Grade Circuit Breaker Pattern with Telegram integration
+    Sistem üst üste hata alırsa 'Açık' duruma geçer.
+    Belirli süre sonra 'Yarı Açık' olup tekrar dener.
     """
-    
-    def __init__(
-        self, 
-        name: str, 
-        failure_threshold: int = 5,
-        timeout: int = 300,
-        half_open_success_threshold: int = 3
-    ):
-        self.name = name
-        self.failure_threshold = failure_threshold
-        self.timeout = timeout
-        self.half_open_success_threshold = half_open_success_threshold
-        
-        # State
-        self.state = 'CLOSED'
+    def __init__(self):
         self.failure_count = 0
-        self.success_count = 0
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self.last_failure_time = 0
+        self.lock = threading.Lock()
         
-        # Timing
-        self.first_failure_time = None
-        self.last_failure_time = None
-        self.last_success_time = None
-        self.last_state_change = datetime.now(timezone.utc)
-        
-        # Metrics
-        self.total_calls = 0
-        self.total_failures = 0
-        self.total_successes = 0
-        self.circuit_opens = 0
-        self.recoveries = 0
-        
-        # Thread safety
-        self._lock = threading.Lock()
-        
-        logger.info(
-            f"🔧 Circuit Breaker: {name} "
-            f"(threshold={failure_threshold}, timeout={timeout}s, half_open={half_open_success_threshold})"
-        )
-    
-    def call(self, func) -> bool:
-        """Execute function with circuit breaker protection"""
-        with self._lock:
-            self.total_calls += 1
-            current_state = self.state
+        # Config'den limitleri al
+        self.threshold = Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD
+        self.timeout = Config.CIRCUIT_BREAKER_TIMEOUT
+
+    def can_execute(self) -> bool:
+        """İşlem yapılabilir mi?"""
+        with self.lock:
+            if self.state == "CLOSED":
+                return True
             
-            # OPEN state: Check timeout
-            if current_state == 'OPEN':
-                if not self.first_failure_time:
-                    logger.warning(f"⚠️ {self.name} OPEN but no first_failure_time! → HALF_OPEN")
-                    self._transition_to_half_open()
-                else:
-                    elapsed = (datetime.now(timezone.utc) - self.first_failure_time).total_seconds()
-                    
-                    if elapsed >= self.timeout:
-                        logger.info(f"🔄 {self.name} timeout expired ({elapsed:.0f}s) → HALF_OPEN")
-                        self._transition_to_half_open()
-                    else:
-                        remaining = int(self.timeout - elapsed)
-                        if self.total_calls % 10 == 0:
-                            logger.warning(f"⚠️ {self.name} OPEN - {remaining}s remaining")
-                        return False
-        
-        # Execute function (outside lock to prevent blocking)
-        try:
-            result = func()
-            
-            with self._lock:
-                if result:
-                    self._handle_success()
-                else:
-                    self._handle_failure()
+            # Sigorta açıksa, süre doldu mu?
+            if self.state == "OPEN":
+                if time.time() - self.last_failure_time > self.timeout:
+                    self.state = "HALF_OPEN"
+                    logger.info("🟡 Circuit Breaker: HALF_OPEN (İyileşme testi)")
+                    return True
+                return False
                 
-                return result
-        
-        except Exception as e:
-            logger.error(f"❌ {self.name} exception: {type(e).__name__}: {str(e)}", exc_info=True)
-            with self._lock:
-                self._handle_failure()
-            return False
-    
-    def _transition_to_half_open(self):
-        """Transition to HALF_OPEN state"""
-        self.state = 'HALF_OPEN'
-        self.success_count = 0
-        self.failure_count = 0
-        self.last_state_change = datetime.now(timezone.utc)
-        logger.info(f"🟡 {self.name} → HALF_OPEN (recovery test)")
-    
-    def _transition_to_closed(self):
-        """Transition to CLOSED (normal) state"""
-        logger.info(f"🎉 {self.name} fully recovered! → CLOSED")
-        self.state = 'CLOSED'
-        self.failure_count = 0
-        self.success_count = 0
-        self.first_failure_time = None
-        self.last_state_change = datetime.now(timezone.utc)
-        self.recoveries += 1
-        
-        # 🔥 TELEGRAM: Recovery bildirimi
-        send_telegram_notification(
-            f"✅ Circuit Breaker RECOVERED!\n"
-            f"• Sistem: {self.name}\n"
-            f"• Recovery #{self.recoveries}\n"
-            f"• Başarı Oranı: {self.get_status()['success_rate']}",
-            alert_level='success'
-        )
-    
-    def _transition_to_open(self, reason: str):
-        """Transition to OPEN (circuit broken) state"""
-        logger.error(f"🔴 {self.name} CRITICAL! {reason} → OPEN ({self.timeout}s timeout)")
-        self.state = 'OPEN'
-        self.success_count = 0
-        self.last_state_change = datetime.now(timezone.utc)
-        self.circuit_opens += 1
-        
-        # 🔥 TELEGRAM: Critical alert
-        status = self.get_status()
-        send_telegram_notification(
-            f"🔴 CRITICAL - CIRCUIT BREAKER OPENED!\n\n"
-            f"*Sistem: {self.name}*\n"
-            f"• Sebep: {reason}\n"
-            f"• Hata Sayısı: {status['failure_count']}/{status['config']['failure_threshold']}\n"
-            f"• Başarı Oranı: {status['success_rate']}\n"
-            f"• Timeout: {self.timeout}s\n\n"
-            f"⚠️ Sistem koruma modunda. Otomatik iyileşme bekleniyor...",
-            alert_level='critical'
-        )
-    
-    def _handle_success(self):
-        """Handle successful call"""
-        self.total_successes += 1
-        self.last_success_time = datetime.now(timezone.utc)
-        
-        if self.state == 'CLOSED':
-            if self.failure_count > 0:
-                logger.info(f"✅ {self.name} recovered (after {self.failure_count} failures)")
-                self.failure_count = 0
-                self.first_failure_time = None
-        
-        elif self.state == 'HALF_OPEN':
-            self.success_count += 1
-            logger.info(
-                f"✅ {self.name} HALF_OPEN test success "
-                f"({self.success_count}/{self.half_open_success_threshold})"
-            )
+            # Yarı açıksa izin ver
+            return True
+
+    def record_success(self):
+        """Başarılı işlem kaydı"""
+        with self.lock:
+            if self.state != "CLOSED":
+                logger.info("🟢 Circuit Breaker: CLOSED (Sistem iyileşti)")
+                
+                # Telegram import (Circular import önlemek için)
+                try:
+                    from utils.telegram_monitor import telegram_monitor
+                    if telegram_monitor:
+                        telegram_monitor.send_message(
+                            "✅ *SİSTEM İYİLEŞTİ*\n\n"
+                            "Circuit Breaker normale döndü.\n"
+                            "Tüm servisler çalışıyor.",
+                            "success"
+                        )
+                except:
+                    pass
             
-            if self.success_count >= self.half_open_success_threshold:
-                self._transition_to_closed()
-    
-    def _handle_failure(self):
-        """Handle failed call"""
-        self.total_failures += 1
-        self.failure_count += 1
-        self.last_failure_time = datetime.now(timezone.utc)
-        
-        if self.first_failure_time is None:
-            self.first_failure_time = datetime.now(timezone.utc)
-        
-        if self.state == 'CLOSED':
-            if self.failure_count >= self.failure_threshold:
-                self._transition_to_open(
-                    f"{self.failure_count} failures (threshold={self.failure_threshold})"
-                )
-            else:
-                logger.warning(f"⚠️ {self.name} failed ({self.failure_count}/{self.failure_threshold})")
-        
-        elif self.state == 'HALF_OPEN':
-            self.first_failure_time = datetime.now(timezone.utc)
-            self._transition_to_open("HALF_OPEN test failed")
-    
-    def reset(self):
-        """Manually reset circuit breaker"""
-        with self._lock:
-            logger.info(f"🔄 {self.name} manual reset...")
-            self.state = 'CLOSED'
             self.failure_count = 0
-            self.success_count = 0
-            self.first_failure_time = None
-            self.last_state_change = datetime.now(timezone.utc)
-    
-    def get_status(self) -> dict:
-        """Get circuit breaker status"""
-        with self._lock:
-            uptime = None
-            if self.last_success_time:
-                uptime = (datetime.now(timezone.utc) - self.last_success_time).total_seconds()
+            self.state = "CLOSED"
+
+    def record_failure(self):
+        """Hata kaydı"""
+        with self.lock:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
             
-            time_in_state = (datetime.now(timezone.utc) - self.last_state_change).total_seconds()
-            
-            success_rate = 0
-            if self.total_calls > 0:
-                success_rate = (self.total_successes / self.total_calls) * 100
-            
-            return {
-                'name': self.name,
-                'state': self.state,
-                'time_in_state_seconds': round(time_in_state, 2),
-                'failure_count': self.failure_count,
-                'success_count': self.success_count,
-                'total_calls': self.total_calls,
-                'total_successes': self.total_successes,
-                'total_failures': self.total_failures,
-                'circuit_opens': self.circuit_opens,
-                'recoveries': self.recoveries,
-                'success_rate': f"{success_rate:.2f}%",
-                'last_success': self.last_success_time.isoformat() if self.last_success_time else None,
-                'last_failure': self.last_failure_time.isoformat() if self.last_failure_time else None,
-                'uptime_seconds': round(uptime, 2) if uptime else None,
-                'config': {
-                    'failure_threshold': self.failure_threshold,
-                    'timeout': self.timeout,
-                    'half_open_success_threshold': self.half_open_success_threshold
-                }
-            }
+            if self.failure_count >= self.threshold and self.state == "CLOSED":
+                self.state = "OPEN"
+                logger.error(
+                    f"🔴 Circuit Breaker: OPEN "
+                    f"(Sistem korumaya alındı. {self.timeout}s bekleme)"
+                )
+                
+                # Telegram alert
+                try:
+                    from utils.telegram_monitor import telegram_monitor
+                    if telegram_monitor:
+                        telegram_monitor.send_message(
+                            f"🔴 *SİGORTA ATTI!*\n\n"
+                            f"Üst üste {self.failure_count} hata alındı.\n"
+                            f"Sistem {self.timeout}s korumada.",
+                            "critical"
+                        )
+                except:
+                    pass
+
+breaker = CircuitBreaker()
 
 # ======================================
-# GLOBAL INSTANCES (Config-driven!)
+# GÖREVLER (JOBS)
 # ======================================
 
-breaker = CircuitBreaker(
-    name="Financial API Service",
-    failure_threshold=Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-    timeout=Config.CIRCUIT_BREAKER_TIMEOUT,
-    half_open_success_threshold=Config.CIRCUIT_BREAKER_HALF_OPEN_SUCCESS
-)
-
-_scheduler: Optional[BackgroundScheduler] = None
-_scheduler_lock = threading.Lock()
-_shutdown_initiated = False
-
-# ======================================
-# IMPROVED FETCH FUNCTIONS (WITH TELEGRAM)
-# ======================================
-
-def fetch_all_data_safe() -> bool:
+def fetch_all_data_safe():
     """
-    Safe data fetch that preserves old cache if new fetch fails
+    Zamanlayıcının çağırdığı ana fonksiyon.
+    Sigortayı kontrol eder -> Veriyi çeker.
     """
-    start_time = time.time()
-    
-    # Import'ları fonksiyon içinde yap (circular import önlemek için)
-    from utils.cache import get_cache, set_cache
-    
-    # Önce mevcut cache'i yedekle
-    old_currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
-    old_golds = get_cache(Config.CACHE_KEYS['golds_all'])
-    old_silvers = get_cache(Config.CACHE_KEYS['silvers_all'])
-    
-    logger.debug(f"📦 Cache backup complete")
-    
+    if not breaker.can_execute():
+        logger.warning("🛡️ İşlem engellendi (Circuit Breaker Aktif)")
+        return False
+
     try:
         success = sync_financial_data()
         
         if success:
-            # 🔥 TELEGRAM: Başarılı güncelleme bildirimi (cooldown ile)
-            current_time = time.time()
-            # Sadece her 10. başarılı güncellemede veya ilk başarıda bildirim
-            if not hasattr(fetch_all_data_safe, 'last_success_notification'):
-                fetch_all_data_safe.last_success_notification = 0
+            breaker.record_success()
+        else:
+            breaker.record_failure()
             
-            if current_time - fetch_all_data_safe.last_success_notification > 600:  # 10 dakika
-                if send_telegram_notification(
-                    f"✅ Otomatik güncelleme başarılı\n"
-                    f"• Kaynak: {get_service_metrics().get('source') or 'unknown'}\n"
-                    f"• Süre: {time.time() - start_time:.2f}s\n"
-                    f"• Circuit Breaker: {breaker.state}",
-                    alert_level='success'
-                ):
-                    fetch_all_data_safe.last_success_notification = current_time
-        
-        if not success:
-            logger.warning("⚠️ Data fetch failed, restoring old cache...")
-            
-            # Eski cache'i geri yükle
-            if old_currencies:
-                set_cache(Config.CACHE_KEYS['currencies_all'], old_currencies, ttl=Config.CACHE_TTL)
-            if old_golds:
-                set_cache(Config.CACHE_KEYS['golds_all'], old_golds, ttl=Config.CACHE_TTL)
-            if old_silvers:
-                set_cache(Config.CACHE_KEYS['silvers_all'], old_silvers, ttl=Config.CACHE_TTL)
-            
-            logger.info("✅ Old cache restored successfully")
-        
-        duration = time.time() - start_time
-        logger.info(f"📊 Data fetch completed in {duration:.2f}s - Success: {success}")
-        
         return success
-        
     except Exception as e:
-        logger.error(f"❌ Critical error in data fetch: {e}", exc_info=True)
-        
-        # Eski cache'i geri yükle
-        if old_currencies:
-            set_cache(Config.CACHE_KEYS['currencies_all'], old_currencies, ttl=Config.CACHE_TTL)
-        
+        logger.error(f"❌ Kritik Hata (Scheduler): {e}")
+        breaker.record_failure()
         return False
 
-
-def fetch_all_data() -> bool:
-    """Main data fetch function with circuit breaker protection"""
-    return breaker.call(fetch_all_data_safe)
-
-
-# ======================================
-# DAILY REPORT SYSTEM
-# ======================================
-
-def check_and_send_daily_report():
-    """
-    Günlük rapor kontrolü ve gönderimi
-    Her gün bir kez çalışır (saat 09:00 UTC)
-    """
-    global _last_daily_report_time
+def daily_report_job():
+    """Her sabah 09:00'da çalışan rapor job'u"""
+    # Telegram import
+    try:
+        from utils.telegram_monitor import telegram_monitor
+    except:
+        telegram_monitor = None
     
-    with _daily_report_lock:
-        now = datetime.now(timezone.utc)
+    if not telegram_monitor:
+        return
+
+    # Metrikleri al
+    metrics = get_service_metrics()
+    
+    # 🔥 Circuit Breaker Durumunu Ekle
+    cb_status = "🟢 Normal" if breaker.state == "CLOSED" else f"🔴 {breaker.state}"
+    
+    # Başarı oranı hesapla
+    total = metrics.get('v5', 0) + metrics.get('v4', 0) + metrics.get('v3', 0) + metrics.get('backup', 0)
+    success_rate = 100
+    if total > 0:
+        success_rate = ((total - metrics.get('errors', 0)) / total) * 100
+    
+    # Rapor mesajı
+    msg = (
+        f"🌙 *GÜNLÜK RAPOR* | {datetime.now().strftime('%d.%m.%Y')}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
         
-        # İlk çalıştırmada veya 24 saat geçtiyse
-        if _last_daily_report_time is None or (now - _last_daily_report_time).total_seconds() >= 86400:
-            
-            # Saat kontrolü (09:00-09:30 UTC arası)
-            hour = now.hour
-            if hour == 9:
-                logger.info("📊 Günlük rapor hazırlanıyor...")
-                
-                try:
-                    # Servis metriklerini al
-                    metrics = get_service_metrics()
-                    breaker_status = breaker.get_status()
-                    
-                    # Rapor mesajı oluştur
-                    report_message = f"📊 *Günlük Sistem Raporu*\n\n"
-                    report_message += f"*📈 Finansal Servis*\n"
-                    report_message += f"• Başarı Oranı: `{metrics.get('success_rate_percent', 'N/A')}`\n"
-                    report_message += f"• Toplam Çağrı: `{metrics.get('total_calls', 0)}`\n"
-                    report_message += f"• V5 Başarı: `{metrics.get('v5_success', 0)}`\n"
-                    report_message += f"• V4 Fallback: `{metrics.get('v4_fallback', 0)}`\n"
-                    report_message += f"• Hatalar: `{metrics.get('errors', 0)}`\n\n"
-                    
-                    report_message += f"• Kaynak: `{metrics.get('source') or 'unknown'}`\n\n"
-                    
-                    report_message += f"*⚡ Circuit Breaker*\n"
-                    report_message += f"• Durum: `{breaker_status['state']}`\n"
-                    report_message += f"• Başarı Oranı: `{breaker_status['success_rate']}`\n"
-                    report_message += f"• Toplam Açılma: `{breaker_status['circuit_opens']}`\n"
-                    report_message += f"• İyileşmeler: `{breaker_status['recoveries']}`\n\n"
-                    
-                    report_message += f"*🕐 Sistem Bilgisi*\n"
-                    report_message += f"• Ortam: `{Config.ENVIRONMENT.upper()}`\n"
-                    report_message += f"• Güncelleme Aralığı: `{Config.UPDATE_INTERVAL}s`\n"
-                    report_message += f"• Tarih: `{now.strftime('%Y-%m-%d')}`"
-                    
-                    # Telegram'a gönder
-                    success = send_telegram_notification(report_message, 'info')
-                    
-                    if success:
-                        _last_daily_report_time = now
-                        logger.info("✅ Günlük rapor gönderildi")
-                    else:
-                        logger.warning("⚠️ Günlük rapor gönderilemedi")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Günlük rapor hatası: {e}")
-
+        f"📊 *GENEL DURUM*\n"
+        f"• Başarı Oranı: *%{success_rate:.1f}*\n"
+        f"• Toplam İşlem: *{total}*\n\n"
+        
+        f"🔌 *KAYNAK KULLANIMI*\n"
+        f"• 🚀 V5 (Hızlı): `{metrics.get('v5', 0)}`\n"
+        f"• 🛡️ V4 (Yedek): `{metrics.get('v4', 0)}`\n"
+        f"• ⚠️ V3 (Son Çare): `{metrics.get('v3', 0)}`\n"
+        f"• 📦 Backup Kullanımı: `{metrics.get('backup', 0)}`\n\n"
+        
+        f"🛡️ *GÜVENLİK & HATALAR*\n"
+        f"• Hatalar: `{metrics.get('errors', 0)}`\n"
+        f"• Circuit Breaker: {cb_status}\n\n"  # 🔥 YENİ EKLEME
+        
+        f"_KuraBak Backend v2.0 • {datetime.now().strftime('%H:%M')}_"
+    )
+    
+    telegram_monitor.send_message(msg, level='report')
 
 # ======================================
-# SCHEDULER FUNCTIONS (WITH DAILY REPORT)
+# SCHEDULER YÖNETİMİ
 # ======================================
 
-def start_scheduler() -> Optional[BackgroundScheduler]:
-    """Start background scheduler with daily report"""
+def start_scheduler():
+    """Zamanlayıcıyı başlatır (Singleton)"""
     global _scheduler
     
     with _scheduler_lock:
-        if _scheduler is not None:
-            if _scheduler.running:
-                logger.warning("⚠️ Scheduler already running")
-                return _scheduler
-            else:
-                logger.warning("⚠️ Dead scheduler detected, cleaning up...")
-                try:
-                    _scheduler.shutdown(wait=False)
-                except:
-                    pass
-                _scheduler = None
+        if _scheduler and _scheduler.running:
+            logger.info("⚠️ Scheduler zaten çalışıyor.")
+            return _scheduler
+
+        logger.info("⏳ Scheduler başlatılıyor...")
         
-        pid = os.getpid()
-        logger.info(f"🔧 Starting scheduler (PID: {pid})...")
+        _scheduler = BackgroundScheduler(timezone=Config.DEFAULT_TIMEZONE)
         
-        # Executor config
-        executors = {
-            'default': ThreadPoolExecutor(max_workers=Config.SCHEDULER_MAX_WORKERS)
-        }
-        
-        # Create scheduler
-        _scheduler = BackgroundScheduler(
-            executors=executors,
-            job_defaults={
-                'coalesce': True,
-                'max_instances': 1,
-                'misfire_grace_time': 30
-            },
-            timezone='UTC'
-        )
-        
-        # 🔥 ANA JOB: Finansal veri senkronizasyonu
+        # 1. Ana Veri Çekme Görevi (2 dakikada bir)
         _scheduler.add_job(
-            fetch_all_data,
-            'interval',
-            seconds=Config.UPDATE_INTERVAL,
-            id='sync_financial_data',
-            name='Financial Data Sync',
+            fetch_all_data_safe,
+            trigger=IntervalTrigger(seconds=Config.UPDATE_INTERVAL),
+            id="sync_financial_data",
+            name="Finansal Veri Senkronizasyonu",
             replace_existing=True,
-            coalesce=True,
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc)
+            coalesce=True
         )
         
-        # 🔥 YENİ JOB: Günlük rapor (her gün 09:00 UTC)
+        # 2. Günlük Rapor Görevi (Sabah 09:00)
         _scheduler.add_job(
-            check_and_send_daily_report,
-            'cron',
-            hour=9,
-            minute=0,
-            id='daily_report',
-            name='Daily System Report',
-            replace_existing=True,
-            max_instances=1
+            daily_report_job,
+            trigger=CronTrigger(hour=Config.TELEGRAM_DAILY_REPORT_HOUR, minute=0),
+            id="daily_report",
+            name="Günlük Rapor",
+            replace_existing=True
         )
         
-        # Başlat
         _scheduler.start()
         
-        logger.info(
-            f"✅ Scheduler started\n"
-            f"  • Financial Sync: {Config.UPDATE_INTERVAL}s interval\n"
-            f"  • Daily Report: 09:00 UTC every day\n"
-            f"  • Max Workers: {Config.SCHEDULER_MAX_WORKERS}"
-        )
-        logger.info(f"📊 Circuit Breaker: {breaker.state}")
+        logger.info("✅ Scheduler başlatıldı. İlk güncelleme tetikleniyor...")
         
-        # 🔥 TELEGRAM: Scheduler başlatma bildirimi
-        send_telegram_notification(
-            f"⚡ Scheduler Başlatıldı\n"
-            f"• Interval: {Config.UPDATE_INTERVAL}s\n"
-            f"• Ortam: {Config.ENVIRONMENT.upper()}\n"
-            f"• Circuit Breaker: {breaker.state}",
-            alert_level='info'
-        )
+        # Uygulama açılır açılmaz bir kere çalıştır
+        threading.Thread(target=fetch_all_data_safe, daemon=True).start()
         
         return _scheduler
 
-
 def stop_scheduler():
-    """Stop scheduler gracefully"""
-    global _scheduler, _shutdown_initiated
+    """Zamanlayıcıyı durdurur"""
+    global _scheduler
     
-    with _scheduler_lock:
-        if _shutdown_initiated:
-            logger.debug("Shutdown already initiated, skipping...")
-            return
-        
-        _shutdown_initiated = True
-        
-        if _scheduler is not None:
-            logger.info("🛑 Stopping scheduler...")
-            
-            try:
-                _scheduler.shutdown(wait=True)
-                logger.info("✅ Scheduler stopped gracefully")
-            except Exception as e:
-                logger.error(f"❌ Scheduler shutdown error: {e}")
-                try:
-                    _scheduler.shutdown(wait=False)
-                    logger.warning("⚠️ Scheduler force-stopped")
-                except:
-                    pass
-            finally:
-                _scheduler = None
-        else:
-            logger.debug("Scheduler already stopped")
-
-
-def get_scheduler_status() -> dict:
-    """Get scheduler, circuit breaker, and service status"""
-    with _scheduler_lock:
-        now_utc = datetime.now(timezone.utc)
-        
-        if _scheduler is None or not _scheduler.running:
-            return {
-                'scheduler_running': False,
-                'jobs': [],
-                'circuit_breaker': breaker.get_status(),
-                'financial_service_metrics': get_service_metrics(),
-                'daily_report': {
-                    'enabled': True,
-                    'last_sent': _last_daily_report_time.isoformat() if _last_daily_report_time else None,
-                    'next_scheduled': '09:00 UTC daily' if _scheduler else 'Scheduler stopped'
-                },
-                'timestamp_utc': now_utc.isoformat(),
-                'manual_trigger_cooldown': _get_cooldown_status()
-            }
-        
-        jobs = []
-        for job in _scheduler.get_jobs():
-            next_run = None
-            seconds_until = None
-            
-            if job.next_run_time:
-                next_run = job.next_run_time.isoformat()
-                seconds_until = (job.next_run_time - now_utc).total_seconds()
-            
-            jobs.append({
-                'id': job.id,
-                'name': job.name,
-                'next_run': next_run,
-                'seconds_until_next_run': seconds_until,
-                'trigger': str(job.trigger)
-            })
-        
-        # Daily report bilgisi
-        daily_report_info = {
-            'enabled': True,
-            'last_sent': _last_daily_report_time.isoformat() if _last_daily_report_time else None,
-            'next_scheduled': None
-        }
-        
-        # Next daily report time
-        daily_job = _scheduler.get_job('daily_report')
-        if daily_job and daily_job.next_run_time:
-            daily_report_info['next_scheduled'] = daily_job.next_run_time.isoformat()
-        
-        return {
-            'scheduler_running': _scheduler.running,
-            'scheduler_state': _scheduler.state,
-            'jobs': jobs,
-            'circuit_breaker': breaker.get_status(),
-            'financial_service_metrics': get_service_metrics(),
-            'daily_report': daily_report_info,
-            'timestamp_utc': now_utc.isoformat(),
-            'manual_trigger_cooldown': _get_cooldown_status()
-        }
-
-
-def _get_cooldown_status() -> dict:
-    """Get manual trigger cooldown status"""
-    global _last_manual_trigger_time
-    current_time = time.time()
-    
-    cooldown_remaining = max(0, 60 - (current_time - _last_manual_trigger_time))
-    
-    return {
-        'cooldown_seconds': 60,
-        'cooldown_remaining_seconds': round(cooldown_remaining, 1),
-        'last_manual_trigger_time': _last_manual_trigger_time,
-        'is_available': cooldown_remaining == 0
-    }
-
-
-def manual_trigger() -> dict:
-    """
-    Manually trigger data update with cooldown protection and Telegram notification
-    """
-    global _last_manual_trigger_time
-    
-    with _manual_trigger_lock:
-        current_time = time.time()
-        
-        # Cooldown kontrolü (60 saniye)
-        if current_time - _last_manual_trigger_time < 60:
-            remaining = 60 - int(current_time - _last_manual_trigger_time)
-            logger.warning(f"⚠️ Manual trigger cooldown: {remaining}s remaining")
-            
-            return {
-                'success': False,
-                'duration_seconds': 0,
-                'timestamp': datetime.now(timezone.utc).isoformat(),
-                'circuit_breaker_state': breaker.state,
-                'error': "Too frequent. Wait 60 seconds between manual updates.",
-                'next_available_in': remaining,
-                'cooldown_active': True
-            }
-        
-        _last_manual_trigger_time = current_time
-    
-    logger.info("🔄 Manual data update triggered")
-    
-    # 🔥 TELEGRAM: Manuel update başladı bildirimi
-    send_telegram_notification(
-        f"🔄 Manuel güncelleme başlatıldı\n"
-        f"• Sistem: {Config.APP_NAME}\n"
-        f"• Circuit Breaker: {breaker.state}",
-        alert_level='info'
-    )
-    
-    start_time = datetime.now(timezone.utc)
-    success = fetch_all_data()
-    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-    
-    # Manuel update sonrası scheduled job'u resetle
     with _scheduler_lock:
         if _scheduler and _scheduler.running:
-            try:
-                job = _scheduler.get_job('sync_financial_data')
-                if job:
-                    next_run = datetime.now(timezone.utc) + timedelta(seconds=Config.UPDATE_INTERVAL)
-                    job.modify(next_run_time=next_run)
-                    logger.debug(f"⏱️ Next scheduled run reset to: {next_run.isoformat()}")
-            except Exception as e:
-                logger.warning(f"Could not reset scheduler job: {e}")
+            logger.info("🛑 Scheduler durduruluyor...")
+            _scheduler.shutdown(wait=False)
+            _scheduler = None
+            logger.info("✅ Scheduler durduruldu.")
+
+# ======================================
+# MANUEL TETİKLEME
+# ======================================
+
+def manual_trigger() -> Dict[str, Any]:
+    """
+    API üzerinden manuel güncelleme.
+    60 saniyelik cooldown uygular.
+    """
+    global _last_manual_time
     
-    # 🔥 TELEGRAM: Manuel update sonucu bildirimi
-    if success:
-        send_telegram_notification(
-            f"✅ Manuel güncelleme BAŞARILI\n"
-            f"• Süre: {duration:.2f}s\n"
-            f"• Circuit Breaker: {breaker.state}\n"
-            f"• Sonraki Otomatik: {Config.UPDATE_INTERVAL}s sonra",
-            alert_level='success'
-        )
-    else:
-        send_telegram_notification(
-            f"❌ Manuel güncelleme BAŞARISIZ\n"
-            f"• Süre: {duration:.2f}s\n"
-            f"• Circuit Breaker: {breaker.state}\n"
-            f"• Hata: Circuit Breaker OPEN olabilir",
-            alert_level='warning'
-        )
+    with _manual_lock:
+        current_time = time.time()
+        
+        # Cooldown kontrolü
+        if current_time - _last_manual_time < 60:
+            remaining = 60 - int(current_time - _last_manual_time)
+            return {
+                "success": False,
+                "message": f"Çok sık güncelleme yapamazsınız. {remaining}sn bekleyin.",
+                "circuit_breaker": breaker.state
+            }
+            
+        _last_manual_time = current_time
+
+    # İşlemi başlat
+    logger.info("👆 Manuel güncelleme tetiklendi.")
+    success = fetch_all_data_safe()
     
     return {
-        'success': success,
-        'duration_seconds': round(duration, 2),
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'circuit_breaker_state': breaker.state,
-        'message': "Manual update completed" if success else "Manual update failed",
-        'next_scheduled_in': Config.UPDATE_INTERVAL,
-        'cooldown_active': False
+        "success": success,
+        "message": "Güncelleme başarılı" if success else "Güncelleme başarısız (Logları kontrol et)",
+        "circuit_breaker": breaker.state,
+        "timestamp": datetime.now().isoformat()
     }
 
+def get_scheduler_status():
+    """Scheduler durumunu döndürür"""
+    with _scheduler_lock:
+        return {
+            "running": _scheduler.running if _scheduler else False,
+            "circuit_breaker": {
+                "state": breaker.state,
+                "failure_count": breaker.failure_count,
+                "threshold": breaker.threshold
+            },
+            "jobs": [job.id for job in _scheduler.get_jobs()] if _scheduler else [],
+            "metrics": get_service_metrics()
+        }
 
-def safe_manual_trigger() -> dict:
-    """
-    Safe manual trigger - doesn't block HTTP requests
-    """
-    # Thread'de çalıştır, hemen HTTP response dön
-    trigger_thread = threading.Thread(
-        target=manual_trigger, 
-        daemon=True,
-        name="manual_trigger_thread"
-    )
-    trigger_thread.start()
-    
-    logger.info("🚀 Manual update started in background thread")
-    
-    return {
-        'success': True,
-        'message': "Manual update started in background",
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'background_thread': True,
-        'thread_name': trigger_thread.name
-    }
-
-# ======================================
-# GRACEFUL SHUTDOWN - FIXED VERSION ✅
-# ======================================
-
-def cleanup():
-    """Cleanup on application exit - SAFE VERSION"""
-    logger.info("🧹 Maintenance service cleanup started...")
-    
-    try:
-        # 1. Stop scheduler
-        stop_scheduler()
-        
-        # 2. Final metrics
-        if 'breaker' in globals():
-            status = breaker.get_status()
-            logger.info(
-                f"📊 Final Circuit Breaker Stats:\n"
-                f"  State: {status['state']}\n"
-                f"  Success Rate: {status['success_rate']}\n"
-                f"  Total Calls: {status['total_calls']}\n"
-                f"  Circuit Opens: {status['circuit_opens']}\n"
-                f"  Recoveries: {status['recoveries']}"
-            )
-            
-            # 3. SAFE Telegram: Shutdown bildirimi
-            try:
-                # Config'e güvenli erişim
-                app_name = "KuraBak"
-                try:
-                    from config import Config
-                    app_name = Config.APP_NAME
-                except:
-                    pass
-                
-                send_telegram_notification(
-                    f"🛑 {app_name} Sistem Kapanıyor\n"
-                    f"• Toplam İstek: {status['total_calls']}\n"
-                    f"• Başarı Oranı: {status['success_rate']}\n"
-                    f"• Saat: {datetime.now(timezone.utc).strftime('%H:%M:%S')}",
-                    alert_level='info'
-                )
-            except Exception as e:
-                logger.warning(f"⚠️ Telegram shutdown notification skipped: {e}")
-        
-        # 4. Cleanup financial service sessions - SAFE VERSION (GERİYE DÖNÜK UYUMLULUK)
-        try:
-            from services.financial_service import cleanup_sessions
-            cleanup_sessions()
-            logger.info("✅ Session cleanup completed (cleanup_sessions)")
-        except ImportError:
-            # Eski versiyon için geriye dönük uyumluluk
-            try:
-                from services.financial_service import cleanup
-                cleanup()
-                logger.info("✅ Session cleanup completed (legacy cleanup)")
-            except ImportError as e:
-                logger.warning(f"⚠️ Session cleanup skipped: {e}")
-        except Exception as e:
-            logger.warning(f"⚠️ Session cleanup skipped: {e}")
-            
-    except Exception as e:
-        logger.error(f"❌ Error during cleanup: {e}")
-    finally:
-        logger.info("✅ Maintenance service cleaned up")
-
-
-# ======================================
-# INITIALIZATION
-# ======================================
-
-# Register cleanup
-atexit.register(cleanup)
-
-# Handle SIGTERM (Render/Docker graceful shutdown)
-def handle_sigterm(signum, frame):
-    logger.info(f"🛑 Received SIGTERM, initiating graceful shutdown...")
-    cleanup()
-    os._exit(0)
-
-signal.signal(signal.SIGTERM, handle_sigterm)
-
-# ======================================
-# INITIALIZATION LOG
-# ======================================
-logger.info("🎯 Maintenance Service initialized successfully")
-logger.info(f"📋 Config Summary: UPDATE_INTERVAL={Config.UPDATE_INTERVAL}s, "
-           f"CIRCUIT_BREAKER={Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD}/{Config.CIRCUIT_BREAKER_TIMEOUT}s")
-logger.info(f"🛡️  Safety Features: Manual Update Cooldown=60s, Daily Reports=Enabled")
+# Uygulama kapanırken scheduler'ı kapat
+atexit.register(stop_scheduler)
