@@ -6,6 +6,7 @@ Financial Service - PRODUCTION READY (MOBILE OPTIMIZED) 🚀
 ✅ Kripto ve gereksiz altınları atlar
 ✅ %40 daha hızlı parse
 ✅ WORKER (İşçi) + SNAPSHOT (Fotoğrafçı) SİSTEMİ
+✅ 📸 GECE REFERANS RAPORU (Patrona Telegram bildirimi)
 """
 
 import requests
@@ -224,6 +225,7 @@ def take_daily_snapshot():
     """
     Her gece 00:00'da referans fiyatları Redis'e kaydeder.
     Bu fiyatlar ertesi gün boyunca değişim hesaplaması için kullanılır.
+    📸 Patrona da Telegram ile rapor gönderir.
     """
     logger.info("📸 [SNAPSHOT] Gün sonu kapanış fiyatları alınıyor...")
     
@@ -238,34 +240,76 @@ def take_daily_snapshot():
             return False
         
         snapshot = {}
+        report_lines = []  # 📢 Telegram raporu için
         
-        # Dövizleri ekle
+        # 1️⃣ DÖVİZLERİ EKLE
         for item in currencies_data.get("data", []):
             code = item.get("code")
             selling = item.get("selling", 0)
             if code and selling > 0:
                 snapshot[code] = selling
+                # Önemli dövizleri rapora ekle
+                if code in ["USD", "EUR", "GBP", "CHF", "JPY"]:
+                    report_lines.append(f"💵 {code}: *{selling:.4f} ₺*")
         
-        # Altınları ekle
+        # 2️⃣ ALTINLARI EKLE
         if golds_data:
             for item in golds_data.get("data", []):
                 code = item.get("code")
+                name = item.get("name", code)
                 selling = item.get("selling", 0)
                 if code and selling > 0:
                     snapshot[code] = selling
+                    # Önemli altınları rapora ekle
+                    if code in ["GRA", "C22", "CUM"]:
+                        # Gram altın için farklı format (binlik ayracı)
+                        if code == "GRA":
+                            formatted_price = f"{selling:,.2f}".replace(",", ".")
+                            report_lines.append(f"🟡 {name}: *{formatted_price} ₺*")
+                        else:
+                            formatted_price = f"{selling:,.2f}".replace(",", ".")
+                            report_lines.append(f"🟡 {name}: *{formatted_price} ₺*")
         
-        # Gümüşü ekle
+        # 3️⃣ GÜMÜŞÜ EKLE
         if silvers_data:
             for item in silvers_data.get("data", []):
                 code = item.get("code")
                 selling = item.get("selling", 0)
                 if code and selling > 0:
                     snapshot[code] = selling
+                    report_lines.append(f"⚪ Gümüş: *{selling:.2f} ₺*")
         
         if snapshot:
             # Redis'e kaydet (TTL=0, silinmesin)
             set_cache("kurabak:yesterday_prices", snapshot, ttl=0)
             logger.info(f"✅ KASA KİLİTLENDİ: {len(snapshot)} adet varlık (Döviz/Altın/Gümüş) kaydedildi.")
+            
+            # --- 📢 TELEGRAM RAPORU (KIYAK HAREKET) ---
+            try:
+                from utils.telegram_monitor import telegram_monitor
+                if telegram_monitor:
+                    tz = pytz.timezone('Europe/Istanbul')
+                    date_str = datetime.now(tz).strftime("%d.%m.%Y")
+                    
+                    # Mesajı oluştur
+                    msg = (
+                        f"📸 *REFERANS FİYATLAR ALINDI* | {date_str}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Patron, yarına kadar değişimler bu fiyatlara göre hesaplanacak:\n\n"
+                    )
+                    
+                    # Listeyi mesaja dök
+                    msg += "\n".join(report_lines)
+                    
+                    msg += f"\n\n📦 *Toplam:* {len(snapshot)} varlık kilitlendi.\n"
+                    msg += f"✅ Sistem yarına hazır."
+                    
+                    # Rapor olarak gönder
+                    telegram_monitor.send_message(msg, level='report')
+                    logger.info("📲 Telegram raporu patrona gönderildi.")
+            except Exception as tg_err:
+                logger.error(f"⚠️ Telegram rapor hatası: {tg_err}")
+                
             return True
         else:
             logger.warning("⚠️ UYARI: Kaydedilecek geçerli fiyat bulunamadı.")
