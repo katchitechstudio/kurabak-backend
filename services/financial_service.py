@@ -5,12 +5,14 @@ Financial Service - PRODUCTION READY (MOBILE OPTIMIZED) 🚀
 ✅ 20 Döviz + 6 Altın + 1 Gümüş (Toplam 27 ürün)
 ✅ Kripto ve gereksiz altınları atlar
 ✅ %40 daha hızlı parse
+✅ WORKER (İşçi) + SNAPSHOT (Fotoğrafçı) SİSTEMİ
 """
 
 import requests
 import logging
 import time
 import json
+import pytz
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -215,11 +217,122 @@ def calculate_summary(currencies):
     }
 
 # ======================================
-# MAIN SYNC
+# 📸 FOTOĞRAFÇI (SNAPSHOT) - GECE 00:00
 # ======================================
 
-def sync_financial_data() -> bool:
-    """Ana Senkronizasyon (Mobil Optimized)"""
+def take_daily_snapshot():
+    """
+    Her gece 00:00'da referans fiyatları Redis'e kaydeder.
+    Bu fiyatlar ertesi gün boyunca değişim hesaplaması için kullanılır.
+    """
+    logger.info("📸 [SNAPSHOT] Gün sonu kapanış fiyatları alınıyor...")
+    
+    try:
+        # Mevcut canlı verileri al
+        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
+        golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
+        silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
+        
+        if not currencies_data:
+            logger.warning("⚠️ HATA: Canlı veri yok, snapshot alınamadı.")
+            return False
+        
+        snapshot = {}
+        
+        # Dövizleri ekle
+        for item in currencies_data.get("data", []):
+            code = item.get("code")
+            selling = item.get("selling", 0)
+            if code and selling > 0:
+                snapshot[code] = selling
+        
+        # Altınları ekle
+        if golds_data:
+            for item in golds_data.get("data", []):
+                code = item.get("code")
+                selling = item.get("selling", 0)
+                if code and selling > 0:
+                    snapshot[code] = selling
+        
+        # Gümüşü ekle
+        if silvers_data:
+            for item in silvers_data.get("data", []):
+                code = item.get("code")
+                selling = item.get("selling", 0)
+                if code and selling > 0:
+                    snapshot[code] = selling
+        
+        if snapshot:
+            # Redis'e kaydet (TTL=0, silinmesin)
+            set_cache("kurabak:yesterday_prices", snapshot, ttl=0)
+            logger.info(f"✅ KASA KİLİTLENDİ: {len(snapshot)} adet varlık (Döviz/Altın/Gümüş) kaydedildi.")
+            return True
+        else:
+            logger.warning("⚠️ UYARI: Kaydedilecek geçerli fiyat bulunamadı.")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Snapshot hatası: {e}", exc_info=True)
+        return False
+
+# ======================================
+# 👷 İŞÇİ (WORKER) - 2 DAKİKADA BİR
+# ======================================
+
+def update_financial_data():
+    """
+    Her 2 dakikada bir çalışır.
+    1. Hafta sonu kontrolü yapar (Cumartesi/Pazar kilidi)
+    2. API'den veri çeker
+    3. Referans fiyatlarla kıyaslayarak değişimi hesaplar
+    4. Trend analizi yapar (ALEV ROZETİ)
+    5. Market durumunu belirler
+    """
+    tz = pytz.timezone('Europe/Istanbul')
+    now = datetime.now(tz)
+    
+    # --- 1. HAFTA SONU KİLİDİ ---
+    market_status = "OPEN"
+    is_weekend_lock = False
+    
+    # Cumartesi (5) tüm gün, Pazar (6) saat 23:00'e kadar KAPALI
+    if now.weekday() == 5 or (now.weekday() == 6 and now.hour < 23):
+        market_status = "CLOSED"
+        is_weekend_lock = True
+    
+    # Eğer piyasa kapalıysa, sadece status'u güncelle
+    if is_weekend_lock:
+        logger.info(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')}). Status: CLOSED olarak güncellendi.")
+        
+        # Mevcut verilerdeki status'u güncelle
+        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
+        golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
+        silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
+        summary_data = get_cache(Config.CACHE_KEYS['summary'])
+        
+        if currencies_data:
+            currencies_data['status'] = "CLOSED"
+            currencies_data['market_msg'] = "Piyasalar Kapalı"
+            currencies_data['last_update'] = now.strftime("%H:%M:%S")
+            set_cache(Config.CACHE_KEYS['currencies_all'], currencies_data, ttl=0)
+        
+        if golds_data:
+            golds_data['status'] = "CLOSED"
+            set_cache(Config.CACHE_KEYS['golds_all'], golds_data, ttl=0)
+        
+        if silvers_data:
+            silvers_data['status'] = "CLOSED"
+            set_cache(Config.CACHE_KEYS['silvers_all'], silvers_data, ttl=0)
+        
+        if summary_data:
+            summary_data['status'] = "CLOSED"
+            set_cache(Config.CACHE_KEYS['summary'], summary_data, ttl=0)
+        
+        return True  # İşçi eve döner
+    
+    # --- 2. PİYASA AÇIKSA VERİ ÇEK ---
+    logger.info("🔄 [WORKER] Piyasa açık, veri çekiliyor ve işleniyor...")
+    
     start_time = time.time()
     data_raw = None
     source = None
@@ -259,6 +372,12 @@ def sync_financial_data() -> bool:
                     "critical"
                 )
             
+            # Backup'ı yükle ama status'u aç
+            backup_data['currencies']['status'] = "OPEN"
+            backup_data['golds']['status'] = "OPEN"
+            backup_data['silvers']['status'] = "OPEN"
+            backup_data['summary']['status'] = "OPEN"
+            
             set_cache(Config.CACHE_KEYS['currencies_all'], backup_data['currencies'], ttl=0)
             set_cache(Config.CACHE_KEYS['golds_all'], backup_data['golds'], ttl=0)
             set_cache(Config.CACHE_KEYS['silvers_all'], backup_data['silvers'], ttl=0)
@@ -278,13 +397,59 @@ def sync_financial_data() -> bool:
             Metrics.inc('errors')
             return False
 
-    # VERİYİ İŞLE (Optimize Edilmiş Parser)
+    # --- 3. VERİYİ İŞLE VE DEĞİŞİM HESAPLA ---
     try:
-        # 🔥 YENİ: Mobil optimize parser
+        # API'den gelen ham veriyi parse et
         currencies, golds, silvers = process_data_mobile_optimized(data_raw)
         
         if not currencies:
             logger.error(f"❌ {source} verisi boş.")
+            Metrics.inc('errors')
+            return False
+        
+        # Dünkü referans fiyatları al
+        yesterday_prices = get_cache("kurabak:yesterday_prices") or {}
+        
+        # --- 4. AKILLI HESAPLAMA + TREND ANALİZİ ---
+        def enrich_with_calculation(items):
+            """Değişim hesapla ve trend ekle"""
+            enriched = []
+            for item in items:
+                code = item['code']
+                current_price = item['selling']
+                
+                # API'nin change'ini görmezden gel, kendin hesapla
+                change_percent = 0.0
+                
+                if code in yesterday_prices:
+                    old_price = yesterday_prices[code]
+                    if old_price > 0:
+                        change_percent = ((current_price - old_price) / old_price) * 100
+                
+                # ALEV ROZETİ (TREND)
+                trend = "NORMAL"
+                if change_percent >= 2.0:
+                    trend = "HIGH_UP"   # 🔥 Yukarı Alev
+                elif change_percent <= -2.0:
+                    trend = "HIGH_DOWN" # 🧊 Aşağı Sert Düşüş
+                
+                # Veriyi güncelle
+                item['change_percent'] = round(change_percent, 2)
+                item['trend'] = trend
+                
+                # ZEHİRLİ VERİ KONTROLÜ (Negatif veya 0 fiyat)
+                if current_price > 0:
+                    enriched.append(item)
+            
+            return enriched
+        
+        # Tüm verilere hesaplamayı uygula
+        currencies = enrich_with_calculation(currencies)
+        golds = enrich_with_calculation(golds)
+        silvers = enrich_with_calculation(silvers)
+        
+        if not currencies:
+            logger.error("❌ Tüm veriler zehirli, temiz veri yok!")
             Metrics.inc('errors')
             return False
         
@@ -302,7 +467,10 @@ def sync_financial_data() -> bool:
         base_meta = {
             "source": source,
             "update_date": update_date_str,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "status": "OPEN",  # Piyasa açık
+            "market_msg": "Piyasalar Canlı",
+            "last_update": now.strftime("%H:%M:%S")
         }
 
         # CACHE'E KAYDET (TTL=0)
@@ -310,6 +478,9 @@ def sync_financial_data() -> bool:
         set_cache(Config.CACHE_KEYS['golds_all'], {**base_meta, "data": golds}, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_all'], {**base_meta, "data": silvers}, ttl=0)
         set_cache(Config.CACHE_KEYS['summary'], {**base_meta, "data": summary}, ttl=0)
+
+        # İşçi kart basıyor (Şef görsün diye)
+        set_cache("kurabak:last_worker_run", time.time(), ttl=0)
 
         # 15 DAKİKALIK BACKUP
         last_backup_time = get_cache("kurabak:backup:timestamp") or 0
@@ -328,18 +499,29 @@ def sync_financial_data() -> bool:
 
         elapsed = time.time() - start_time
         
-        # 🔥 PERFORMANS LOGU
+        # PERFORMANS LOGU
         logger.info(
-            f"✅ [{source}] Mobil Optimized Parse: "
-            f"20 Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
-            f"({elapsed:.2f}s - %{((1-elapsed/2)*100):.0f} daha hızlı)"
+            f"✅ [{source}] Worker Başarılı: "
+            f"{len(currencies)} Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
+            f"({elapsed:.2f}s - Değişim hesaplandı, Trend eklendi)"
         )
         return True
 
     except Exception as e:
-        logger.error(f"❌ Parse hatası: {e}", exc_info=True)
+        logger.error(f"❌ Worker hatası: {e}", exc_info=True)
         Metrics.inc('errors')
         return False
+
+# ======================================
+# ESKİ FONKSİYON (UYUMLULUK İÇİN)
+# ======================================
+
+def sync_financial_data() -> bool:
+    """
+    Eski kod için uyumluluk katmanı.
+    Artık update_financial_data() kullanılıyor.
+    """
+    return update_financial_data()
 
 def get_service_metrics():
     return Metrics.get()
