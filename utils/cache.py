@@ -56,10 +56,14 @@ class RedisClient:
             self._enabled = True
             return client
         except ImportError:
-            logger.error("❌ 'redis' kütüphanesi eksik! (pip install redis)")
+            if not self._connection_error_logged:
+                logger.error("❌ 'redis' kütüphanesi eksik! (pip install redis)")
+                self._connection_error_logged = True
             return None
         except Exception as e:
-            logger.error(f"❌ Redis bağlantı hatası: {e}")
+            if not self._connection_error_logged:
+                logger.error(f"❌ Redis bağlantı hatası: {e}")
+                self._connection_error_logged = True
             return None
 
     def get_client(self):
@@ -107,6 +111,21 @@ class RAMCache:
                 return None
                 
             return value
+    
+    def exists(self, key: str) -> bool:
+        """Key var mı kontrol et"""
+        with self._lock:
+            if key not in self._cache:
+                return False
+            
+            value, expiry = self._cache[key]
+            
+            # Süre dolmuşsa False döndür
+            if expiry > 0 and time.time() > expiry:
+                del self._cache[key]
+                return False
+            
+            return True
 
 ram_cache = RAMCache()
 
@@ -117,7 +136,7 @@ ram_cache = RAMCache()
 def get_cache(key: str, ttl: Optional[int] = None) -> Optional[Any]:
     """
     Cache'ten veri okur.
-    Önce Redis'e bakar, hata alırsan RAM'e bakar.
+    Önce Redis'e bakar, hata alırsa RAM'e bakar.
     """
     client = redis_wrapper.get_client()
     
@@ -155,7 +174,7 @@ def set_cache(key: str, data: Any, ttl: int = 300) -> bool:
             if ttl and ttl > 0:
                 client.setex(key, ttl, json_data) # Süreli kayıt
             else:
-                client.set(key, json_data) # 🔥 SÜRESİZ KAYIT (Fix burası)
+                client.set(key, json_data) # 🔥 SÜRESİZ KAYIT (ttl=0)
             success = True
         except Exception as e:
             logger.error(f"❌ Redis Yazma Hatası: {e}")
@@ -164,3 +183,19 @@ def set_cache(key: str, data: Any, ttl: int = 300) -> bool:
     ram_cache.set(key, data, ttl)
     
     return success or True # RAM'e yazıldıysa başarılı say
+
+def cache_exists(key: str) -> bool:
+    """
+    Key var mı kontrol et (Şef için gerekli)
+    """
+    client = redis_wrapper.get_client()
+    
+    # 1. Redis Kontrolü
+    if client:
+        try:
+            return bool(client.exists(key))
+        except Exception as e:
+            logger.warning(f"⚠️ Redis EXISTS hatası: {e}")
+    
+    # 2. RAM Kontrolü
+    return ram_cache.exists(key)
