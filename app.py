@@ -5,21 +5,21 @@ KuraBak Backend - ENTRY POINT (ASYNCHRONOUS & FAST) 🚀
 ✅ NO 503: Başlangıçta bile cache boşsa 'Stale' veya boş liste döner, hata vermez.
 ✅ SILENT START: Arka plan işlemleri sessizce başlar.
 ✅ BLUEPRINT ARCHITECTURE: Modüler yapı.
+✅ WORKER + SNAPSHOT + ŞEF SİSTEMİ: Akıllı backend mimarisi
 """
-
 import os
 import logging
 import threading
 import time
 import atexit
 from datetime import datetime
-
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-
 from config import Config
+
 # Route'lar
 from routes.general_routes import api_bp
+
 # Servisler
 from services.maintenance_service import start_scheduler, stop_scheduler
 from utils.telegram_monitor import init_telegram_monitor
@@ -27,6 +27,7 @@ from utils.telegram_monitor import init_telegram_monitor
 # ======================================
 # LOGGING AYARLARI
 # ======================================
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -55,22 +56,39 @@ def background_initialization():
     """
     Ağır işleri arka planda yapar.
     Böylece Flask anında ayağa kalkar ve Render portu kapatmaz.
+    
+    BAŞLATMA SIRASI:
+    1. Telegram Monitor (Sessiz Mod)
+    2. Scheduler (Worker + Snapshot + Şef)
     """
     logger.info("⏳ [Arka Plan] Sistem servisleri başlatılıyor...")
-    time.sleep(1) # Kısa bir nefes alma payı
+    time.sleep(1)  # Kısa bir nefes alma payı
     
     # 1. Telegram Monitor'ü Başlat (Sessiz Mod)
-    init_telegram_monitor()
+    telegram = init_telegram_monitor()
     
     # 2. Scheduler'ı (Zamanlayıcı) Başlat
-    # Bu aynı zamanda ilk veri çekme işlemini de tetikler (maintenance_service içinde)
+    # Bu aynı zamanda şunları tetikler:
+    # - İlk veri çekme (Worker)
+    # - Gece 00:00'da Snapshot (Fotoğrafçı)
+    # - Her 10dk'da Şef kontrolü (Controller)
     start_scheduler()
     
     logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
+    logger.info("   👷 İşçi (Worker): 2 dakikada bir çalışıyor")
+    logger.info("   📸 Fotoğrafçı (Snapshot): Gece 00:00'da çalışacak")
+    logger.info("   👮 Şef (Controller): 10 dakikada bir denetliyor")
+    
+    # Telegram'a başlangıç mesajı gönder (İsteğe bağlı)
+    if telegram:
+        try:
+            telegram.send_startup_message()
+        except:
+            pass
 
 # Uygulama başlatıldığında arka plan thread'ini ateşle
 # Gunicorn birden fazla worker çalıştırırsa her biri için çalışır (güvenlidir)
-if os.environ.get("WERKZEUG_RUN_MAIN") != "true": # Sadece ana proseste
+if os.environ.get("WERKZEUG_RUN_MAIN") != "true":  # Sadece ana proseste
     init_thread = threading.Thread(target=background_initialization, daemon=True)
     init_thread.start()
 
@@ -83,7 +101,7 @@ def index():
     """Health Check & Info"""
     return jsonify({
         "app": Config.APP_NAME,
-        "version": Config.APP_VERSION,
+        "version": "2.0.0",  # 🔥 Yeni Versiyon
         "status": "active",
         "environment": Config.ENVIRONMENT,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -91,14 +109,84 @@ def index():
             "Triple Fallback API (V5/V4/V3)",
             "Universal Data Parser",
             "15-Min Backup System",
-            "No-503 Cache Architecture"
-        ]
+            "No-503 Cache Architecture",
+            "Worker + Snapshot + Controller System",
+            "Smart Change Calculation (API Independent)",
+            "Weekend Lock (Market Closed Detection)",
+            "Trend Analysis (Volatility Alert 🔥)",
+            "Self-Healing Mechanism"
+        ],
+        "components": {
+            "worker": "Her 2 dakikada veri çeker ve değişim hesaplar",
+            "snapshot": "Gece 00:00'da referans fiyatları kaydeder",
+            "controller": "Her 10 dakikada sistemi denetler ve onarır"
+        }
     }), 200
 
 @app.route('/health', methods=['GET'])
 def health():
     """Basit Sağlık Kontrolü (Load Balancer için)"""
     return jsonify({"status": "ok"}), 200
+
+@app.route('/api/system/status', methods=['GET'])
+def system_status():
+    """
+    Detaylı Sistem Durumu
+    Şef, Worker ve Snapshot durumlarını gösterir
+    """
+    try:
+        from services.maintenance_service import get_scheduler_status
+        from services.financial_service import get_service_metrics
+        from utils.cache import get_cache
+        
+        scheduler_status = get_scheduler_status()
+        metrics = get_service_metrics()
+        
+        # Son worker çalışma zamanı
+        last_worker_run = get_cache("kurabak:last_worker_run")
+        worker_status = "🟢 Aktif"
+        if last_worker_run:
+            time_diff = time.time() - float(last_worker_run)
+            if time_diff > 600:  # 10 dakikadan fazla
+                worker_status = "🔴 Uyuyor"
+            elif time_diff > 300:  # 5 dakikadan fazla
+                worker_status = "🟡 Yavaş"
+        else:
+            worker_status = "⚪ Henüz Çalışmadı"
+        
+        # Snapshot durumu
+        snapshot_exists = bool(get_cache("kurabak:yesterday_prices"))
+        snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
+        
+        return jsonify({
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "scheduler": {
+                "running": scheduler_status.get("running", False),
+                "active_jobs": scheduler_status.get("jobs", [])
+            },
+            "components": {
+                "worker": {
+                    "status": worker_status,
+                    "last_run": last_worker_run
+                },
+                "snapshot": {
+                    "status": snapshot_status
+                },
+                "controller": {
+                    "status": "🟢 Aktif" if scheduler_status.get("running") else "🔴 Durdu"
+                }
+            },
+            "circuit_breaker": scheduler_status.get("circuit_breaker", {}),
+            "metrics": metrics
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"System status error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 # ======================================
 # TEMİZLİK (SHUTDOWN)
@@ -108,6 +196,7 @@ def on_exit():
     """Uygulama kapanırken çalışır"""
     logger.info("🛑 Uygulama kapatılıyor...")
     stop_scheduler()
+    logger.info("✅ Temiz kapanış tamamlandı.")
 
 atexit.register(on_exit)
 
@@ -119,4 +208,7 @@ if __name__ == '__main__':
     # Local Development
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"🌍 Local Sunucu Başlatılıyor: http://localhost:{port}")
+    logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    logger.info("🚀 KuraBak Backend v2.0")
+    logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
