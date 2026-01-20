@@ -1,11 +1,12 @@
 """
-General Routes - PRODUCTION READY (V6) 🚀
-========================================
+General Routes - PRODUCTION READY (V7 - ONLINE TRACKING) 🚀
+==========================================================
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar.
 ✅ REGIONAL SUPPORT: 20 Döviz için Bölgesel Filtreleme
 ✅ SMART RECOVERY: Cache boşsa anlık tetikleme yapar (Synchronous Fallback)
 ✅ RATE LIMITING: Saldırılara karşı korumalı
 ✅ STANDARDIZED RESPONSE: Frontend (Android) için sabit format
+✅ ONLINE USER TRACKING: Her API çağrısında kullanıcıyı 5dk için işaretle
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -15,7 +16,7 @@ from datetime import datetime
 
 # Config ve Cache mekanizmaları
 from config import Config
-from utils.cache import get_cache
+from utils.cache import get_cache, set_cache
 # Maintenance servisten güvenli veri çekme fonksiyonu
 from services.maintenance_service import fetch_all_data_safe
 
@@ -26,6 +27,31 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 # ======================================
 # YARDIMCI FONKSİYONLAR
 # ======================================
+
+def track_online_user():
+    """
+    🕵️ AJAN: Kullanıcıyı "Online" olarak işaretle
+    
+    Her API isteğinde otomatik çalışır.
+    Kullanıcının kimliğini (user_id veya IP) Redis'e yazar.
+    5 dakika (300 saniye) sonra otomatik silinir.
+    """
+    try:
+        # 1. Kullanıcı kimliğini belirle (user_id > IP)
+        user_id = request.args.get('user_id') or request.args.get('device_id')
+        
+        if not user_id:
+            # user_id yoksa IP adresini kullan
+            user_id = request.remote_addr or request.headers.get('X-Forwarded-For', 'unknown')
+        
+        # 2. Redis'e kaydet (5 dakika ömürlü)
+        cache_key = f"online_user:{user_id}"
+        set_cache(cache_key, "1", ttl=300)  # 300 saniye = 5 dakika
+        
+    except Exception as e:
+        # Hata olsa bile API durmasın
+        logger.debug(f"Online tracking hatası (önemsiz): {e}")
+
 
 def create_response(data, status_code=200, message=None, meta=None):
     """Standart JSON response oluşturucu (Android uyumlu)"""
@@ -40,6 +66,7 @@ def create_response(data, status_code=200, message=None, meta=None):
         response['message'] = message
     
     return jsonify(response), status_code
+
 
 def get_data_guaranteed(cache_key):
     """
@@ -56,7 +83,7 @@ def get_data_guaranteed(cache_key):
 
     # 2. Stale (Bayat) Cache - 503'ü önleyen kahraman
     stale_key = f"{cache_key}:stale"
-    stale_data = get_cache(stale_key, ttl=None) # TTL yok, hep oradadır
+    stale_data = get_cache(stale_key)
     
     if stale_data:
         logger.warning(f"⚠️ {cache_key} için güncel veri yok, BAYAT veri sunuluyor.")
@@ -74,14 +101,18 @@ def get_data_guaranteed(cache_key):
     return None
 
 # ======================================
-# ENDPOINTLER
+# ENDPOINTLER (ONLINE TAKİP EKLENDİ!)
 # ======================================
 
 @api_bp.route('/currency/all', methods=['GET'])
 def get_all_currencies():
     """
     Tüm Döviz Kurları (20 Adet Sabit)
+    🕵️ Online tracking aktif!
     """
+    # 🚨 AJAN DEVREDE! Kullanıcıyı işaretle
+    track_online_user()
+    
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
         
@@ -102,11 +133,16 @@ def get_all_currencies():
         logger.error(f"Currency All Error: {e}")
         return create_response([], 500, "Sunucu hatası")
 
+
 @api_bp.route('/currency/gold/all', methods=['GET'])
 def get_all_golds():
     """
     Tüm Altın Fiyatları
+    🕵️ Online tracking aktif!
     """
+    # 🚨 AJAN DEVREDE!
+    track_online_user()
+    
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['golds_all'])
         
@@ -124,11 +160,16 @@ def get_all_golds():
         logger.error(f"Gold All Error: {e}")
         return create_response([], 500, "Sunucu hatası")
 
+
 @api_bp.route('/currency/silver/all', methods=['GET'])
 def get_all_silvers():
     """
     Gümüş Fiyatları (Özel İstek)
+    🕵️ Online tracking aktif!
     """
+    # 🚨 AJAN DEVREDE!
+    track_online_user()
+    
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['silvers_all'])
         
@@ -143,11 +184,16 @@ def get_all_silvers():
         logger.error(f"Silver All Error: {e}")
         return create_response([], 500, "Sunucu hatası")
 
+
 @api_bp.route('/currency/summary', methods=['GET'])
 def get_summary():
     """
     Piyasa Özeti (Kazanan/Kaybeden)
+    🕵️ Online tracking aktif!
     """
+    # 🚨 AJAN DEVREDE!
+    track_online_user()
+    
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['summary'])
         
@@ -164,11 +210,16 @@ def get_summary():
         logger.error(f"Summary Error: {e}")
         return create_response({}, 500, "Sunucu hatası")
 
+
 @api_bp.route('/currency/regional', methods=['GET'])
 def get_regional_currencies():
     """
     Bölgesel Filtrelenmiş Dövizler (Config'deki 5 Bölge)
+    🕵️ Online tracking aktif!
     """
+    # 🚨 AJAN DEVREDE!
+    track_online_user()
+    
     try:
         # Ana veriyi çek
         result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
@@ -201,10 +252,12 @@ def get_regional_currencies():
         logger.error(f"Regional Error: {e}")
         return create_response({}, 500, "Sunucu hatası")
 
+
 @api_bp.route('/metrics', methods=['GET'])
 def get_metrics():
     """
     Sistem Metrikleri (Admin/Debug için)
+    NOT: Bu endpoint'te online tracking YOK (Admin arayüzü için)
     """
     try:
         from services.financial_service import get_service_metrics
