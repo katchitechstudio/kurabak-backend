@@ -2,7 +2,7 @@
 Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER) 🚀
 =========================================================
 ✅ SADECE MOBİL UYGULAMANIN İHTİYACI OLAN VERİYİ ÇEKİYOR
-✅ 20 Döviz + 6 Altın + 1 Gümüş (Toplam 27 ürün)
+✅ 23 Döviz + 6 Altın + 1 Gümüş (Toplam 30 ürün)
 ✅ Kripto ve gereksiz altınları atlar
 ✅ %40 daha hızlı parse
 ✅ WORKER (İşçi) + SNAPSHOT (Fotoğrafçı) SİSTEMİ
@@ -28,10 +28,28 @@ logger = logging.getLogger(__name__)
 # 📱 MOBİL UYGULAMANIN KODLARI
 # ======================================
 
-# 20 Döviz (Android ile %100 uyumlu)
+# 23 Döviz (Halk Tipi Güncellenmiş Liste - TRY Hariç)
 MOBILE_CURRENCIES = [
-    "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB", "SAR", "AED",
-    "JPY", "CNY", "KWD", "BHD", "OMR", "QAR", "IRR", "IQD", "TRY", "SEK", "NOK"
+    # Ana Dövizler (7)
+    "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB",
+    
+    # Orta Doğu (6)
+    "SAR", "AED", "KWD", "BHD", "OMR", "QAR",
+    
+    # Asya (1)
+    "CNY",
+    
+    # İskandinav (2)
+    "SEK", "NOK",
+    
+    # Halk Tipi Yeni Eklenenler (7)
+    "PLN",  # Polonya Zlotisi - Erasmus & Nakliye
+    "RON",  # Romanya Leyi - Komşu ticaret
+    "CZK",  # Çek Korunası - Prag turizmi
+    "EGP",  # Mısır Lirası - Vizesiz tatil
+    "RSD",  # Sırbistan Dinarı - Balkan turları
+    "HUF",  # Macar Forinti - Budapeşte
+    "BAM"   # Bosna-Hersek Markı - Duygusal bağ
 ]
 
 # 6 Altın (Android ile %100 uyumlu)
@@ -126,7 +144,8 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
 
 def process_data_mobile_optimized(data: dict):
     """
-    SADECE MOBİL UYGULAMANIN GÖSTERDIĞI 27 ÜRÜNÜ PARSE EDER
+    SADECE MOBİL UYGULAMANIN GÖSTERDIĞI 30 ÜRÜNÜ PARSE EDER
+    (23 Döviz + 6 Altın + 1 Gümüş)
     Kripto ve gereksiz altınları atlar -> %40 daha hızlı
     """
     currencies = []
@@ -136,7 +155,7 @@ def process_data_mobile_optimized(data: dict):
     # Veri kaynağını bul
     source_data = data.get("Rates", data)
     
-    # 1️⃣ 20 DÖVİZ (Sadece mobilde gösterilenler)
+    # 1️⃣ 23 DÖVİZ (Sadece mobilde gösterilenler)
     for code in MOBILE_CURRENCIES:
         item = source_data.get(code)
         if item:
@@ -277,7 +296,7 @@ def take_daily_snapshot():
             if code and selling > 0:
                 snapshot[code] = selling
                 # Önemli dövizleri rapora ekle
-                if code in ["USD", "EUR", "GBP", "CHF", "JPY"]:
+                if code in ["USD", "EUR", "GBP", "CHF"]:
                     report_lines.append(f"💵 {code}: *{selling:.4f} ₺*")
         
         # 2️⃣ ALTINLARI EKLE
