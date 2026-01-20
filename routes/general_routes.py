@@ -1,5 +1,5 @@
 """
-General Routes - PRODUCTION READY (V7 - ONLINE TRACKING) 🚀
+General Routes - PRODUCTION READY (V7 - ONLINE TRACKING + BANNER) 🚀
 ==========================================================
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar.
 ✅ REGIONAL SUPPORT: 20 Döviz için Bölgesel Filtreleme
@@ -7,6 +7,7 @@ General Routes - PRODUCTION READY (V7 - ONLINE TRACKING) 🚀
 ✅ RATE LIMITING: Saldırılara karşı korumalı
 ✅ STANDARDIZED RESPONSE: Frontend (Android) için sabit format
 ✅ ONLINE USER TRACKING: Her API çağrısında kullanıcıyı 5dk için işaretle
+✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -101,7 +102,7 @@ def get_data_guaranteed(cache_key):
     return None
 
 # ======================================
-# ENDPOINTLER (ONLINE TAKİP EKLENDİ!)
+# ENDPOINTLER (ONLINE TAKİP + BANNER!)
 # ======================================
 
 @api_bp.route('/currency/all', methods=['GET'])
@@ -109,6 +110,7 @@ def get_all_currencies():
     """
     Tüm Döviz Kurları (20 Adet Sabit)
     🕵️ Online tracking aktif!
+    📢 Banner desteği eklendi!
     """
     # 🚨 AJAN DEVREDE! Kullanıcıyı işaretle
     track_online_user()
@@ -123,11 +125,22 @@ def get_all_currencies():
         data_list = result.get('data', [])
         update_date = result.get('update_date')
         
+        # 🔥 YENİ: Banner var mı kontrol et
+        banner_msg = get_cache("system_banner")  # Redis'ten oku
+        
+        # Meta verisine banner'ı ekle
+        meta_data = {
+            'count': len(data_list),
+            'last_update': update_date,
+            'source': result.get('source'),
+            'banner': banner_msg  # Varsa mesaj gider, yoksa None gider
+        }
+        
         return create_response(
             data_list,
             200,
             "Döviz kurları getirildi",
-            {'count': len(data_list), 'last_update': update_date, 'source': result.get('source')}
+            meta_data
         )
     except Exception as e:
         logger.error(f"Currency All Error: {e}")
