@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY (MOBILE OPTIMIZED) 🚀
+Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER) 🚀
 =========================================================
 ✅ SADECE MOBİL UYGULAMANIN İHTİYACI OLAN VERİYİ ÇEKİYOR
 ✅ 20 Döviz + 6 Altın + 1 Gümüş (Toplam 27 ürün)
@@ -7,6 +7,7 @@ Financial Service - PRODUCTION READY (MOBILE OPTIMIZED) 🚀
 ✅ %40 daha hızlı parse
 ✅ WORKER (İşçi) + SNAPSHOT (Fotoğrafçı) SİSTEMİ
 ✅ 📸 GECE REFERANS RAPORU (Patrona Telegram bildirimi)
+✅ 📢 BANNER SİSTEMİ (Manuel > Otomatik Takvim)
 """
 
 import requests
@@ -18,6 +19,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
 from utils.cache import set_cache, get_cache
+from utils.event_manager import get_todays_banner  # 🔥 YENİ EKLEME
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -218,6 +220,32 @@ def calculate_summary(currencies):
     }
 
 # ======================================
+# 📢 BANNER BELİRLEYİCİ (YENİ!)
+# ======================================
+
+def determine_banner_message() -> Optional[str]:
+    """
+    ÖNCELİK SIRASI:
+    1. Manuel Duyuru (Telegram /duyuru komutuyla yazılan)
+    2. Otomatik Takvim (TCMB, Bayram, Enflasyon, Piyasa Kapalı)
+    3. Hiçbiri yoksa -> None
+    """
+    # 1. Manuel Duyuru Kontrolü (Öncelik #1)
+    manual_banner = get_cache("system_banner")
+    if manual_banner:
+        logger.info(f"📢 [BANNER] Manuel: {manual_banner}")
+        return manual_banner
+    
+    # 2. Otomatik Takvim (Öncelik #2)
+    auto_banner = get_todays_banner()
+    if auto_banner:
+        logger.info(f"📅 [BANNER] Otomatik: {auto_banner}")
+        return auto_banner
+    
+    # 3. Hiçbir şey yok
+    return None
+
+# ======================================
 # 📸 FOTOĞRAFÇI (SNAPSHOT) - GECE 00:00
 # ======================================
 
@@ -331,6 +359,7 @@ def update_financial_data():
     3. Referans fiyatlarla kıyaslayarak değişimi hesaplar
     4. Trend analizi yapar (ALEV ROZETİ)
     5. Market durumunu belirler
+    6. 📢 BANNER MESAJINI BELİRLER (YENİ!)
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -508,13 +537,17 @@ def update_financial_data():
         elif "Update_Date" in meta:
             update_date_str = meta["Update_Date"]
 
+        # 📢 BANNER MESAJINI BELİRLE (YENİ!)
+        banner_message = determine_banner_message()
+
         base_meta = {
             "source": source,
             "update_date": update_date_str,
             "timestamp": time.time(),
             "status": "OPEN",  # Piyasa açık
             "market_msg": "Piyasalar Canlı",
-            "last_update": now.strftime("%H:%M:%S")
+            "last_update": now.strftime("%H:%M:%S"),
+            "banner": banner_message  # 🔥 BANNER EKLENDİ
         }
 
         # CACHE'E KAYDET (TTL=0)
@@ -544,10 +577,11 @@ def update_financial_data():
         elapsed = time.time() - start_time
         
         # PERFORMANS LOGU
+        banner_info = f"Banner: {banner_message[:30]}..." if banner_message else "Banner: Yok"
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies)} Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
-            f"({elapsed:.2f}s - Değişim hesaplandı, Trend eklendi)"
+            f"({elapsed:.2f}s - {banner_info})"
         )
         return True
 
