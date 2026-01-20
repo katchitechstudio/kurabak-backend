@@ -93,24 +93,44 @@ class Config:
     TREND_MEDIUM_THRESHOLD = 1.0  # %1-2 arası -> MEDIUM (Gelecekte eklenebilir)
     
     # ======================================
-    # BÖLGESEL FİLTRELEME (20 DÖVİZ)
+    # BÖLGESEL FİLTRELEME (LEGACY - Kullanılmıyor ama backward compatibility için duruyor)
     # ======================================
     # Frontend'de "Asya", "Avrupa" sekmeleri için gruplama
     REGIONAL_CURRENCIES = {
         "north_america": ["USD", "CAD"],
         "europe": ["EUR", "GBP", "CHF", "SEK", "NOK"],
-        "middle_east": ["SAR", "AED", "KWD", "BHD", "OMR", "QAR", "IRR", "IQD"],
-        "asia_pacific": ["JPY", "CNY", "AUD"],
-        "eastern_europe": ["RUB", "TRY"]
+        "middle_east": ["SAR", "AED", "KWD", "BHD", "OMR", "QAR"],
+        "asia_pacific": ["CNY", "AUD"],
+        "eastern_europe": ["RUB"],
+        "balkans_europe": ["PLN", "RON", "CZK", "HUF", "RSD", "BAM"],
+        "africa": ["EGP"]
     }
     
     # ======================================
     # MOBİL UYGULAMANIN GÖSTERDIĞI VARLIKLAR
     # ======================================
-    # 20 Döviz
+    # 23 Döviz (Halk Tipi Güncellenmiş Liste - TRY Hariç)
     MOBILE_CURRENCIES = [
-        "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB", "SAR", "AED",
-        "JPY", "CNY", "KWD", "BHD", "OMR", "QAR", "IRR", "IQD", "TRY", "SEK", "NOK"
+        # Ana Dövizler (7)
+        "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB",
+        
+        # Orta Doğu (6)
+        "SAR", "AED", "KWD", "BHD", "OMR", "QAR",
+        
+        # Asya (1)
+        "CNY",
+        
+        # İskandinav (2)
+        "SEK", "NOK",
+        
+        # Halk Tipi Yeni Eklenenler (7)
+        "PLN",  # Polonya Zlotisi - Erasmus & Nakliye
+        "RON",  # Romanya Leyi - Komşu ticaret
+        "CZK",  # Çek Korunası - Prag turizmi
+        "EGP",  # Mısır Lirası - Vizesiz tatil
+        "RSD",  # Sırbistan Dinarı - Balkan turları
+        "HUF",  # Macar Forinti - Budapeşte
+        "BAM"   # Bosna-Hersek Markı - Duygusal bağ
     ]
     
     # 6 Altın
