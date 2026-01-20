@@ -1,11 +1,12 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ + RAPOR SİSTEMİ 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ + RAPOR SİSTEMİ + DUYURU 🤖
 =======================================================
-✅ KOMUTLAR: /durum, /online, /temizle, /analiz (Sadece Patron!)
+✅ KOMUTLAR: /durum, /online, /temizle, /analiz, /duyuru (Sadece Patron!)
 ✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller.
 ✅ MODERN RAPOR: Gece raporu için özel "Şekilli" tasarım.
 ✅ CRITICAL ONLY: Sadece sistem çökerse veya rapor zamanıysa yazar.
 ✅ THREAD-SAFE: Arka planda sessizce çalışır.
+✅ DUYURU SİSTEMİ: Süreli/Süresiz banner yönetimi
 """
 
 import os
@@ -148,7 +149,7 @@ class TelegramMonitor:
     def start_command_listener(self):
         """
         Arka planda komutları dinlemeye başlar
-        /durum, /online, /temizle, /analiz
+        /durum, /online, /temizle, /analiz, /duyuru
         """
         if self.is_listening:
             logger.warning("Komut dinleyici zaten çalışıyor!")
@@ -205,6 +206,8 @@ class TelegramMonitor:
                         self._handle_temizle()
                     elif text == '/analiz':
                         self._handle_analiz()
+                    elif text.startswith('/duyuru'):
+                        self._handle_duyuru(text)
                     elif text.startswith('/'):
                         self._send_raw(
                             "❓ *Bilinmeyen Komut*\n\n"
@@ -212,7 +215,10 @@ class TelegramMonitor:
                             "`/durum` - Sistem sağlık raporu\n"
                             "`/online` - Aktif kullanıcı sayısı\n"
                             "`/temizle` - Cache temizliği\n"
-                            "`/analiz` - Versiyon analizi"
+                            "`/analiz` - Versiyon analizi\n"
+                            "`/duyuru [mesaj]` - Duyuru yayınla\n"
+                            "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
+                            "`/duyuru sil` - Duyuruyu kaldır"
                         )
                 
             except Exception as e:
@@ -337,6 +343,81 @@ class TelegramMonitor:
         except Exception as e:
             self._send_raw(f"❌ Analiz hatası: {str(e)}")
 
+    def _handle_duyuru(self, text):
+        """
+        🎭 KUKLACI MODU 2.0: Süreli Duyuru Sistemi ⏱️
+        Kullanım:
+        1. /duyuru [mesaj] -> Süresiz (Sen silene kadar)
+        2. /duyuru 30d [mesaj] -> 30 Dakika kalır
+        3. /duyuru 5s [mesaj] -> 5 Saat kalır
+        4. /duyuru 3g [mesaj] -> 3 Gün kalır
+        5. /duyuru sil -> Anında siler
+        """
+        try:
+            from utils.cache import set_cache, delete_cache
+            
+            # 1. Komutu temizle
+            raw_content = text.replace('/duyuru', '').strip()
+            
+            # 2. Silme Komutu mu?
+            if raw_content.lower() == 'sil' or raw_content == '':
+                delete_cache("system_banner")
+                self._send_raw("🔇 *DUYURU KALDIRILDI* \n\nPatron, mesajı sildim. Uygulama ekranlarından kayboldu.")
+                return
+
+            # 3. Süre Analizi (Akıllı Parser)
+            parts = raw_content.split(' ', 1)
+            
+            ttl = 0  # Varsayılan: Süresiz (0)
+            message = raw_content
+            duration_info = "Süresiz ♾️ (Sen silene kadar kalacak)"
+
+            # Eğer ilk kelime bir süre koduysa (Örn: 30d, 2s, 4g)
+            if len(parts) > 1:
+                time_code = parts[0].lower()
+                potential_msg = parts[1]
+                
+                multiplier = 0
+                unit_name = ""
+
+                if time_code.endswith('d') and time_code[:-1].isdigit(): # Dakika
+                    multiplier = 60
+                    unit_name = "Dakika"
+                elif time_code.endswith('s') and time_code[:-1].isdigit(): # Saat
+                    multiplier = 3600
+                    unit_name = "Saat"
+                elif time_code.endswith('g') and time_code[:-1].isdigit(): # Gün
+                    multiplier = 86400
+                    unit_name = "Gün"
+                
+                # Eğer geçerli bir süre bulduysak
+                if multiplier > 0:
+                    val = int(time_code[:-1])
+                    ttl = val * multiplier
+                    message = potential_msg # Mesajdan süreyi çıkart
+                    
+                    # Bitiş tarihini hesapla (Türkiye Saati: UTC+3)
+                    end_time = datetime.now() + timedelta(seconds=ttl)
+                    # Türkiye saati için +3 saat ekle (eğer server UTC ise)
+                    end_time_tr = end_time + timedelta(hours=3) 
+                    duration_info = f"{val} {unit_name} ⏳\n🗓️ *Bitiş:* {end_time_tr.strftime('%d.%m %H:%M')}"
+
+            # 4. Redis'e Kaydet (Süreli veya Süresiz)
+            # ttl=0 ise sonsuz, değilse saniye cinsinden ömür biçer
+            set_cache("system_banner", message, ttl=ttl)
+            
+            self._send_raw(
+                f"📢 *DUYURU YAYINDA!* \n"
+                f"━━━━━━━━━━━━━━━━\n"
+                f"📝 *Mesaj:* \"{message}\"\n"
+                f"⏱️ *Süre:* {duration_info}\n\n"
+                f"✅ Tamamdır Patron! Uygulama ekranlarında görünüyor. "
+                f"Süre bitince otomatik kaldırırım."
+            )
+            
+        except Exception as e:
+            self._send_raw(f"❌ Duyuru hatası: {str(e)}")
+
 # ======================================
 # SINGLETON BAŞLATICI
 # ======================================
@@ -359,7 +440,7 @@ def init_telegram_monitor():
         # Komut Dinleyiciyi Başlat
         telegram_monitor.start_command_listener()
         
-        logger.info("✅ Telegram Monitor (Sessiz Mod + Komut Sistemi) başlatıldı.")
+        logger.info("✅ Telegram Monitor (Sessiz Mod + Komut Sistemi + Duyuru) başlatıldı.")
         return telegram_monitor
     else:
         logger.warning("⚠️ Telegram Token/ChatID eksik. Bildirimler kapalı.")
