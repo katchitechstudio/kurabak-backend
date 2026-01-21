@@ -12,6 +12,7 @@ Telegram Monitor - ŞEF KOMUTA MERKEZİ + BAKIM + ALARM + RAPOR SİSTEMİ 🤖
 ✅ BAKIM MODU: Senaryo A (Tam Engel) + Senaryo B (Kısıtlı Kullanım)
 ✅ AKILLI ALARM: CPU/RAM izleme
 ✅ HAFTALIK RAPOR: Detaylı performans özeti
+✅ 🔒 ADMİN GÜVENLİĞİ: Sadece yetkili Telegram ID komut gönderebilir (7101853980)
 """
 
 import os
@@ -26,6 +27,11 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 # ======================================
+# 🔒 GÜVENLİK: YETKİLİ ADMİN ID'LERİ
+# ======================================
+ALLOWED_ADMIN_IDS = [7101853980]  # Sadece senin Telegram ID'n
+
+# ======================================
 # TELEGRAM MONITOR (RAPOR + KOMUT)
 # ======================================
 
@@ -37,6 +43,7 @@ class TelegramMonitor:
     3. BAKIM MODU: Sistem bakım yönetimi
     4. ALARM SİSTEMİ: CPU/RAM izleme
     5. HAFTALIK RAPOR: Performans özeti
+    6. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar komut gönderebilir
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -155,7 +162,7 @@ class TelegramMonitor:
         self.send_message(report, level='report')
 
     # ==========================================
-    # BÖLÜM 2: KOMUT SİSTEMİ
+    # BÖLÜM 2: KOMUT SİSTEMİ (🔒 GÜVENLİK EKLENDİ)
     # ==========================================
 
     def start_command_listener(self):
@@ -163,6 +170,7 @@ class TelegramMonitor:
         Arka planda komutları dinlemeye başlar
         /durum, /online, /temizle, /analiz, /duyuru, /sus, /konus
         /bakim, /alarm, /rapor
+        🔒 Sadece yetkili admin'lerden komut kabul eder
         """
         if self.is_listening:
             logger.warning("Komut dinleyici zaten çalışıyor!")
@@ -171,11 +179,19 @@ class TelegramMonitor:
         self.is_listening = True
         self.command_thread = threading.Thread(target=self._listen_commands, daemon=True)
         self.command_thread.start()
-        logger.info("🤖 Şef Komut Dinleyici başlatıldı!")
+        logger.info("🤖 Şef Komut Dinleyici başlatıldı! 🔒 Admin Filter: ACTIVE")
+
+    def _is_admin(self, user_id: int) -> bool:
+        """
+        🔒 GÜVENLİK KONTROLÜ
+        Sadece ALLOWED_ADMIN_IDS listesindeki kullanıcılar True döner
+        """
+        return user_id in ALLOWED_ADMIN_IDS
 
     def _listen_commands(self):
         """
         Telegram'dan gelen komutları dinler (Long Polling)
+        🔒 YENİ: Sadece yetkili admin'lerin komutlarını işler
         """
         offset = 0
         
@@ -204,10 +220,27 @@ class TelegramMonitor:
                     if not message:
                         continue
                     
-                    # Sadece senin mesajlarını işle
+                    # 🔒 GÜVENLİK 1: Sadece yetkili chat'ten gelen mesajları al
                     if str(message.get('chat', {}).get('id')) != str(self.chat_id):
                         continue
                     
+                    # 🔒 GÜVENLİK 2: Kullanıcı ID'sini kontrol et
+                    user_id = message.get('from', {}).get('id')
+                    
+                    if not self._is_admin(user_id):
+                        # Yetkisiz erişim denemesi logla
+                        username = message.get('from', {}).get('username', 'Unknown')
+                        logger.warning(f"🚨 Yetkisiz komut denemesi! User ID: {user_id}, Username: @{username}")
+                        
+                        # Kullanıcıya bilgi ver
+                        self._send_raw(
+                            "🔒 *ERİŞİM ENGELLENDİ*\n\n"
+                            "Bu bot sadece yetkili kullanıcılar tarafından kontrol edilebilir.\n\n"
+                            "⚠️ Bu deneme kaydedildi."
+                        )
+                        continue
+                    
+                    # ✅ Yetkili kullanıcı - Komutları işle
                     text = message.get('text', '').strip()
                     
                     # Komutları işle
@@ -241,7 +274,7 @@ class TelegramMonitor:
     def _send_help(self):
         """Yardım Mesajı"""
         self._send_raw(
-            "❓ *KOMUT LİSTESİ*\n\n"
+            "❓ *KOMUT LİSTESİ* 🔒\n\n"
             "📢 *YÖNETİM:*\n"
             "`/duyuru [mesaj]` - Duyuru as\n"
             "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
@@ -261,7 +294,8 @@ class TelegramMonitor:
             "`/online` - Aktif kullanıcı\n"
             "`/temizle` - Cache temizliği\n"
             "`/analiz` - Versiyon analizi\n"
-            "`/rapor detay` - 7 günlük özet"
+            "`/rapor detay` - 7 günlük özet\n\n"
+            "🔒 _Bu komutlar sadece yetkili admin tarafından kullanılabilir._"
         )
 
     def _handle_durum(self):
@@ -322,6 +356,10 @@ class TelegramMonitor:
                 f"🚧 *ÖZEL MODLAR*\n"
                 f"• Bakım: {maintenance_status}\n"
                 f"• Alarm: {alarm_status}\n\n"
+                
+                f"🔒 *GÜVENLİK*\n"
+                f"• Admin Filter: `Aktif`\n"
+                f"• Rate Limiting: `60/dakika`\n\n"
                 
                 f"_Rapor Zamanı: {datetime.now().strftime('%H:%M:%S')}_"
             )
@@ -494,7 +532,7 @@ class TelegramMonitor:
             self._send_raw(f"❌ Açma hatası: {str(e)}")
 
     # ==========================================
-    # BÖLÜM 3: BAKIM MODU (YENİ!)
+    # BÖLÜM 3: BAKIM MODU
     # ==========================================
 
     def _handle_bakim(self, text):
@@ -581,7 +619,7 @@ class TelegramMonitor:
             self._send_raw(f"❌ Bakım modu hatası: {str(e)}")
 
     # ==========================================
-    # BÖLÜM 4: ALARM SİSTEMİ (YENİ!)
+    # BÖLÜM 4: ALARM SİSTEMİ
     # ==========================================
 
     def _handle_alarm(self, text):
@@ -707,7 +745,7 @@ class TelegramMonitor:
                 time.sleep(60)
 
     # ==========================================
-    # BÖLÜM 5: HAFTALIK RAPOR (YENİ!)
+    # BÖLÜM 5: HAFTALIK RAPOR
     # ==========================================
 
     def _handle_rapor(self, text):
@@ -803,7 +841,7 @@ def init_telegram_monitor():
         # Komut Dinleyiciyi Başlat
         telegram_monitor.start_command_listener()
         
-        logger.info("✅ Telegram Monitor (Sessiz + Komut + Duyuru + Death Star + Bakım + Alarm + Rapor) başlatıldı.")
+        logger.info("✅ Telegram Monitor (🔒 Admin Filter + Sessiz + Komut + Duyuru + Death Star + Bakım + Alarm + Rapor) başlatıldı.")
         return telegram_monitor
     else:
         logger.warning("⚠️ Telegram Token/ChatID eksik. Bildirimler kapalı.")
