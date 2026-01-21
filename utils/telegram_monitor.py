@@ -1,12 +1,13 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ + RAPOR SİSTEMİ + DUYURU 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ + RAPOR SİSTEMİ + DUYURU + SUS/KONUŞ 🤖
 =======================================================
-✅ KOMUTLAR: /durum, /online, /temizle, /analiz, /duyuru (Sadece Patron!)
+✅ KOMUTLAR: /durum, /online, /temizle, /analiz, /duyuru, /sus, /konus (Sadece Patron!)
 ✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller.
 ✅ MODERN RAPOR: Gece raporu için özel "Şekilli" tasarım.
 ✅ CRITICAL ONLY: Sadece sistem çökerse veya rapor zamanıysa yazar.
 ✅ THREAD-SAFE: Arka planda sessizce çalışır.
 ✅ DUYURU SİSTEMİ: Süreli/Süresiz banner yönetimi
+✅ DEATH STAR MODU: /sus ile sistemi tamamen gizle, /konus ile aç
 """
 
 import os
@@ -149,7 +150,7 @@ class TelegramMonitor:
     def start_command_listener(self):
         """
         Arka planda komutları dinlemeye başlar
-        /durum, /online, /temizle, /analiz, /duyuru
+        /durum, /online, /temizle, /analiz, /duyuru, /sus, /konus
         """
         if self.is_listening:
             logger.warning("Komut dinleyici zaten çalışıyor!")
@@ -208,17 +209,25 @@ class TelegramMonitor:
                         self._handle_analiz()
                     elif text.startswith('/duyuru'):
                         self._handle_duyuru(text)
+                    elif text == '/sus':
+                        self._handle_sus()
+                    elif text == '/konus':
+                        self._handle_konus()
                     elif text.startswith('/'):
                         self._send_raw(
                             "❓ *Bilinmeyen Komut*\n\n"
-                            "Kullanılabilir komutlar:\n"
-                            "`/durum` - Sistem sağlık raporu\n"
-                            "`/online` - Aktif kullanıcı sayısı\n"
-                            "`/temizle` - Cache temizliği\n"
-                            "`/analiz` - Versiyon analizi\n"
-                            "`/duyuru [mesaj]` - Duyuru yayınla\n"
+                            "Kullanılabilir komutlar:\n\n"
+                            "📢 *YÖNETİM:*\n"
+                            "`/duyuru [mesaj]` - Duyuru as\n"
                             "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
-                            "`/duyuru sil` - Duyuruyu kaldır"
+                            "`/duyuru sil` - Duyuruyu kaldır\n"
+                            "`/sus` - 🛑 SİSTEMİ GİZLE (Acil)\n"
+                            "`/konus` - 🔊 SİSTEMİ AÇ\n\n"
+                            "📊 *RAPOR:*\n"
+                            "`/durum` - Sistem sağlık raporu\n"
+                            "`/online` - Aktif kullanıcı\n"
+                            "`/temizle` - Cache temizliği\n"
+                            "`/analiz` - Versiyon analizi"
                         )
                 
             except Exception as e:
@@ -418,6 +427,36 @@ class TelegramMonitor:
         except Exception as e:
             self._send_raw(f"❌ Duyuru hatası: {str(e)}")
 
+    def _handle_sus(self):
+        """🛑 ACİL DURUM: Sistemi Komple Susturur"""
+        try:
+            from utils.cache import set_cache
+            # Redis'e 'system_mute' anahtarını koyuyoruz (Süresiz)
+            set_cache("system_mute", "true", ttl=0)
+            
+            self._send_raw(
+                "🤫 *SİSTEM SUSTURULDU!* 🛑\n\n"
+                "Patron emriyle tüm banner ve duyurular gizlendi.\n"
+                "Uygulama artık ekranında hiçbir uyarı göstermeyecek.\n\n"
+                "✅ Açmak için: `/konus`"
+            )
+        except Exception as e:
+            self._send_raw(f"❌ Susturma hatası: {str(e)}")
+
+    def _handle_konus(self):
+        """🔊 SİSTEMİ AÇ: Normal Akışa Dön"""
+        try:
+            from utils.cache import delete_cache
+            # Kilidi kaldırıyoruz
+            delete_cache("system_mute")
+            
+            self._send_raw(
+                "🔊 *SİSTEM TEKRAR ONLINE* ✅\n\n"
+                "Susturma kaldırıldı. Otomatik takvim ve duyurular tekrar görünmeye başlayacak."
+            )
+        except Exception as e:
+            self._send_raw(f"❌ Açma hatası: {str(e)}")
+
 # ======================================
 # SINGLETON BAŞLATICI
 # ======================================
@@ -440,7 +479,7 @@ def init_telegram_monitor():
         # Komut Dinleyiciyi Başlat
         telegram_monitor.start_command_listener()
         
-        logger.info("✅ Telegram Monitor (Sessiz Mod + Komut Sistemi + Duyuru) başlatıldı.")
+        logger.info("✅ Telegram Monitor (Sessiz Mod + Komut Sistemi + Duyuru + Death Star) başlatıldı.")
         return telegram_monitor
     else:
         logger.warning("⚠️ Telegram Token/ChatID eksik. Bildirimler kapalı.")
