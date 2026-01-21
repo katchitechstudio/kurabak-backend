@@ -6,6 +6,7 @@ KuraBak Backend - ENTRY POINT (ASYNCHRONOUS & FAST) 🚀
 ✅ SILENT START: Arka plan işlemleri sessizce başlar.
 ✅ BLUEPRINT ARCHITECTURE: Modüler yapı.
 ✅ WORKER + SNAPSHOT + ŞEF SİSTEMİ: Akıllı backend mimarisi
+✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder (10dk beklemez!)
 """
 import os
 import logging
@@ -21,7 +22,7 @@ from config import Config
 from routes.general_routes import api_bp
 
 # Servisler
-from services.maintenance_service import start_scheduler, stop_scheduler
+from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
 from utils.telegram_monitor import init_telegram_monitor
 
 # ======================================
@@ -60,6 +61,7 @@ def background_initialization():
     BAŞLATMA SIRASI:
     1. Telegram Monitor (Sessiz Mod)
     2. Scheduler (Worker + Snapshot + Şef)
+    3. 🔥 İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
     logger.info("⏳ [Arka Plan] Sistem servisleri başlatılıyor...")
     time.sleep(1)  # Kısa bir nefes alma payı
@@ -73,6 +75,18 @@ def background_initialization():
     # - Gece 00:00'da Snapshot (Fotoğrafçı)
     # - Her 10dk'da Şef kontrolü (Controller)
     start_scheduler()
+    
+    # 3. 🔥 İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
+    logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
+    logger.info("   📸 Snapshot yoksa hemen alınacak")
+    logger.info("   👷 İşçi uyuyorsa uyandırılacak")
+    logger.info("   🧪 Zehirli veri varsa temizlenecek")
+    
+    try:
+        supervisor_check()
+        logger.info("✅ [İlk Kontrol] Şef kontrolü tamamlandı!")
+    except Exception as e:
+        logger.error(f"⚠️ [İlk Kontrol] Şef hatası: {e}")
     
     logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
     logger.info("   👷 İşçi (Worker): 2 dakikada bir çalışıyor")
@@ -101,7 +115,7 @@ def index():
     """Health Check & Info"""
     return jsonify({
         "app": Config.APP_NAME,
-        "version": "2.0.0",  # 🔥 Yeni Versiyon
+        "version": "2.0.1",  # 🔥 Yeni Versiyon (İlk Şef Kontrolü eklendi)
         "status": "active",
         "environment": Config.ENVIRONMENT,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -114,12 +128,13 @@ def index():
             "Smart Change Calculation (API Independent)",
             "Weekend Lock (Market Closed Detection)",
             "Trend Analysis (Volatility Alert 🔥)",
-            "Self-Healing Mechanism"
+            "Self-Healing Mechanism",
+            "Instant Supervisor Check on Startup"  # 🔥 YENİ
         ],
         "components": {
             "worker": "Her 2 dakikada veri çeker ve değişim hesaplar",
             "snapshot": "Gece 00:00'da referans fiyatları kaydeder",
-            "controller": "Her 10 dakikada sistemi denetler ve onarır"
+            "controller": "Her 10 dakikada sistemi denetler ve onarır (İlk kontrol: Başlangıçta)"
         }
     }), 200
 
@@ -209,6 +224,6 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"🌍 Local Sunucu Başlatılıyor: http://localhost:{port}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    logger.info("🚀 KuraBak Backend v2.0")
+    logger.info("🚀 KuraBak Backend v2.0.1")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
