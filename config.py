@@ -1,11 +1,12 @@
 """
-Configuration - PRODUCTION READY (CENTRAL BRAIN) 🧠
+Configuration - PRODUCTION READY V3.0 (BAKIM & ALARM SİSTEMİ) 🧠
 ===================================================
 ✅ API URLS: V5 (Primary), V4 & V3 (Fallbacks)
 ✅ TIMEOUTS: Hızlı yanıt için optimize edilmiş süreler.
 ✅ CACHE KEYS: Redis anahtarlarının tek merkezi.
 ✅ REGIONS: 20 Döviz için Bölgesel Gruplama.
 ✅ WORKER + SNAPSHOT + ŞEF SİSTEMİ: Akıllı backend yapılandırması
+✅ YENİ: BAKIM MODU & SELF-HEALING ALARM SİSTEMİ
 """
 import os
 
@@ -14,26 +15,18 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "2.0.0"
+    APP_VERSION = "3.0.0"  # 🔥 YENİ VERSIYON
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
     DEFAULT_TIMEZONE = "Europe/Istanbul"
     
     # ======================================
-    # API KAYNAKLARI (TRIPLE FALLBACK)
+    # API KAYNAĞI (SADECE V5)
     # ======================================
-    # 1. Primary (En Hızlı ve Güncel)
+    # V5 API (Tek ve Güvenilir Kaynak)
     API_V5_URL = "https://finance.truncgil.com/api/today.json"
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
-    
-    # 2. Secondary (Yedek)
-    API_V4_URL = "https://finans.truncgil.com/v4/today.json"
-    API_V4_TIMEOUT = (8, 15)  # Biraz daha toleranslı
-    
-    # 3. Tertiary (Son Çare - Farklı Format)
-    API_V3_URL = "https://finans.truncgil.com/v3/today.json"
-    API_V3_TIMEOUT = (8, 15)
     
     # ======================================
     # ZAMANLAYICI & PERFORMANS
@@ -47,7 +40,7 @@ class Config:
     SNAPSHOT_SECOND = 5  # Saniye 05 (00:00:05)
     
     # 👮 Şef (Controller) - Sistem denetim sıklığı (Dakika)
-    SUPERVISOR_INTERVAL = 10  # 10 Dakika
+    SUPERVISOR_INTERVAL = 10  # 🔥 YENİ: 10 Dakika (CPU/RAM kontrolü için)
     
     # 📊 Telegram Günlük Rapor Saati (Sabah 09:00)
     TELEGRAM_DAILY_REPORT_HOUR = 9
@@ -55,6 +48,33 @@ class Config:
     # 🛡️ Circuit Breaker (Sigorta) Ayarları
     CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3  # 3 kere üst üste hata alırsa dur
     CIRCUIT_BREAKER_TIMEOUT = 60           # 60 saniye bekle (Soğuma süresi)
+    
+    # ======================================
+    # 🚧 BAKIM MODU AYARLARI (YENİ!)
+    # ======================================
+    # Bakım modu varsayılan mesajı
+    MAINTENANCE_DEFAULT_MESSAGE = "Sistem bakımda. Veriler güncel olmayabilir."
+    
+    # ======================================
+    # 🚨 SELF-HEALING ALARM SİSTEMİ (YENİ!)
+    # ======================================
+    # CPU Eşiği (Varsayılan %)
+    CPU_THRESHOLD = 80  # %80
+    
+    # RAM Eşiği (Varsayılan %)
+    RAM_THRESHOLD = 85  # %85
+    
+    # Alarm kontrol sıklığı (Saniye) - 🔥 HIZLI MÜDAHALE için 1 dakika!
+    ALARM_CHECK_INTERVAL = 60  # 1 dakika (60 saniye) - Kritik sorunları hızlıca yakalar
+    
+    # Müdahale sonrası bekleme süresi (Saniye)
+    ALARM_COOLDOWN = 300  # 5 dakika (Tekrar müdahale etmeden önce bekle)
+    
+    # Alarm bildirimi aralığı (Saniye) - Aynı alarm için tekrar bildirim göndermeden önce bekle
+    ALARM_NOTIFICATION_INTERVAL = 1800  # 30 dakika
+    
+    # CPU yüksek kalma süresi (Saniye) - CPU bu kadar süre yüksekse müdahale et
+    CPU_HIGH_DURATION = 300  # 5 dakika
     
     # ======================================
     # HAFTA SONU KİLİDİ
@@ -82,7 +102,16 @@ class Config:
         # Worker + Snapshot + Şef sistemleri
         'yesterday_prices': 'kurabak:yesterday_prices',  # 📸 Snapshot referans fiyatları
         'last_worker_run': 'kurabak:last_worker_run',    # 👷 İşçi son çalışma zamanı
-        'backup_timestamp': 'kurabak:backup:timestamp'   # 📦 Backup son kayıt zamanı
+        'backup_timestamp': 'kurabak:backup:timestamp',  # 📦 Backup son kayıt zamanı
+        
+        # 🔥 YENİ: Bakım ve Alarm Sistemleri
+        'maintenance': 'system_maintenance',             # 🚧 Bakım modu durumu
+        'banner': 'system_banner',                       # 📢 Banner mesajı
+        'mute': 'system_mute',                          # 🔇 Death Star modu
+        'alarm_cpu_state': 'alarm:cpu:state',           # 🧠 CPU alarm durumu
+        'alarm_ram_state': 'alarm:ram:state',           # 💾 RAM alarm durumu
+        'alarm_last_notification': 'alarm:last_notification',  # 🔔 Son bildirim zamanı
+        'system_was_down': 'system_was_down'            # 🔄 Sistem çökmüş mü?
     }
     
     # ======================================
