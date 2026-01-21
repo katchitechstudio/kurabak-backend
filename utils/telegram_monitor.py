@@ -1,13 +1,17 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ + RAPOR SİSTEMİ + DUYURU + SUS/KONUŞ 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ + BAKIM + ALARM + RAPOR SİSTEMİ 🤖
 =======================================================
-✅ KOMUTLAR: /durum, /online, /temizle, /analiz, /duyuru, /sus, /konus (Sadece Patron!)
-✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller.
-✅ MODERN RAPOR: Gece raporu için özel "Şekilli" tasarım.
-✅ CRITICAL ONLY: Sadece sistem çökerse veya rapor zamanıysa yazar.
-✅ THREAD-SAFE: Arka planda sessizce çalışır.
+✅ KOMUTLAR: /durum, /online, /temizle, /analiz, /duyuru, /sus, /konus
+✅ YENİ: /bakim, /alarm, /rapor
+✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller
+✅ MODERN RAPOR: Gece raporu için özel "Şekilli" tasarım
+✅ CRITICAL ONLY: Sadece sistem çökerse veya rapor zamanıysa yazar
+✅ THREAD-SAFE: Arka planda sessizce çalışır
 ✅ DUYURU SİSTEMİ: Süreli/Süresiz banner yönetimi
 ✅ DEATH STAR MODU: /sus ile sistemi tamamen gizle, /konus ile aç
+✅ BAKIM MODU: Senaryo A (Tam Engel) + Senaryo B (Kısıtlı Kullanım)
+✅ AKILLI ALARM: CPU/RAM izleme
+✅ HAFTALIK RAPOR: Detaylı performans özeti
 """
 
 import os
@@ -30,6 +34,9 @@ class TelegramMonitor:
     Çift Modlu Telegram Bot:
     1. RAPOR MODU: Sessiz bildirimler, günlük raporlar
     2. KOMUT MODU: Senin komutlarını dinler ve cevaplar
+    3. BAKIM MODU: Sistem bakım yönetimi
+    4. ALARM SİSTEMİ: CPU/RAM izleme
+    5. HAFTALIK RAPOR: Performans özeti
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -44,6 +51,10 @@ class TelegramMonitor:
         # Komut Dinleyici Thread
         self.command_thread = None
         self.is_listening = False
+        
+        # Alarm Thread
+        self.alarm_thread = None
+        self.is_alarm_active = False
 
     # ==========================================
     # BÖLÜM 1: RAPOR SİSTEMİ (Mevcut Kod)
@@ -144,13 +155,14 @@ class TelegramMonitor:
         self.send_message(report, level='report')
 
     # ==========================================
-    # BÖLÜM 2: KOMUT SİSTEMİ (YENİ!)
+    # BÖLÜM 2: KOMUT SİSTEMİ
     # ==========================================
 
     def start_command_listener(self):
         """
         Arka planda komutları dinlemeye başlar
         /durum, /online, /temizle, /analiz, /duyuru, /sus, /konus
+        /bakim, /alarm, /rapor
         """
         if self.is_listening:
             logger.warning("Komut dinleyici zaten çalışıyor!")
@@ -213,26 +225,44 @@ class TelegramMonitor:
                         self._handle_sus()
                     elif text == '/konus':
                         self._handle_konus()
+                    elif text.startswith('/bakim'):
+                        self._handle_bakim(text)
+                    elif text.startswith('/alarm'):
+                        self._handle_alarm(text)
+                    elif text.startswith('/rapor'):
+                        self._handle_rapor(text)
                     elif text.startswith('/'):
-                        self._send_raw(
-                            "❓ *Bilinmeyen Komut*\n\n"
-                            "Kullanılabilir komutlar:\n\n"
-                            "📢 *YÖNETİM:*\n"
-                            "`/duyuru [mesaj]` - Duyuru as\n"
-                            "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
-                            "`/duyuru sil` - Duyuruyu kaldır\n"
-                            "`/sus` - 🛑 SİSTEMİ GİZLE (Acil)\n"
-                            "`/konus` - 🔊 SİSTEMİ AÇ\n\n"
-                            "📊 *RAPOR:*\n"
-                            "`/durum` - Sistem sağlık raporu\n"
-                            "`/online` - Aktif kullanıcı\n"
-                            "`/temizle` - Cache temizliği\n"
-                            "`/analiz` - Versiyon analizi"
-                        )
+                        self._send_help()
                 
             except Exception as e:
                 logger.error(f"Komut dinleyici hatası: {e}")
                 time.sleep(10)  # Hata durumunda bekle
+
+    def _send_help(self):
+        """Yardım Mesajı"""
+        self._send_raw(
+            "❓ *KOMUT LİSTESİ*\n\n"
+            "📢 *YÖNETİM:*\n"
+            "`/duyuru [mesaj]` - Duyuru as\n"
+            "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
+            "`/duyuru sil` - Duyuruyu kaldır\n"
+            "`/sus` - 🛑 SİSTEMİ GİZLE\n"
+            "`/konus` - 🔊 SİSTEMİ AÇ\n\n"
+            "🚧 *BAKIM:*\n"
+            "`/bakim 30` - 30 dk Senaryo B (Veri yok)\n"
+            "`/bakim 30 tam` - 30 dk Senaryo A (Tam kilit)\n"
+            "`/bakim sil` - Bakımı kaldır\n\n"
+            "🚨 *ALARM:*\n"
+            "`/alarm cpu 80` - CPU %80 uyarısı\n"
+            "`/alarm ram 85` - RAM %85 uyarısı\n"
+            "`/alarm sil` - Alarmı kapat\n\n"
+            "📊 *RAPOR:*\n"
+            "`/durum` - Sistem sağlık raporu\n"
+            "`/online` - Aktif kullanıcı\n"
+            "`/temizle` - Cache temizliği\n"
+            "`/analiz` - Versiyon analizi\n"
+            "`/rapor detay` - 7 günlük özet"
+        )
 
     def _handle_durum(self):
         """Sistem Durumu Raporu"""
@@ -267,6 +297,14 @@ class TelegramMonitor:
             snapshot_exists = bool(get_cache("kurabak:yesterday_prices"))
             snapshot_icon = "🟢" if snapshot_exists else "🔴"
             
+            # Bakım durumu
+            maintenance_data = get_cache("system_maintenance")
+            maintenance_status = "🔴 Aktif" if maintenance_data else "🟢 Kapalı"
+            
+            # Alarm durumu
+            alarm_data = get_cache("system_alarm")
+            alarm_status = "🔔 Aktif" if alarm_data else "🔕 Kapalı"
+            
             report = (
                 f"👮‍♂️ *SİSTEM DURUMU RAPORU*\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -280,6 +318,10 @@ class TelegramMonitor:
                 f"• {worker_icon} Worker: `{worker_text}`\n"
                 f"• {snapshot_icon} Snapshot: `{'Mevcut' if snapshot_exists else 'Kayıp'}`\n"
                 f"• 🟢 Scheduler: `Aktif`\n\n"
+                
+                f"🚧 *ÖZEL MODLAR*\n"
+                f"• Bakım: {maintenance_status}\n"
+                f"• Alarm: {alarm_status}\n\n"
                 
                 f"_Rapor Zamanı: {datetime.now().strftime('%H:%M:%S')}_"
             )
@@ -405,14 +447,11 @@ class TelegramMonitor:
                     ttl = val * multiplier
                     message = potential_msg # Mesajdan süreyi çıkart
                     
-                    # Bitiş tarihini hesapla (Türkiye Saati: UTC+3)
+                    # Bitiş tarihini hesapla
                     end_time = datetime.now() + timedelta(seconds=ttl)
-                    # Türkiye saati için +3 saat ekle (eğer server UTC ise)
-                    end_time_tr = end_time + timedelta(hours=3) 
-                    duration_info = f"{val} {unit_name} ⏳\n🗓️ *Bitiş:* {end_time_tr.strftime('%d.%m %H:%M')}"
+                    duration_info = f"{val} {unit_name} ⏳\n🗓️ *Bitiş:* {end_time.strftime('%d.%m %H:%M')}"
 
             # 4. Redis'e Kaydet (Süreli veya Süresiz)
-            # ttl=0 ise sonsuz, değilse saniye cinsinden ömür biçer
             set_cache("system_banner", message, ttl=ttl)
             
             self._send_raw(
@@ -420,8 +459,7 @@ class TelegramMonitor:
                 f"━━━━━━━━━━━━━━━━\n"
                 f"📝 *Mesaj:* \"{message}\"\n"
                 f"⏱️ *Süre:* {duration_info}\n\n"
-                f"✅ Tamamdır Patron! Uygulama ekranlarında görünüyor. "
-                f"Süre bitince otomatik kaldırırım."
+                f"✅ Tamamdır Patron! Uygulama ekranlarında görünüyor."
             )
             
         except Exception as e:
@@ -431,7 +469,6 @@ class TelegramMonitor:
         """🛑 ACİL DURUM: Sistemi Komple Susturur"""
         try:
             from utils.cache import set_cache
-            # Redis'e 'system_mute' anahtarını koyuyoruz (Süresiz)
             set_cache("system_mute", "true", ttl=0)
             
             self._send_raw(
@@ -447,7 +484,6 @@ class TelegramMonitor:
         """🔊 SİSTEMİ AÇ: Normal Akışa Dön"""
         try:
             from utils.cache import delete_cache
-            # Kilidi kaldırıyoruz
             delete_cache("system_mute")
             
             self._send_raw(
@@ -456,6 +492,294 @@ class TelegramMonitor:
             )
         except Exception as e:
             self._send_raw(f"❌ Açma hatası: {str(e)}")
+
+    # ==========================================
+    # BÖLÜM 3: BAKIM MODU (YENİ!)
+    # ==========================================
+
+    def _handle_bakim(self, text):
+        """
+        🚧 BAKIM MODU SİSTEMİ
+        Kullanım:
+        1. /bakim 30 -> 30 dakika Senaryo B (Veri yok, kullanıcı kullanabilir)
+        2. /bakim 30 tam -> 30 dakika Senaryo A (Tam kilit, hiçbir şey kullanılamaz)
+        3. /bakim sil -> Bakımı kaldır
+        """
+        try:
+            from utils.cache import set_cache, delete_cache
+            
+            # Komutu temizle
+            raw_content = text.replace('/bakim', '').strip()
+            
+            # Silme komutu
+            if raw_content.lower() == 'sil' or raw_content == '':
+                delete_cache("system_maintenance")
+                self._send_raw(
+                    "✅ *BAKIM MODU KALDIRILDI*\n\n"
+                    "Sistem normal moda döndü. Kullanıcılar tekrar veri alabilir."
+                )
+                return
+            
+            # Parametreleri ayır
+            parts = raw_content.split()
+            
+            if len(parts) < 1:
+                self._send_raw(
+                    "❌ *HATALI KULLANIM*\n\n"
+                    "Kullanım:\n"
+                    "`/bakim 30` - 30 dk Senaryo B\n"
+                    "`/bakim 30 tam` - 30 dk Senaryo A\n"
+                    "`/bakim sil` - Bakımı kaldır"
+                )
+                return
+            
+            # Süreyi al
+            try:
+                duration_minutes = int(parts[0])
+            except:
+                self._send_raw("❌ Geçersiz süre! Örn: `/bakim 30`")
+                return
+            
+            # Mod kontrolü (tam mı yoksa limited mi)
+            mode = "full" if len(parts) > 1 and parts[1].lower() == "tam" else "limited"
+            
+            # Mesajı belirle
+            if mode == "full":
+                message = "Sistem bakımda. Lütfen daha sonra tekrar deneyin."
+                scenario = "A (TAM KİLİT)"
+            else:
+                message = "Veri akışı durduruldu. Eski veriler gösterilmektedir."
+                scenario = "B (VERİ YOK)"
+            
+            # TTL hesapla
+            ttl = duration_minutes * 60
+            end_time = time.time() + ttl
+            
+            # Redis'e kaydet
+            maintenance_data = {
+                "message": message,
+                "mode": mode,
+                "end_time": end_time
+            }
+            set_cache("system_maintenance", maintenance_data, ttl=ttl)
+            
+            # Bitiş zamanını hesapla
+            end_datetime = datetime.now() + timedelta(minutes=duration_minutes)
+            
+            self._send_raw(
+                f"🚧 *BAKIM MODU AKTİF!*\n"
+                f"━━━━━━━━━━━━━━━━\n"
+                f"📝 *Senaryo:* {scenario}\n"
+                f"⏱️ *Süre:* {duration_minutes} dakika\n"
+                f"🗓️ *Bitiş:* {end_datetime.strftime('%H:%M')}\n"
+                f"💬 *Mesaj:* {message}\n\n"
+                f"✅ Kullanıcılar artık bu mesajı görecek.\n"
+                f"Bakım bitince otomatik kapanır veya `/bakim sil` yazabilirsin."
+            )
+            
+        except Exception as e:
+            self._send_raw(f"❌ Bakım modu hatası: {str(e)}")
+
+    # ==========================================
+    # BÖLÜM 4: ALARM SİSTEMİ (YENİ!)
+    # ==========================================
+
+    def _handle_alarm(self, text):
+        """
+        🚨 AKILLI ALARM SİSTEMİ
+        Kullanım:
+        1. /alarm cpu 80 -> CPU %80'i geçerse uyar
+        2. /alarm ram 85 -> RAM %85'i geçerse uyar
+        3. /alarm sil -> Alarmı kapat
+        """
+        try:
+            from utils.cache import set_cache, delete_cache
+            
+            # Komutu temizle
+            raw_content = text.replace('/alarm', '').strip()
+            
+            # Silme komutu
+            if raw_content.lower() == 'sil' or raw_content == '':
+                delete_cache("system_alarm")
+                self.is_alarm_active = False
+                self._send_raw(
+                    "🔕 *ALARM KAPANDI*\n\n"
+                    "CPU/RAM izleme durduruldu."
+                )
+                return
+            
+            # Parametreleri ayır
+            parts = raw_content.split()
+            
+            if len(parts) != 2:
+                self._send_raw(
+                    "❌ *HATALI KULLANIM*\n\n"
+                    "Kullanım:\n"
+                    "`/alarm cpu 80` - CPU %80 uyarısı\n"
+                    "`/alarm ram 85` - RAM %85 uyarısı\n"
+                    "`/alarm sil` - Alarmı kapat"
+                )
+                return
+            
+            alarm_type = parts[0].lower()
+            try:
+                threshold = int(parts[1])
+            except:
+                self._send_raw("❌ Geçersiz eşik değeri! Örn: `/alarm cpu 80`")
+                return
+            
+            if alarm_type not in ['cpu', 'ram']:
+                self._send_raw("❌ Geçersiz tip! Sadece `cpu` veya `ram` kullanabilirsin.")
+                return
+            
+            # Alarm verisini kaydet
+            alarm_data = {
+                "type": alarm_type,
+                "threshold": threshold,
+                "last_alert": 0  # Son uyarı zamanı
+            }
+            set_cache("system_alarm", alarm_data, ttl=0)
+            
+            # Alarm thread'ini başlat
+            if not self.is_alarm_active:
+                self.is_alarm_active = True
+                self.alarm_thread = threading.Thread(target=self._alarm_monitor, daemon=True)
+                self.alarm_thread.start()
+            
+            icon = "🧠" if alarm_type == "cpu" else "💾"
+            
+            self._send_raw(
+                f"🚨 *ALARM AKTİF!*\n"
+                f"━━━━━━━━━━━━━━━━\n"
+                f"{icon} *Tip:* {alarm_type.upper()}\n"
+                f"📊 *Eşik:* %{threshold}\n\n"
+                f"✅ Eşik aşılırsa sana haber vereceğim Patron!"
+            )
+            
+        except Exception as e:
+            self._send_raw(f"❌ Alarm kurma hatası: {str(e)}")
+
+    def _alarm_monitor(self):
+        """Arka planda CPU/RAM izler"""
+        while self.is_alarm_active:
+            try:
+                from utils.cache import get_cache
+                
+                alarm_data = get_cache("system_alarm")
+                
+                if not alarm_data:
+                    self.is_alarm_active = False
+                    break
+                
+                alarm_type = alarm_data.get("type")
+                threshold = alarm_data.get("threshold")
+                last_alert = alarm_data.get("last_alert", 0)
+                
+                # Mevcut değerleri al
+                current_value = 0
+                if alarm_type == "cpu":
+                    current_value = psutil.cpu_percent(interval=1)
+                elif alarm_type == "ram":
+                    current_value = psutil.virtual_memory().percent
+                
+                # Eşik aşıldı mı ve son uyarıdan 10 dakika geçti mi?
+                now = time.time()
+                if current_value > threshold and (now - last_alert) > 600:
+                    # Uyarı gönder
+                    icon = "🧠" if alarm_type == "cpu" else "💾"
+                    self._send_raw(
+                        f"⚠️ *ALARM TETİKLENDİ!*\n\n"
+                        f"{icon} *{alarm_type.upper()}:* %{current_value:.1f}\n"
+                        f"📊 *Eşik:* %{threshold}\n\n"
+                        f"Patron, sistem yükü arttı!"
+                    )
+                    
+                    # Son uyarı zamanını güncelle
+                    alarm_data["last_alert"] = now
+                    from utils.cache import set_cache
+                    set_cache("system_alarm", alarm_data, ttl=0)
+                
+                # 60 saniye bekle
+                time.sleep(60)
+                
+            except Exception as e:
+                logger.error(f"Alarm monitor hatası: {e}")
+                time.sleep(60)
+
+    # ==========================================
+    # BÖLÜM 5: HAFTALIK RAPOR (YENİ!)
+    # ==========================================
+
+    def _handle_rapor(self, text):
+        """
+        📊 HAFTALIK RAPOR
+        Kullanım:
+        1. /rapor -> Basit özet
+        2. /rapor detay -> Detaylı 7 günlük analiz
+        """
+        try:
+            from utils.cache import get_cache
+            
+            # Detay istendi mi?
+            is_detailed = "detay" in text.lower()
+            
+            if is_detailed:
+                # 7 günlük detaylı rapor
+                self._send_detailed_report()
+            else:
+                # Basit özet
+                self._send_simple_report()
+                
+        except Exception as e:
+            self._send_raw(f"❌ Rapor hatası: {str(e)}")
+
+    def _send_simple_report(self):
+        """Basit özet rapor"""
+        try:
+            from utils.cache import get_cache
+            
+            # Mevcut durum
+            cpu = psutil.cpu_percent(interval=1)
+            ram = psutil.virtual_memory().percent
+            
+            # Worker durumu
+            last_worker = get_cache("kurabak:last_worker_run")
+            worker_status = "🟢 Aktif" if last_worker else "🔴 Durmuş"
+            
+            self._send_raw(
+                f"📊 *HIZLI RAPOR*\n"
+                f"━━━━━━━━━━━━━━━━\n\n"
+                f"⚡ CPU: `%{cpu:.1f}`\n"
+                f"💾 RAM: `%{ram:.1f}`\n"
+                f"👷 Worker: {worker_status}\n\n"
+                f"_Detaylı rapor için `/rapor detay`_"
+            )
+        except Exception as e:
+            self._send_raw(f"❌ Basit rapor hatası: {str(e)}")
+
+    def _send_detailed_report(self):
+        """7 günlük detaylı rapor"""
+        try:
+            from utils.cache import get_cache
+            
+            # NOT: Bu özellik için günlük metriklerin Redis'te saklanması gerekir
+            # Şu an placeholder
+            
+            self._send_raw(
+                f"📊 *HAFTALIK DETAY RAPORU*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📅 *Son 7 Gün*\n\n"
+                f"⚠️ Bu özellik henüz aktif değil.\n"
+                f"Günlük metriklerin kaydedilmesi gerekiyor.\n\n"
+                f"🔜 *Yakında:*\n"
+                f"• Ortalama uptime %\n"
+                f"• Günlük hata sayısı\n"
+                f"• CPU/RAM trendleri\n"
+                f"• En yoğun saatler\n\n"
+                f"_Bu özellik sonraki güncellemede aktif olacak._"
+            )
+        except Exception as e:
+            self._send_raw(f"❌ Detaylı rapor hatası: {str(e)}")
 
 # ======================================
 # SINGLETON BAŞLATICI
@@ -479,7 +803,7 @@ def init_telegram_monitor():
         # Komut Dinleyiciyi Başlat
         telegram_monitor.start_command_listener()
         
-        logger.info("✅ Telegram Monitor (Sessiz Mod + Komut Sistemi + Duyuru + Death Star) başlatıldı.")
+        logger.info("✅ Telegram Monitor (Sessiz + Komut + Duyuru + Death Star + Bakım + Alarm + Rapor) başlatıldı.")
         return telegram_monitor
     else:
         logger.warning("⚠️ Telegram Token/ChatID eksik. Bildirimler kapalı.")
