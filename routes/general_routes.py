@@ -1,16 +1,19 @@
 """
-General Routes - PRODUCTION READY (V7 - ONLINE TRACKING + BANNER) 🚀
+General Routes - PRODUCTION READY (V8 - RATE LIMITING + SECURITY) 🚀
 ==========================================================
-✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar.
+✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
+✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
 ✅ REGIONAL SUPPORT: 20 Döviz için Bölgesel Filtreleme
-✅ SMART RECOVERY: Cache boşsa anlık tetikleme yapar (Synchronous Fallback)
-✅ RATE LIMITING: Saldırılara karşı korumalı
+✅ SMART RECOVERY: Cache boşsa anlık tetikleme yapar
 ✅ STANDARDIZED RESPONSE: Frontend (Android) için sabit format
 ✅ ONLINE USER TRACKING: Her API çağrısında kullanıcıyı 5dk için işaretle
 ✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
+✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
 """
 
 from flask import Blueprint, jsonify, request, current_app
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import logging
 import time
 from datetime import datetime
@@ -24,6 +27,18 @@ from services.maintenance_service import fetch_all_data_safe
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
+
+# ======================================
+# RATE LIMITER SETUP (KRİTİK GÜVENLİK)
+# ======================================
+
+# Flask-Limiter başlatıcısı
+limiter = Limiter(
+    key_func=get_remote_address,  # IP adresine göre limit
+    default_limits=["200 per hour"],  # Genel limit: Saatte 200 istek
+    storage_uri="memory://",  # Redis yoksa bellekte tut
+    strategy="fixed-window"  # Sabit pencere stratejisi
+)
 
 # ======================================
 # YARDIMCI FONKSİYONLAR
@@ -88,7 +103,6 @@ def get_data_guaranteed(cache_key):
     
     if stale_data:
         logger.warning(f"⚠️ {cache_key} için güncel veri yok, BAYAT veri sunuluyor.")
-        # Arka planda güncelleme tetiklenebilir ama şimdilik veriyi dönelim
         return stale_data
 
     # 3. Hiçbir şey yoksa (Cold Start) -> Mecbur gidip çekeceğiz
@@ -101,18 +115,41 @@ def get_data_guaranteed(cache_key):
     
     return None
 
+
+def check_user_agent():
+    """
+    Bot/Scraper kontrolü (İsteğe bağlı güvenlik)
+    Şüpheli User-Agent'ları logla
+    """
+    user_agent = request.headers.get('User-Agent', 'Unknown')
+    
+    # Bilinen bot user-agent'ları
+    suspicious_agents = ['curl', 'wget', 'python-requests', 'scrapy']
+    
+    if any(bot in user_agent.lower() for bot in suspicious_agents):
+        logger.warning(f"⚠️ Şüpheli User-Agent: {user_agent} | IP: {request.remote_addr}")
+        # İsterseniz burada rate limit'i daha da sıkılaştırabilirsiniz
+    
+    return True  # Şimdilik tüm isteklere izin ver
+
 # ======================================
-# ENDPOINTLER (ONLINE TAKİP + BANNER!)
+# ENDPOINTLER (RATE LIMITED!)
 # ======================================
 
 @api_bp.route('/currency/all', methods=['GET'])
+@limiter.limit("60 per minute")  # Dakikada 60 istek (Agresif kullanıcılar için)
 def get_all_currencies():
     """
-    Tüm Döviz Kurları (20 Adet Sabit)
+    Tüm Döviz Kurları (23 Adet)
     🕵️ Online tracking aktif!
     📢 Banner desteği eklendi!
+    🛡️ Rate limit: 60/dakika
+    🚧 Bakım Modu: Otomatik banner güncelleme
     """
-    # 🚨 AJAN DEVREDE! Kullanıcıyı işaretle
+    # Bot kontrolü
+    check_user_agent()
+    
+    # Kullanıcıyı işaretle
     track_online_user()
     
     try:
@@ -124,16 +161,29 @@ def get_all_currencies():
         # Veri formatı kontrolü
         data_list = result.get('data', [])
         update_date = result.get('update_date')
+        status = result.get('status', 'OPEN')
+        market_msg = result.get('market_msg')
         
-        # 🔥 YENİ: Banner var mı kontrol et
-        banner_msg = get_cache("system_banner")  # Redis'ten oku
+        # Banner var mı kontrol et
+        banner_msg = get_cache("system_banner")
+        
+        # 🔥 AKILLI BANNER: Bakım modundaysa banner'ı otomatik güncelle
+        if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
+            # Bakım mesajını banner olarak kullan
+            banner_msg = market_msg or "🚧 Sistem şu an bakımda. Lütfen daha sonra tekrar deneyin."
+        elif status == 'CLOSED':
+            # Piyasa kapalıysa ona göre banner göster (eğer manuel banner yoksa)
+            if not banner_msg:
+                banner_msg = market_msg or "🌙 Piyasalar kapalı, iyi hafta sonları!"
         
         # Meta verisine banner'ı ekle
         meta_data = {
             'count': len(data_list),
             'last_update': update_date,
             'source': result.get('source'),
-            'banner': banner_msg  # Varsa mesaj gider, yoksa None gider
+            'status': status,
+            'market_msg': market_msg,
+            'banner': banner_msg
         }
         
         return create_response(
@@ -148,12 +198,13 @@ def get_all_currencies():
 
 
 @api_bp.route('/currency/gold/all', methods=['GET'])
+@limiter.limit("60 per minute")
 def get_all_golds():
     """
-    Tüm Altın Fiyatları
-    🕵️ Online tracking aktif!
+    Tüm Altın Fiyatları (6 Adet)
+    🛡️ Rate limit: 60/dakika
     """
-    # 🚨 AJAN DEVREDE!
+    check_user_agent()
     track_online_user()
     
     try:
@@ -167,7 +218,11 @@ def get_all_golds():
             data_list,
             200,
             "Altın fiyatları getirildi",
-            {'count': len(data_list), 'last_update': result.get('update_date')}
+            {
+                'count': len(data_list), 
+                'last_update': result.get('update_date'),
+                'status': result.get('status', 'OPEN')
+            }
         )
     except Exception as e:
         logger.error(f"Gold All Error: {e}")
@@ -175,12 +230,13 @@ def get_all_golds():
 
 
 @api_bp.route('/currency/silver/all', methods=['GET'])
+@limiter.limit("60 per minute")
 def get_all_silvers():
     """
-    Gümüş Fiyatları (Özel İstek)
-    🕵️ Online tracking aktif!
+    Gümüş Fiyatları
+    🛡️ Rate limit: 60/dakika
     """
-    # 🚨 AJAN DEVREDE!
+    check_user_agent()
     track_online_user()
     
     try:
@@ -199,19 +255,19 @@ def get_all_silvers():
 
 
 @api_bp.route('/currency/summary', methods=['GET'])
+@limiter.limit("60 per minute")
 def get_summary():
     """
     Piyasa Özeti (Kazanan/Kaybeden)
-    🕵️ Online tracking aktif!
+    🛡️ Rate limit: 60/dakika
     """
-    # 🚨 AJAN DEVREDE!
+    check_user_agent()
     track_online_user()
     
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['summary'])
         
         if not result or not result.get('data'):
-            # Veri yoksa boş obje dön, 503 atma (Frontend patlamasın)
             return create_response({}, 200, "Özet henüz hazır değil")
 
         return create_response(
@@ -225,12 +281,13 @@ def get_summary():
 
 
 @api_bp.route('/currency/regional', methods=['GET'])
+@limiter.limit("30 per minute")  # Daha az kullanılan endpoint
 def get_regional_currencies():
     """
-    Bölgesel Filtrelenmiş Dövizler (Config'deki 5 Bölge)
-    🕵️ Online tracking aktif!
+    Bölgesel Filtrelenmiş Dövizler
+    🛡️ Rate limit: 30/dakika
     """
-    # 🚨 AJAN DEVREDE!
+    check_user_agent()
     track_online_user()
     
     try:
@@ -246,7 +303,7 @@ def get_regional_currencies():
         # Config'den bölge haritasını al
         regions = Config.REGIONAL_CURRENCIES
         
-        # Veriyi hızlı erişim için dictionary yap: {'USD': {...}, 'EUR': {...}}
+        # Veriyi hızlı erişim için dictionary yap
         curr_map = {item['code']: item for item in all_currencies}
         
         for region_name, codes in regions.items():
@@ -267,10 +324,11 @@ def get_regional_currencies():
 
 
 @api_bp.route('/metrics', methods=['GET'])
+@limiter.limit("10 per minute")  # Admin endpoint - çok sıkı limit
 def get_metrics():
     """
     Sistem Metrikleri (Admin/Debug için)
-    NOT: Bu endpoint'te online tracking YOK (Admin arayüzü için)
+    🛡️ Rate limit: 10/dakika (Admin endpoint)
     """
     try:
         from services.financial_service import get_service_metrics
@@ -286,3 +344,22 @@ def get_metrics():
         }, 200)
     except Exception as e:
         return create_response(None, 500, str(e))
+
+
+# ======================================
+# RATE LIMIT ERROR HANDLER
+# ======================================
+
+@api_bp.errorhandler(429)
+def ratelimit_handler(e):
+    """
+    Rate limit aşıldığında kullanıcıya düzgün mesaj gönder
+    """
+    logger.warning(f"⚠️ Rate limit aşıldı: IP={request.remote_addr}")
+    
+    return create_response(
+        [],
+        429,
+        "Çok fazla istek gönderiyorsunuz. Lütfen biraz bekleyin.",
+        {'retry_after': '60 saniye'}
+    )
