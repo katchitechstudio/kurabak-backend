@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER) 🚀
+Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER + DEATH STAR) 🚀
 =========================================================
 ✅ SADECE MOBİL UYGULAMANIN İHTİYACI OLAN VERİYİ ÇEKİYOR
 ✅ 23 Döviz + 6 Altın + 1 Gümüş (Toplam 30 ürün)
@@ -8,6 +8,7 @@ Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER) 🚀
 ✅ WORKER (İşçi) + SNAPSHOT (Fotoğrafçı) SİSTEMİ
 ✅ 📸 GECE REFERANS RAPORU (Patrona Telegram bildirimi)
 ✅ 📢 BANNER SİSTEMİ (Manuel > Otomatik Takvim)
+✅ 🛑 DEATH STAR MODU (/sus ile tamamen susturma)
 """
 
 import requests
@@ -239,16 +240,23 @@ def calculate_summary(currencies):
     }
 
 # ======================================
-# 📢 BANNER BELİRLEYİCİ (YENİ!)
+# 📢 BANNER BELİRLEYİCİ (DEATH STAR FİX)
 # ======================================
 
 def determine_banner_message() -> Optional[str]:
     """
     ÖNCELİK SIRASI:
+    0. 🛑 SİSTEM SUSTURMA KİLİDİ (Death Star Modu)
     1. Manuel Duyuru (Telegram /duyuru komutuyla yazılan)
     2. Otomatik Takvim (TCMB, Bayram, Enflasyon, Piyasa Kapalı)
     3. Hiçbiri yoksa -> None
     """
+    # 0. 🛑 DEATH STAR KİLİDİ (ÖNCELİK #0)
+    is_muted = get_cache("system_mute")
+    if is_muted:
+        logger.info("🤫 [BANNER] Sistem susturulmuş, hiçbir banner gösterilmeyecek.")
+        return None
+    
     # 1. Manuel Duyuru Kontrolü (Öncelik #1)
     manual_banner = get_cache("system_banner")
     if manual_banner:
@@ -378,7 +386,7 @@ def update_financial_data():
     3. Referans fiyatlarla kıyaslayarak değişimi hesaplar
     4. Trend analizi yapar (ALEV ROZETİ)
     5. Market durumunu belirler
-    6. 📢 BANNER MESAJINI BELİRLER (YENİ!)
+    6. 📢 BANNER MESAJINI BELİRLER (DEATH STAR DESTEKLİ!)
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -556,7 +564,7 @@ def update_financial_data():
         elif "Update_Date" in meta:
             update_date_str = meta["Update_Date"]
 
-        # 📢 BANNER MESAJINI BELİRLE (YENİ!)
+        # 📢 BANNER MESAJINI BELİRLE (DEATH STAR DESTEKLİ!)
         banner_message = determine_banner_message()
 
         base_meta = {
@@ -566,7 +574,7 @@ def update_financial_data():
             "status": "OPEN",  # Piyasa açık
             "market_msg": "Piyasalar Canlı",
             "last_update": now.strftime("%H:%M:%S"),
-            "banner": banner_message  # 🔥 BANNER EKLENDİ
+            "banner": banner_message  # 🔥 BANNER EKLENDİ (Death Star korumalı)
         }
 
         # CACHE'E KAYDET (TTL=0)
