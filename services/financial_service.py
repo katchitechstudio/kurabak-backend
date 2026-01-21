@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER + DEATH STAR) 🚀
+Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER + DEATH STAR + BAKIM MODU) 🚀
 =========================================================
 ✅ SADECE MOBİL UYGULAMANIN İHTİYACI OLAN VERİYİ ÇEKİYOR
 ✅ 23 Döviz + 6 Altın + 1 Gümüş (Toplam 30 ürün)
@@ -9,6 +9,8 @@ Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER + DEATH STAR) �
 ✅ 📸 GECE REFERANS RAPORU (Patrona Telegram bildirimi)
 ✅ 📢 BANNER SİSTEMİ (Manuel > Otomatik Takvim)
 ✅ 🛑 DEATH STAR MODU (/sus ile tamamen susturma)
+✅ 🚧 BAKIM MODU (Senaryo A + B desteği)
+✅ 🔄 "DÜZELDİ" BİLDİRİMİ (Otomatik geri bildirim)
 """
 
 import requests
@@ -20,7 +22,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
 from utils.cache import set_cache, get_cache
-from utils.event_manager import get_todays_banner  # 🔥 YENİ EKLEME
+from utils.event_manager import get_todays_banner
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -375,23 +377,100 @@ def take_daily_snapshot():
         return False
 
 # ======================================
+# 🚧 BAKIM MODU KONTROLLERİ (YENİ!)
+# ======================================
+
+def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
+    """
+    Bakım modunu kontrol eder.
+    
+    Returns:
+        Tuple[bool, str, Optional[str]]: 
+        - (True, "MAINTENANCE", "mesaj") -> Bakım modu aktif
+        - (False, "OPEN", None) -> Normal çalışma
+    """
+    # Bakım kilidi var mı kontrol et
+    maintenance_data = get_cache("system_maintenance")
+    
+    if not maintenance_data:
+        return False, "OPEN", None
+    
+    # Veri formatı: {"message": "...", "mode": "full/limited", "end_time": timestamp}
+    if isinstance(maintenance_data, dict):
+        end_time = maintenance_data.get("end_time")
+        
+        # Süre dolmuş mu kontrol et
+        if end_time and time.time() > end_time:
+            # Süre doldu, kilidi kaldır
+            from utils.cache import delete_cache
+            delete_cache("system_maintenance")
+            logger.info("✅ [BAKIM] Bakım süresi doldu, normal moda dönüldü.")
+            return False, "OPEN", None
+        
+        # Bakım modu hala aktif
+        message = maintenance_data.get("message", "Sistem bakımda")
+        mode = maintenance_data.get("mode", "limited")
+        
+        status = "MAINTENANCE_FULL" if mode == "full" else "MAINTENANCE"
+        
+        return True, status, message
+    
+    return False, "OPEN", None
+
+# ======================================
 # 👷 İŞÇİ (WORKER) - 2 DAKİKADA BİR
 # ======================================
 
 def update_financial_data():
     """
     Her 2 dakikada bir çalışır.
-    1. Hafta sonu kontrolü yapar (Cumartesi/Pazar kilidi)
-    2. API'den veri çeker
-    3. Referans fiyatlarla kıyaslayarak değişimi hesaplar
-    4. Trend analizi yapar (ALEV ROZETİ)
-    5. Market durumunu belirler
-    6. 📢 BANNER MESAJINI BELİRLER (DEATH STAR DESTEKLİ!)
+    1. 🚧 BAKIM MODU KONTROLÜ (YENİ!)
+    2. Hafta sonu kontrolü yapar (Cumartesi/Pazar kilidi)
+    3. API'den veri çeker
+    4. 🔄 "DÜZELDİ" BİLDİRİMİ (YENİ!)
+    5. Referans fiyatlarla kıyaslayarak değişimi hesaplar
+    6. Trend analizi yapar (ALEV ROZETİ)
+    7. Market durumunu belirler
+    8. 📢 BANNER MESAJINI BELİRLER (DEATH STAR DESTEKLİ!)
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
     
-    # --- 1. HAFTA SONU KİLİDİ ---
+    # --- 1. 🚧 BAKIM MODU KONTROLÜ (ÖNCELİK #1) ---
+    is_maintenance, maint_status, maint_message = check_maintenance_mode()
+    
+    if is_maintenance:
+        logger.info(f"🚧 [WORKER] Bakım Modu Aktif ({maint_status}). Status güncellendi.")
+        
+        # Bakım modunda da mevcut verilerdeki status'u güncelle
+        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
+        golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
+        silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
+        summary_data = get_cache(Config.CACHE_KEYS['summary'])
+        
+        if currencies_data:
+            currencies_data['status'] = maint_status
+            currencies_data['market_msg'] = maint_message or "Sistem Bakımda"
+            currencies_data['last_update'] = now.strftime("%H:%M:%S")
+            currencies_data['banner'] = maint_message
+            set_cache(Config.CACHE_KEYS['currencies_all'], currencies_data, ttl=0)
+        
+        if golds_data:
+            golds_data['status'] = maint_status
+            set_cache(Config.CACHE_KEYS['golds_all'], golds_data, ttl=0)
+        
+        if silvers_data:
+            silvers_data['status'] = maint_status
+            set_cache(Config.CACHE_KEYS['silvers_all'], silvers_data, ttl=0)
+        
+        if summary_data:
+            summary_data['status'] = maint_status
+            set_cache(Config.CACHE_KEYS['summary'], summary_data, ttl=0)
+        
+        # Bakım modundaysa veri çekme, direkt dön
+        return True
+    
+    # --- 2. HAFTA SONU KİLİDİ ---
     market_status = "OPEN"
     is_weekend_lock = False
     
@@ -430,7 +509,7 @@ def update_financial_data():
         
         return True  # İşçi eve döner
     
-    # --- 2. PİYASA AÇIKSA VERİ ÇEK ---
+    # --- 3. PİYASA AÇIKSA VERİ ÇEK ---
     logger.info("🔄 [WORKER] Piyasa açık, veri çekiliyor ve işleniyor...")
     
     start_time = time.time()
@@ -444,6 +523,9 @@ def update_financial_data():
         telegram_monitor = tm
     except:
         pass
+    
+    # 🔄 "DÜZELDİ" BİLDİRİMİ İÇİN BAYRAK KONTROLÜ
+    was_system_down = get_cache("system_was_down") or False
     
     # V5 -> V4 -> V3 -> Backup
     if not data_raw:
@@ -461,6 +543,10 @@ def update_financial_data():
     # BACKUP
     if not data_raw:
         logger.error("🔴 TÜM API'LER ÇÖKTÜ! Backup aranıyor...")
+        
+        # Sistemi "çöktü" olarak işaretle
+        set_cache("system_was_down", True, ttl=0)
+        
         backup_data = get_cache("kurabak:backup:all")
         
         if backup_data:
@@ -496,8 +582,27 @@ def update_financial_data():
             
             Metrics.inc('errors')
             return False
+    
+    # --- 4. 🔄 "DÜZELDİ" BİLDİRİMİ (YENİ!) ---
+    # Eğer sistem daha önce çökmüştü ve şimdi veri geliyorsa...
+    if was_system_down and data_raw:
+        logger.info("✅ [WORKER] Sistem tekrar online oldu!")
+        
+        # Bayrağı kaldır
+        from utils.cache import delete_cache
+        delete_cache("system_was_down")
+        
+        # Patrona müjdeyi ver
+        if telegram_monitor:
+            telegram_monitor.send_message(
+                f"✅ *SİSTEM TEKRAR ONLINE!*\n\n"
+                f"Tüm servisler normale döndü Patron.\n"
+                f"🚀 Kaynak: {source}\n"
+                f"⏰ Zaman: {now.strftime('%H:%M:%S')}",
+                level='report'
+            )
 
-    # --- 3. VERİYİ İŞLE VE DEĞİŞİM HESAPLA ---
+    # --- 5. VERİYİ İŞLE VE DEĞİŞİM HESAPLA ---
     try:
         # API'den gelen ham veriyi parse et
         currencies, golds, silvers = process_data_mobile_optimized(data_raw)
@@ -510,7 +615,7 @@ def update_financial_data():
         # Dünkü referans fiyatları al
         yesterday_prices = get_cache("kurabak:yesterday_prices") or {}
         
-        # --- 4. AKILLI HESAPLAMA + TREND ANALİZİ ---
+        # --- 6. AKILLI HESAPLAMA + TREND ANALİZİ ---
         def enrich_with_calculation(items):
             """Değişim hesapla ve trend ekle"""
             enriched = []
