@@ -1,11 +1,13 @@
 """
-Redis Cache Utility - PRODUCTION READY (CONNECTION POOL) 🚀
+Redis Cache Utility - PRODUCTION READY (REDIS + DISK BACKUP) 🚀
 =======================================================
 ✅ CONNECTION POOL: 50 bağlantı sınırını patlatmaz (max=20)
-✅ INFINITE TTL SUPPORT: ttl=0 gönderilirse veri ASLA silinmez.
-✅ HYBRID SYSTEM: Redis varsa kullanır, yoksa RAM'e geçer (Otomatik).
-✅ THREAD-SAFE: Çoklu worker/thread ortamında güvenli.
-✅ JSON SERIALIZATION: Verileri otomatik string/json yapar.
+✅ INFINITE TTL SUPPORT: ttl=0 gönderilirse veri ASLA silinmez
+✅ TRIPLE FALLBACK: Redis → RAM → Disk (JSON dosyası)
+✅ THREAD-SAFE: Çoklu worker/thread ortamında güvenli
+✅ JSON SERIALIZATION: Verileri otomatik string/json yapar
+✅ DISK BACKUP: Restart sonrası veri kaybını önler
+✅ AUTO-RECOVERY: Redis çökse bile disk'ten veriyi yükler
 """
 
 import os
@@ -14,8 +16,112 @@ import logging
 import time
 import threading
 from typing import Optional, Any, Dict
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# ======================================
+# DISK BACKUP SİSTEMİ (YENİ!)
+# ======================================
+
+class DiskBackup:
+    """
+    Redis çökerse veya restart atarsa, kritik verileri
+    disk'ten yükleyen kurtarma sistemi.
+    """
+    def __init__(self):
+        # Backup klasörü (proje root'unda)
+        self.backup_dir = Path("data/cache_backup")
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        
+        logger.info(f"📁 Disk Backup klasörü: {self.backup_dir.absolute()}")
+    
+    def save(self, key: str, data: Any) -> bool:
+        """
+        Kritik veriyi disk'e kaydet (JSON formatında)
+        """
+        try:
+            with self._lock:
+                # Güvenli dosya adı oluştur (: ve / karakterlerini temizle)
+                safe_key = key.replace(":", "_").replace("/", "_")
+                file_path = self.backup_dir / f"{safe_key}.json"
+                
+                # JSON'a çevir ve kaydet
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'key': key,
+                        'data': data,
+                        'timestamp': time.time()
+                    }, f, default=str, indent=2)
+                
+                return True
+        except Exception as e:
+            logger.error(f"❌ Disk kayıt hatası [{key}]: {e}")
+            return False
+    
+    def load(self, key: str) -> Optional[Any]:
+        """
+        Disk'ten veriyi yükle
+        """
+        try:
+            with self._lock:
+                safe_key = key.replace(":", "_").replace("/", "_")
+                file_path = self.backup_dir / f"{safe_key}.json"
+                
+                if not file_path.exists():
+                    return None
+                
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    backup = json.load(f)
+                    
+                    # 24 saatten eski backup'ları yükleme
+                    age = time.time() - backup.get('timestamp', 0)
+                    if age > 86400:  # 24 saat = 86400 saniye
+                        logger.warning(f"⚠️ [{key}] Disk backup'ı çok eski ({age/3600:.1f} saat)")
+                        return None
+                    
+                    return backup.get('data')
+        except Exception as e:
+            logger.error(f"❌ Disk okuma hatası [{key}]: {e}")
+            return None
+    
+    def delete(self, key: str) -> bool:
+        """
+        Disk'ten backup'ı sil
+        """
+        try:
+            with self._lock:
+                safe_key = key.replace(":", "_").replace("/", "_")
+                file_path = self.backup_dir / f"{safe_key}.json"
+                
+                if file_path.exists():
+                    file_path.unlink()
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"❌ Disk silme hatası [{key}]: {e}")
+            return False
+    
+    def list_keys(self) -> list:
+        """
+        Disk'teki tüm backup key'lerini listele
+        """
+        try:
+            with self._lock:
+                files = self.backup_dir.glob("*.json")
+                keys = []
+                for f in files:
+                    # Dosya adından key'i geri oluştur
+                    key = f.stem.replace("_", ":")
+                    keys.append(key)
+                return keys
+        except Exception as e:
+            logger.error(f"❌ Disk listeleme hatası: {e}")
+            return []
+
+# Global Disk Backup
+disk_backup = DiskBackup()
 
 # ======================================
 # REDIS CLIENT WRAPPER (CONNECTION POOL)
@@ -40,7 +146,7 @@ class RedisClient:
         """Redis'e Connection Pool ile bağlanır"""
         if not self.redis_url:
             if not self._connection_error_logged:
-                logger.warning("⚠️ REDIS_URL tanımlı değil! RAM Cache kullanılacak.")
+                logger.warning("⚠️ REDIS_URL tanımlı değil! RAM + Disk Cache kullanılacak.")
                 self._connection_error_logged = True
             return None
 
@@ -48,7 +154,6 @@ class RedisClient:
             import redis
             
             # 🔥 CONNECTION POOL (Hayati Önem!)
-            # max_connections=20 -> 50 sınırının altında kalırız
             self._pool = redis.ConnectionPool.from_url(
                 self.redis_url,
                 max_connections=20,  # 🚨 SİHİRLİ AYAR
@@ -77,7 +182,7 @@ class RedisClient:
             return None
 
     def get_client(self):
-        """Lazy connection: İlk ihtiyaç duyulduğında bağlanır"""
+        """Lazy connection: İlk ihtiyaç duyulduğunda bağlanır"""
         if self._client:
             return self._client
             
@@ -160,13 +265,26 @@ class RAMCache:
 ram_cache = RAMCache()
 
 # ======================================
+# KRİTİK VERİ LİSTESİ
+# ======================================
+
+# Bu key'ler disk'e de yedeklenir (Restart sonrası kurtarma için)
+CRITICAL_KEYS = [
+    'kurabak:currencies:all',
+    'kurabak:golds:all',
+    'kurabak:silvers:all',
+    'kurabak:summary',
+    'kurabak:yesterday_prices',  # Snapshot (en kritik!)
+    'kurabak:backup:all'
+]
+
+# ======================================
 # PUBLIC API (DIŞARIYA AÇILAN FONKSİYONLAR)
 # ======================================
 
 def get_cache(key: str) -> Optional[Any]:
     """
-    Cache'ten veri okur.
-    Önce Redis'e bakar, hata alırsa RAM'e bakar.
+    TRIPLE FALLBACK: Redis → RAM → Disk
     """
     client = redis_wrapper.get_client()
     
@@ -180,13 +298,26 @@ def get_cache(key: str) -> Optional[Any]:
             logger.warning(f"⚠️ Redis Okuma Hatası: {e} -> RAM'e geçiliyor.")
     
     # 2. RAM Denemesi (Fallback)
-    return ram_cache.get(key)
+    ram_data = ram_cache.get(key)
+    if ram_data:
+        return ram_data
+    
+    # 3. Disk Denemesi (Final Kurtarma!)
+    if key in CRITICAL_KEYS:
+        logger.warning(f"🔥 [{key}] Redis ve RAM'de yok, DISK'ten yükleniyor...")
+        disk_data = disk_backup.load(key)
+        if disk_data:
+            logger.info(f"✅ [{key}] Disk'ten başarıyla kurtarıldı!")
+            # Kurtarılan veriyi RAM'e de yükle
+            ram_cache.set(key, disk_data, ttl=0)
+            return disk_data
+    
+    return None
 
 
 def set_cache(key: str, data: Any, ttl: int = 300) -> bool:
     """
-    Cache'e veri yazar.
-    ÖNEMLİ: ttl=0 gönderilirse veri silinmez (Persistent).
+    Cache'e veri yazar + Kritik verileri disk'e yedekler
     """
     success = False
     
@@ -213,12 +344,17 @@ def set_cache(key: str, data: Any, ttl: int = 300) -> bool:
     # 2. RAM Yazma (Her zaman yedek olarak yazalım)
     ram_cache.set(key, data, ttl)
     
+    # 3. 🔥 DİSK YEDEKLEME (Sadece kritik veriler için)
+    if key in CRITICAL_KEYS:
+        disk_backup.save(key, data)
+        logger.debug(f"💾 [{key}] Disk'e yedeklendi")
+    
     return success or True  # RAM'e yazıldıysa başarılı say
 
 
 def cache_exists(key: str) -> bool:
     """
-    Key var mı kontrol et (Şef için gerekli)
+    Key var mı kontrol et (Redis → RAM → Disk)
     """
     client = redis_wrapper.get_client()
     
@@ -230,12 +366,19 @@ def cache_exists(key: str) -> bool:
             logger.warning(f"⚠️ Redis EXISTS hatası: {e}")
     
     # 2. RAM Kontrolü
-    return ram_cache.exists(key)
+    if ram_cache.exists(key):
+        return True
+    
+    # 3. Disk Kontrolü (Kritik key'ler için)
+    if key in CRITICAL_KEYS:
+        return disk_backup.load(key) is not None
+    
+    return False
 
 
 def delete_cache(key: str) -> bool:
     """
-    Key'i sil (Şef için gerekli)
+    Key'i sil (Redis + RAM + Disk)
     """
     success = False
     client = redis_wrapper.get_client()
@@ -251,12 +394,16 @@ def delete_cache(key: str) -> bool:
     # 2. RAM Silme
     ram_cache.delete(key)
     
+    # 3. Disk Silme (Kritik key'ler için)
+    if key in CRITICAL_KEYS:
+        disk_backup.delete(key)
+    
     return success or True
 
 
 def get_cache_keys(pattern: str = "*"):
     """
-    Pattern'e uyan tüm key'leri döndür (Şef için gerekli)
+    Pattern'e uyan tüm key'leri döndür
     """
     client = redis_wrapper.get_client()
     
@@ -269,12 +416,25 @@ def get_cache_keys(pattern: str = "*"):
             logger.warning(f"⚠️ Redis KEYS hatası: {e}")
     
     # 2. RAM Denemesi
-    return ram_cache.keys(pattern)
+    ram_keys = ram_cache.keys(pattern)
+    
+    # 3. Disk'teki kritik key'leri de ekle
+    disk_keys = disk_backup.list_keys()
+    
+    # Unique key listesi oluştur
+    all_keys = set(ram_keys + disk_keys)
+    
+    # Pattern ile filtrele
+    if pattern != "*":
+        import fnmatch
+        all_keys = {k for k in all_keys if fnmatch.fnmatch(k, pattern)}
+    
+    return list(all_keys)
 
 
 def flush_all_cache() -> bool:
     """
-    TÜM cache'i temizle (Şef'in /temizle komutu için)
+    TÜM cache'i temizle (Redis + RAM + Disk)
     ⚠️ DİKKAT: Bu komutu sadece Şef kullanmalı!
     """
     success = False
@@ -293,4 +453,40 @@ def flush_all_cache() -> bool:
     ram_cache._cache.clear()
     logger.warning("🧹 RAM Cache temizlendi!")
     
+    # 3. Disk Temizliği (Kritik key'leri sil)
+    for key in CRITICAL_KEYS:
+        disk_backup.delete(key)
+    logger.warning("🧹 Disk Backup temizlendi!")
+    
     return success or True
+
+
+# ======================================
+# STARTUP: DISK'TEN VERİ KURTARMA
+# ======================================
+
+def recover_from_disk():
+    """
+    Uygulama başlatılırken disk'ten kritik verileri yükle
+    (Redis çökmüşse veya restart atmışsa)
+    """
+    logger.info("🔄 Disk'ten veri kurtarma kontrolü başlatılıyor...")
+    
+    recovered_count = 0
+    
+    for key in CRITICAL_KEYS:
+        # Eğer Redis ve RAM'de yoksa disk'ten yükle
+        if not get_cache(key):
+            disk_data = disk_backup.load(key)
+            if disk_data:
+                logger.info(f"💾 [{key}] Disk'ten kurtarıldı ve RAM'e yüklendi")
+                ram_cache.set(key, disk_data, ttl=0)
+                recovered_count += 1
+    
+    if recovered_count > 0:
+        logger.info(f"✅ {recovered_count} adet veri disk'ten başarıyla kurtarıldı!")
+    else:
+        logger.info("ℹ️ Kurtarılacak veri bulunamadı (Normal durum)")
+
+# Uygulama başlarken otomatik kurtarma yap
+recover_from_disk()
