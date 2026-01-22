@@ -3,6 +3,7 @@ Firebase Push Notification Service 🔥
 =====================================
 ✅ Token Yönetimi (Kayıt/Silme)
 ✅ Bildirim Gönderme (Tekil/Toplu)
+✅ 500 Token Batch Limiti (Firebase Compliant)
 ✅ Özel Bildirim Tipleri (Fiyat Alarmı, Günlük Özet, vb.)
 ✅ Hata Yönetimi ve Logging
 """
@@ -16,6 +17,9 @@ from config import Config
 from utils.cache import get_cache, set_cache, get_redis_client
 
 logger = logging.getLogger("KuraBak.Notification")
+
+# Firebase limit: send_multicast() maksimum 500 token kabul eder
+FCM_BATCH_SIZE = 500
 
 # ======================================
 # TOKEN YÖNETİMİ
@@ -108,7 +112,7 @@ def get_token_count() -> int:
         return 0
 
 # ======================================
-# BİLDİRİM GÖNDERME
+# BİLDİRİM GÖNDERME (BATCH SUPPORT)
 # ======================================
 
 def send_notification(
@@ -120,7 +124,7 @@ def send_notification(
     sound: str = "default"
 ) -> Dict:
     """
-    FCM bildirimi gönder
+    FCM bildirimi gönder (500'lük batch'lere otomatik böler)
     
     Args:
         tokens: Hedef cihaz tokenları
@@ -143,48 +147,80 @@ def send_notification(
             logger.warning("⚠️ [FCM] Token bulunamadı!")
             return {"success": False, "error": "No tokens"}
         
-        # Bildirim mesajını hazırla
-        notification = messaging.Notification(
-            title=title,
-            body=body
-        )
+        # Toplam sonuç için sayaçlar
+        total_success = 0
+        total_failure = 0
+        failed_tokens_all = []
         
-        # Android ayarları
-        android_config = messaging.AndroidConfig(
-            priority=priority,
-            notification=messaging.AndroidNotification(
-                sound=sound,
-                channel_id='kurabak_default'  # Android bildirim kanalı
+        # 🔥 BATCH İŞLEMİ: 500'lük parçalara böl
+        total_tokens = len(tokens)
+        batch_count = (total_tokens + FCM_BATCH_SIZE - 1) // FCM_BATCH_SIZE  # Yukarı yuvarlama
+        
+        logger.info(f"📦 [FCM] {total_tokens} token, {batch_count} batch'e bölünüyor...")
+        
+        for i in range(0, total_tokens, FCM_BATCH_SIZE):
+            batch_tokens = tokens[i:i + FCM_BATCH_SIZE]
+            batch_num = (i // FCM_BATCH_SIZE) + 1
+            
+            logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
+            
+            # Bildirim mesajını hazırla
+            notification = messaging.Notification(
+                title=title,
+                body=body
             )
-        )
+            
+            # Android ayarları
+            android_config = messaging.AndroidConfig(
+                priority=priority,
+                notification=messaging.AndroidNotification(
+                    sound=sound,
+                    channel_id='kurabak_default'
+                )
+            )
+            
+            # MulticastMessage oluştur
+            message = messaging.MulticastMessage(
+                notification=notification,
+                tokens=batch_tokens,
+                data=data or {},
+                android=android_config
+            )
+            
+            # Gönder
+            response = messaging.send_multicast(message)
+            
+            # Sayaçları güncelle
+            total_success += response.success_count
+            total_failure += response.failure_count
+            
+            # Başarısız tokenları topla
+            if response.failure_count > 0:
+                failed_tokens = [batch_tokens[idx] for idx, resp in enumerate(response.responses) if not resp.success]
+                failed_tokens_all.extend(failed_tokens)
+            
+            logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
         
-        # MulticastMessage oluştur (birden fazla cihaz için)
-        message = messaging.MulticastMessage(
-            notification=notification,
-            tokens=tokens,
-            data=data or {},
-            android=android_config
-        )
-        
-        # Gönder
-        response = messaging.send_multicast(message)
-        
-        # Başarısız tokenları temizle
-        if response.failure_count > 0:
-            failed_tokens = [tokens[idx] for idx, resp in enumerate(response.responses) if not resp.success]
-            for token in failed_tokens:
-                logger.warning(f"⚠️ [FCM] Başarısız token kaldırılıyor: {token[:20]}...")
+        # Tüm başarısız tokenları temizle
+        if failed_tokens_all:
+            logger.warning(f"🗑️ [FCM] {len(failed_tokens_all)} başarısız token temizleniyor...")
+            for token in failed_tokens_all:
                 unregister_fcm_token(token)
         
         # Sonuç
         result = {
             "success": True,
-            "success_count": response.success_count,
-            "failure_count": response.failure_count,
+            "success_count": total_success,
+            "failure_count": total_failure,
+            "total_tokens": total_tokens,
+            "batch_count": batch_count,
             "timestamp": datetime.now().isoformat()
         }
         
-        logger.info(f"📤 [FCM] Bildirim gönderildi: {response.success_count} başarılı, {response.failure_count} başarısız")
+        logger.info(f"🎉 [FCM] Gönderim tamamlandı!")
+        logger.info(f"   📊 Toplam: {total_tokens} token")
+        logger.info(f"   ✅ Başarılı: {total_success}")
+        logger.info(f"   ❌ Başarısız: {total_failure}")
         logger.info(f"   📝 Başlık: {title}")
         logger.info(f"   📄 Mesaj: {body[:50]}...")
         
