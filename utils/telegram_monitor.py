@@ -1,10 +1,12 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.0 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.1 🤖
 =======================================================
-✅ YENİ KOMUTLAR: /kaynak, /kaynak v5, /kaynak tradingview, /kaynak durum
+✅ YENİ KOMUTLAR: /test, /test mobil, /test detay
+✅ KAYNAK YÖNETİMİ: /kaynak v5, /kaynak tradingview, /kaynak durum, /kaynak örnek
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ SELF-HEALING: Otomatik CPU/RAM izleme ve müdahale
 ✅ TRADINGVIEW: Yedek kaynak desteği
+✅ TÜRKÇE KARAKTER FIX: 'ı', 'ş', 'ğ', 'ü', 'ö', 'ç' otomatik düzeltme
 ✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller
 ✅ 🔒 ADMİN GÜVENLİĞİ: Sadece yetkili Telegram ID komut gönderebilir
 """
@@ -20,24 +22,18 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# ======================================
-# 🔒 GÜVENLİK: YETKİLİ ADMİN ID'LERİ
-# ======================================
-ALLOWED_ADMIN_IDS = [7101853980]  # Sadece senin Telegram ID'n
-
-# ======================================
-# TELEGRAM MONITOR (RAPOR + KOMUT + ALARM)
-# ======================================
+ALLOWED_ADMIN_IDS = [7101853980]
 
 class TelegramMonitor:
     """
     Gelişmiş Telegram Bot:
     1. RAPOR MODU: Sessiz bildirimler, günlük raporlar
     2. KOMUT MODU: Komutları dinler ve cevaplar
-    3. KAYNAK YÖNETİMİ: Manuel V5/TradingView geçişi
-    4. TAKVİM SİSTEMİ: Etkinlik bildirimleri
-    5. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
-    6. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
+    3. TEST SİSTEMİ: Otomatik sistem sağlık kontrolü
+    4. KAYNAK YÖNETİMİ: Manuel V5/TradingView geçişi
+    5. TAKVİM SİSTEMİ: Etkinlik bildirimleri
+    6. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
+    7. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -45,21 +41,11 @@ class TelegramMonitor:
         self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         self._lock = threading.Lock()
-        
-        # Spam Koruması
         self.last_critical_alert = datetime.min
-        
-        # Komut Dinleyici Thread
         self.command_thread = None
         self.is_listening = False
-        
-        # Self-Healing Thread
         self.healing_thread = None
         self.is_healing_active = False
-
-    # ==========================================
-    # BÖLÜM 1: RAPOR SİSTEMİ
-    # ==========================================
 
     def _send_raw(self, text: str, parse_mode: str = 'Markdown'):
         """Telegram API'ye ham istek atar (Internal)"""
@@ -82,22 +68,18 @@ class TelegramMonitor:
         - level='critical' -> ANINDA GÖNDERİR
         - level='report' -> ANINDA GÖNDERİR
         """
-        # 1. Önemsiz mesajları filtrele
         if level in ['info', 'success', 'warning']:
             logger.info(f"Telegram (Sessiz): {text}")
             return True
 
-        # 2. Kritik Hata Kontrolü (Spam Korumalı)
         if level == 'critical':
             with self._lock:
                 now = datetime.now()
-                # 30 dakikada bir sadece 1 kritik hata at
                 if (now - self.last_critical_alert) < timedelta(minutes=30):
                     logger.warning("Telegram: Kritik hata spam korumasına takıldı.")
                     return False
                 self.last_critical_alert = now
             
-            # Kritik Mesaj Tasarımı
             alert_msg = (
                 f"🚨 *KRİTİK SİSTEM UYARISI* 🚨\n\n"
                 f"{text}\n\n"
@@ -106,7 +88,6 @@ class TelegramMonitor:
             threading.Thread(target=self._send_raw, args=(alert_msg,)).start()
             return True
 
-        # 3. Günlük Rapor (Report) - Doğrudan gönder
         if level == 'report':
             threading.Thread(target=self._send_raw, args=(text,)).start()
             return True
@@ -118,13 +99,11 @@ class TelegramMonitor:
         now = datetime.now()
         date_str = now.strftime("%d.%m.%Y")
         
-        # Başarı oranı hesapla
         total = metrics.get('v5', 0) + metrics.get('tradingview', 0) + metrics.get('backup', 0)
         success_rate = 100
         if total > 0:
             success_rate = ((total - metrics.get('errors', 0)) / total) * 100
 
-        # İkon Seçimi
         status_icon = "🟢" if success_rate > 95 else "🟡" if success_rate > 80 else "🔴"
         
         report = (
@@ -144,7 +123,7 @@ class TelegramMonitor:
             f"🛡️ *GÜVENLİK & HATALAR*\n"
             f"• Hatalar: `{metrics.get('errors', 0)}`\n\n"
             
-            f"_KuraBak Backend v4.0 • {now.strftime('%H:%M')}_"
+            f"_KuraBak Backend v4.1 • {now.strftime('%H:%M')}_"
         )
         
         self.send_message(report, level='report')
@@ -168,14 +147,11 @@ class TelegramMonitor:
             f"📦 *Versiyon:* {Config.APP_VERSION}\n"
             f"🔌 *Kaynak:* V5 + TradingView\n"
             f"🤖 *Self-Healing:* Aktif\n"
-            f"🗓️ *Takvim:* Aktif\n\n"
+            f"🗓️ *Takvim:* Aktif\n"
+            f"🧪 *Test:* /test komutu aktif\n\n"
             f"✅ Tüm sistemler hazır!"
         )
         self.send_message(msg, level='report')
-
-    # ==========================================
-    # BÖLÜM 2: KOMUT SİSTEMİ
-    # ==========================================
 
     def start_command_listener(self):
         """Arka planda komutları dinlemeye başlar"""
@@ -219,11 +195,9 @@ class TelegramMonitor:
                     if not message:
                         continue
                     
-                    # 🔒 GÜVENLİK 1: Sadece yetkili chat
                     if str(message.get('chat', {}).get('id')) != str(self.chat_id):
                         continue
                     
-                    # 🔒 GÜVENLİK 2: Kullanıcı ID kontrolü
                     user_id = message.get('from', {}).get('id')
                     
                     if not self._is_admin(user_id):
@@ -237,7 +211,6 @@ class TelegramMonitor:
                         )
                         continue
                     
-                    # ✅ Yetkili kullanıcı - Komutları işle
                     text = message.get('text', '').strip()
                     
                     if text == '/durum':
@@ -258,6 +231,8 @@ class TelegramMonitor:
                         self._handle_bakim(text)
                     elif text.startswith('/kaynak'):
                         self._handle_kaynak(text)
+                    elif text.startswith('/test'):
+                        self._handle_test(text)
                     elif text.startswith('/'):
                         self._send_help()
                 
@@ -269,11 +244,15 @@ class TelegramMonitor:
         """Yardım Mesajı"""
         self._send_raw(
             "❓ *KOMUT LİSTESİ* 🔒\n\n"
+            "🧪 *TEST SİSTEMİ:*\n"
+            "`/test` - Basit sağlık testi (5sn)\n"
+            "`/test mobil` - Mobil uyumluluk\n"
+            "`/test detay` - Detaylı sistem testi\n\n"
             "🔌 *KAYNAK YÖNETİMİ:*\n"
             "`/kaynak durum` - Aktif kaynak\n"
             "`/kaynak v5` - V5'e geç\n"
             "`/kaynak tradingview` - TradingView'e geç\n"
-            "`/kaynak ornek` - Veri örnekleri göster\n\n"
+            "`/kaynak örnek` - Veri örnekleri\n\n"
             "📢 *YÖNETİM:*\n"
             "`/duyuru [mesaj]` - Duyuru as\n"
             "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
@@ -291,15 +270,267 @@ class TelegramMonitor:
             "🔒 _Bu komutlar sadece yetkili admin tarafından kullanılabilir._"
         )
 
+    def _handle_test(self, text):
+        """🧪 TEST SİSTEMİ"""
+        try:
+            raw_content = text.replace('/test', '').strip().lower()
+            raw_content = raw_content.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g').replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
+            
+            self._send_raw("⏳ Test başlatılıyor...")
+            
+            if raw_content == '' or raw_content == 'basit':
+                report = self._run_basic_test()
+            elif raw_content in ['mobil', 'mobile']:
+                report = self._run_mobile_test()
+            elif raw_content in ['detay', 'detayli', 'detailed']:
+                report = self._run_detailed_test()
+            else:
+                self._send_raw(
+                    "❌ Geçersiz test tipi!\n\n"
+                    "Kullanım:\n"
+                    "`/test` - Basit test (5sn)\n"
+                    "`/test mobil` - Mobil uyumluluk\n"
+                    "`/test detay` - Detaylı test"
+                )
+                return
+            
+            self._send_raw(report)
+            
+        except Exception as e:
+            self._send_raw(f"❌ Test hatası: {str(e)}")
+
+    def _run_basic_test(self) -> str:
+        """Basit 5 saniyelik test"""
+        try:
+            from utils.cache import get_cache, redis_wrapper
+            from config import Config
+            
+            results = []
+            
+            if redis_wrapper.is_enabled():
+                results.append("✅ Redis: Bağlı")
+            else:
+                results.append("⚠️ Redis: RAM Modu")
+            
+            currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
+            if currencies and len(currencies.get('data', [])) > 0:
+                results.append(f"✅ Döviz: {len(currencies.get('data', []))} adet")
+            else:
+                results.append("❌ Döviz: Veri yok")
+            
+            last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
+            if last_worker_run:
+                time_diff = time.time() - float(last_worker_run)
+                if time_diff < 300:
+                    results.append(f"✅ Worker: Aktif ({int(time_diff)}sn önce)")
+                else:
+                    results.append(f"⚠️ Worker: Yavaş ({int(time_diff/60)}dk önce)")
+            else:
+                results.append("❌ Worker: Henüz çalışmadı")
+            
+            cpu = psutil.cpu_percent(interval=1)
+            ram = psutil.virtual_memory().percent
+            
+            cpu_status = "✅" if cpu < 70 else "⚠️" if cpu < 85 else "❌"
+            ram_status = "✅" if ram < 75 else "⚠️" if ram < 90 else "❌"
+            
+            results.append(f"{cpu_status} CPU: %{cpu:.1f}")
+            results.append(f"{ram_status} RAM: %{ram:.1f}")
+            
+            total = len(results)
+            passed = sum(1 for r in results if r.startswith("✅"))
+            
+            status_icon = "🟢" if passed == total else "🟡" if passed >= total/2 else "🔴"
+            
+            report = (
+                f"{status_icon} *BASIT TEST RAPORU*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                + "\n".join(results) +
+                f"\n\n📊 *Sonuç:* {passed}/{total} başarılı\n"
+                f"⏱️ *Süre:* ~5 saniye"
+            )
+            
+            return report
+            
+        except Exception as e:
+            return f"❌ Test hatası: {str(e)}"
+
+    def _run_mobile_test(self) -> str:
+        """Mobil uyumluluk testi"""
+        try:
+            from utils.cache import get_cache
+            from config import Config
+            
+            results = []
+            
+            currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
+            if currencies:
+                curr_data = currencies.get('data', [])
+                expected = 23
+                actual = len(curr_data)
+                if actual == expected:
+                    results.append(f"✅ Döviz: {actual}/{expected}")
+                else:
+                    results.append(f"⚠️ Döviz: {actual}/{expected} (Eksik)")
+            else:
+                results.append("❌ Döviz: Veri yok")
+            
+            golds = get_cache(Config.CACHE_KEYS['golds_all'])
+            if golds:
+                gold_data = golds.get('data', [])
+                expected = 6
+                actual = len(gold_data)
+                if actual == expected:
+                    results.append(f"✅ Altın: {actual}/{expected}")
+                else:
+                    results.append(f"⚠️ Altın: {actual}/{expected} (Eksik)")
+            else:
+                results.append("❌ Altın: Veri yok")
+            
+            silvers = get_cache(Config.CACHE_KEYS['silvers_all'])
+            if silvers:
+                silver_data = silvers.get('data', [])
+                if len(silver_data) >= 1:
+                    results.append("✅ Gümüş: 1/1")
+                else:
+                    results.append("❌ Gümüş: 0/1")
+            else:
+                results.append("❌ Gümüş: Veri yok")
+            
+            if currencies:
+                banner = currencies.get('banner')
+                if banner:
+                    results.append(f"ℹ️ Banner: \"{banner[:30]}...\"")
+                else:
+                    results.append("✅ Banner: Yok (Normal)")
+            
+            if currencies:
+                status = currencies.get('status', 'UNKNOWN')
+                if status == 'OPEN':
+                    results.append("✅ Status: OPEN (Piyasa açık)")
+                elif status == 'CLOSED':
+                    results.append("ℹ️ Status: CLOSED (Hafta sonu)")
+                else:
+                    results.append(f"⚠️ Status: {status}")
+            
+            total = len([r for r in results if not r.startswith("ℹ️")])
+            passed = sum(1 for r in results if r.startswith("✅"))
+            
+            status_icon = "🟢" if passed == total else "🟡" if passed >= total/2 else "🔴"
+            
+            report = (
+                f"{status_icon} *MOBİL UYUMLULUK TESTİ*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                + "\n".join(results) +
+                f"\n\n📊 *Sonuç:* {passed}/{total} başarılı\n"
+                f"📱 *Mobil Ready:* {'Evet ✅' if passed == total else 'Hayır ⚠️'}"
+            )
+            
+            return report
+            
+        except Exception as e:
+            return f"❌ Test hatası: {str(e)}"
+
+    def _run_detailed_test(self) -> str:
+        """Detaylı sistem testi"""
+        try:
+            from utils.cache import get_cache, redis_wrapper
+            from config import Config
+            
+            results = []
+            
+            results.append("🔹 *REDIS*")
+            if redis_wrapper.is_enabled():
+                results.append("  ✅ Bağlı")
+            else:
+                results.append("  ⚠️ RAM Modu")
+            
+            results.append("\n🔹 *VERİLER*")
+            currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
+            golds = get_cache(Config.CACHE_KEYS['golds_all'])
+            silvers = get_cache(Config.CACHE_KEYS['silvers_all'])
+            summary = get_cache(Config.CACHE_KEYS['summary'])
+            
+            if currencies:
+                results.append(f"  ✅ Döviz: {len(currencies.get('data', []))} adet")
+                results.append(f"     Kaynak: {currencies.get('source', 'Unknown')}")
+                results.append(f"     Güncelleme: {currencies.get('last_update', 'Unknown')}")
+            else:
+                results.append("  ❌ Döviz: Veri yok")
+            
+            if golds:
+                results.append(f"  ✅ Altın: {len(golds.get('data', []))} adet")
+            else:
+                results.append("  ❌ Altın: Veri yok")
+            
+            if silvers:
+                results.append(f"  ✅ Gümüş: {len(silvers.get('data', []))} adet")
+            else:
+                results.append("  ❌ Gümüş: Veri yok")
+            
+            if summary:
+                results.append("  ✅ Summary: Mevcut")
+            else:
+                results.append("  ❌ Summary: Yok")
+            
+            results.append("\n🔹 *BİLEŞENLER*")
+            last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
+            if last_worker_run:
+                time_diff = time.time() - float(last_worker_run)
+                if time_diff < 300:
+                    results.append(f"  ✅ Worker: Aktif ({int(time_diff)}sn)")
+                else:
+                    results.append(f"  ⚠️ Worker: Yavaş ({int(time_diff/60)}dk)")
+            else:
+                results.append("  ❌ Worker: Çalışmadı")
+            
+            snapshot = get_cache(Config.CACHE_KEYS['yesterday_prices'])
+            if snapshot:
+                results.append(f"  ✅ Snapshot: {len(snapshot)} fiyat")
+            else:
+                results.append("  ❌ Snapshot: Yok")
+            
+            results.append("\n🔹 *SİSTEM*")
+            cpu = psutil.cpu_percent(interval=1)
+            ram = psutil.virtual_memory().percent
+            
+            cpu_status = "✅" if cpu < 70 else "⚠️" if cpu < 85 else "❌"
+            ram_status = "✅" if ram < 75 else "⚠️" if ram < 90 else "❌"
+            
+            results.append(f"  {cpu_status} CPU: %{cpu:.1f}")
+            results.append(f"  {ram_status} RAM: %{ram:.1f}")
+            
+            results.append("\n🔹 *KAYNAK*")
+            active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+            results.append(f"  ℹ️ Aktif: {active_source.upper()}")
+            
+            all_results = "\n".join(results)
+            passed = all_results.count("✅")
+            total = all_results.count("✅") + all_results.count("❌")
+            
+            status_icon = "🟢" if passed == total else "🟡" if passed >= total/2 else "🔴"
+            
+            report = (
+                f"{status_icon} *DETAYLI TEST RAPORU*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                + all_results +
+                f"\n\n📊 *Sonuç:* {passed}/{total} başarılı"
+            )
+            
+            return report
+            
+        except Exception as e:
+            return f"❌ Test hatası: {str(e)}"
+
     def _handle_kaynak(self, text):
-        """🔌 KAYNAK YÖNETİMİ"""
+        """🔌 KAYNAK YÖNETİMİ (TÜRKÇE KARAKTER DÜZELTMESİ İLE)"""
         try:
             from utils.cache import get_cache, set_cache
             from config import Config
             
             raw_content = text.replace('/kaynak', '').strip().lower()
+            raw_content = raw_content.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g').replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
             
-            # Durum kontrolü
             if raw_content == 'durum' or raw_content == '':
                 active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
                 switch_count = get_cache(Config.CACHE_KEYS['source_switch_count']) or "0"
@@ -316,12 +547,10 @@ class TelegramMonitor:
                 )
                 return
             
-            # Örnek veri göster
             if raw_content == 'ornek':
                 self._show_source_examples()
                 return
             
-            # Kaynak değiştirme
             if raw_content in ['v5', 'tradingview']:
                 active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
                 
@@ -329,10 +558,8 @@ class TelegramMonitor:
                     self._send_raw(f"ℹ️ Zaten *{raw_content.upper()}* kaynağı aktif!")
                     return
                 
-                # Geçişi yap
                 set_cache(Config.CACHE_KEYS['active_source'], raw_content, ttl=0)
                 
-                # Geçiş sayısını artır
                 switch_count = int(get_cache(Config.CACHE_KEYS['source_switch_count']) or "0")
                 set_cache(Config.CACHE_KEYS['source_switch_count'], str(switch_count + 1), ttl=0)
                 
@@ -343,7 +570,6 @@ class TelegramMonitor:
                     f"Worker bir sonraki güncellemede yeni kaynaktan veri çekecek (max 2dk)."
                 )
                 
-                # Worker'ı hemen tetikle (opsiyonel)
                 try:
                     from services.maintenance_service import force_worker_update
                     force_worker_update()
@@ -353,14 +579,13 @@ class TelegramMonitor:
                 
                 return
             
-            # Geçersiz komut
             self._send_raw(
                 "❌ Geçersiz kaynak!\n\n"
                 "Kullanım:\n"
                 "`/kaynak durum` - Mevcut durum\n"
                 "`/kaynak v5` - V5'e geç\n"
                 "`/kaynak tradingview` - TradingView'e geç\n"
-                "`/kaynak ornek` - Veri örnekleri"
+                "`/kaynak örnek` - Veri örnekleri"
             )
             
         except Exception as e:
@@ -373,7 +598,6 @@ class TelegramMonitor:
             
             self._send_raw("⏳ Veri örnekleri çekiliyor...")
             
-            # V5 örneği
             v5_data = fetch_from_v5()
             v5_example = "❌ Veri çekilemedi"
             if v5_data and 'currencies' in v5_data and v5_data['currencies']:
@@ -381,7 +605,6 @@ class TelegramMonitor:
                 if usd:
                     v5_example = f"USD: {usd.get('buy', 'N/A')} / {usd.get('sell', 'N/A')}"
             
-            # TradingView örneği
             tv_data = fetch_from_tradingview()
             tv_example = "❌ Veri çekilemedi"
             if tv_data and 'currencies' in tv_data and tv_data['currencies']:
@@ -408,11 +631,9 @@ class TelegramMonitor:
             from utils.cache import get_cache, redis_wrapper
             from config import Config
             
-            # CPU & RAM
             cpu = psutil.cpu_percent(interval=1)
             ram = psutil.virtual_memory().percent
             
-            # Worker durumu
             last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
             worker_icon = "🟢"
             worker_text = "Aktif"
@@ -429,21 +650,16 @@ class TelegramMonitor:
                 worker_icon = "⚪"
                 worker_text = "Henüz Çalışmadı"
             
-            # Redis durumu
             redis_status = "🟢 Bağlı" if redis_wrapper.is_enabled() else "🔴 RAM Modu"
             
-            # Snapshot durumu
             snapshot_exists = bool(get_cache(Config.CACHE_KEYS['yesterday_prices']))
             snapshot_icon = "🟢" if snapshot_exists else "🔴"
             
-            # Bakım durumu
             maintenance_data = get_cache(Config.CACHE_KEYS['maintenance'])
             maintenance_status = "🔴 Aktif" if maintenance_data else "🟢 Kapalı"
             
-            # Self-Healing durumu
             healing_status = "🟢 Aktif" if self.is_healing_active else "🔴 Kapalı"
             
-            # Aktif kaynak
             active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
             
             report = (
@@ -546,13 +762,11 @@ class TelegramMonitor:
             
             raw_content = text.replace('/duyuru', '').strip()
             
-            # Silme Komutu
             if raw_content.lower() == 'sil' or raw_content == '':
                 delete_cache(Config.CACHE_KEYS['banner'])
                 self._send_raw("🔇 *DUYURU KALDIRILDI*\n\nPatron, mesajı sildim. Uygulama ekranlarından kayboldu.")
                 return
 
-            # Süre Analizi
             parts = raw_content.split(' ', 1)
             
             ttl = 0
@@ -636,7 +850,6 @@ class TelegramMonitor:
             
             raw_content = text.replace('/bakim', '').strip()
             
-            # Kapatma komutu
             if raw_content.lower() in ['kapat', 'sil', '']:
                 deactivate_maintenance()
                 self._send_raw(
@@ -645,7 +858,6 @@ class TelegramMonitor:
                 )
                 return
             
-            # Bakım modunu aç
             activate_maintenance()
             
             self._send_raw(
@@ -658,10 +870,6 @@ class TelegramMonitor:
             
         except Exception as e:
             self._send_raw(f"❌ Bakım modu hatası: {str(e)}")
-
-    # ==========================================
-    # BÖLÜM 3: SELF-HEALING (OTOMATİK MÜDAHALE)
-    # ==========================================
 
     def start_self_healing(self):
         """Self-Healing sistemini başlat"""
@@ -685,21 +893,17 @@ class TelegramMonitor:
         
         while self.is_healing_active:
             try:
-                # Mevcut değerleri al
                 cpu = psutil.cpu_percent(interval=1)
                 ram = psutil.virtual_memory().percent
                 now = time.time()
                 
-                # --- CPU KONTROLÜ ---
                 if cpu > Config.CPU_THRESHOLD:
                     if cpu_high_since is None:
                         cpu_high_since = now
                     
-                    # 5 dakika boyunca yüksekse müdahale et
                     if (now - cpu_high_since) > Config.CPU_HIGH_DURATION:
                         logger.warning(f"🔥 CPU yüksek ({cpu}%), müdahale ediliyor...")
                         
-                        # Bildirim gönder (30 dakikada bir)
                         if (now - last_cpu_notification) > Config.ALARM_NOTIFICATION_INTERVAL:
                             self._send_raw(
                                 f"⚠️ *CPU YÜKSEK!*\n\n"
@@ -710,26 +914,21 @@ class TelegramMonitor:
                             )
                             last_cpu_notification = now
                         
-                        cpu_high_since = None  # Reset
+                        cpu_high_since = None
                 else:
-                    # CPU normale döndü
                     if cpu_high_since is not None:
                         logger.info(f"✅ CPU normale döndü: %{cpu:.1f}")
                         cpu_high_since = None
                 
-                # --- RAM KONTROLÜ ---
                 if ram > Config.RAM_THRESHOLD:
                     logger.warning(f"💾 RAM yüksek ({ram}%), otomatik temizlik yapılıyor...")
                     
-                    # Otomatik cache temizliği
                     try:
                         from utils.cache import flush_all_cache
                         flush_all_cache()
                         
-                        # Yeni RAM değerini al
                         new_ram = psutil.virtual_memory().percent
                         
-                        # Bildirim gönder (30 dakikada bir)
                         if (now - last_ram_notification) > Config.ALARM_NOTIFICATION_INTERVAL:
                             if new_ram < Config.RAM_THRESHOLD:
                                 self._send_raw(
@@ -750,16 +949,12 @@ class TelegramMonitor:
                     except Exception as e:
                         logger.error(f"❌ RAM temizlik hatası: {e}")
                 
-                # 1 dakika bekle (Config'den al)
                 time.sleep(Config.ALARM_CHECK_INTERVAL)
                 
             except Exception as e:
                 logger.error(f"Self-Healing hatası: {e}")
                 time.sleep(60)
 
-# ======================================
-# SINGLETON BAŞLATICI
-# ======================================
 
 telegram_monitor: Optional[TelegramMonitor] = None
 
@@ -775,14 +970,9 @@ def init_telegram_monitor():
 
     if token and chat_id:
         telegram_monitor = TelegramMonitor(token, chat_id)
-        
-        # Komut Dinleyiciyi Başlat
         telegram_monitor.start_command_listener()
-        
-        # Self-Healing Sistemini Başlat
         telegram_monitor.start_self_healing()
-        
-        logger.info("✅ Telegram Monitor (Komut + Self-Healing + TradingView) başlatıldı.")
+        logger.info("✅ Telegram Monitor (Komut + Self-Healing + Test Sistemi) başlatıldı.")
         return telegram_monitor
     else:
         logger.warning("⚠️ Telegram Monitor başlatılamadı: Token veya Chat ID eksik!")
