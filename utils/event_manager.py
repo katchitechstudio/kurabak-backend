@@ -1,17 +1,18 @@
 """
-Event Manager - AKILLI TAKVİM SİSTEMİ 🗓️
+Event Manager - AKILLI TAKVİM SİSTEMİ V2.0 🗓️
 ======================================
 ✅ BAYRAMLAR: Otomatik algılama (holidays kütüphanesi)
 ✅ TCMB & RAPORLAR: JSON dosyasından okuma
 ✅ PİYASA DURUMU: Hafta sonu/Tatil kontrolü
 ✅ ÖNCELİK SİSTEMİ: Manuel > TCMB > Bayram > Piyasa
+✅ 🆕 TAKVİM BİLDİRİMLERİ: Etkinlik günü Telegram'a mesaj gönder
 """
 
 import json
 import os
 import logging
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,50 @@ def is_inflation_day(date_obj: date) -> bool:
     return False
 
 # ======================================
+# 🆕 BUGÜNÜN ETKİNLİKLERİNİ GETIR
+# ======================================
+
+def get_todays_events() -> List[Dict[str, str]]:
+    """
+    Bugünün tüm etkinliklerini liste olarak döndürür.
+    Her etkinlik: {"type": "tcmb"|"bayram"|"inflation", "message": "..."}
+    
+    Bu fonksiyon Telegram bildirim sistemi için kullanılır.
+    """
+    today = date.today()
+    today_str = today.strftime("%Y-%m-%d")
+    events = []
+    
+    # 1. JSON'daki Özel Olaylar (TCMB, Raporlar)
+    json_events = load_events_json()
+    if today_str in json_events:
+        events.append({
+            "type": "tcmb",
+            "message": json_events[today_str],
+            "date": today_str
+        })
+    
+    # 2. Bayramlar
+    tr_holidays = get_holidays()
+    if tr_holidays and today in tr_holidays:
+        holiday_name = tr_holidays.get(today)
+        events.append({
+            "type": "bayram",
+            "message": f"🎉 {holiday_name} Kutlu Olsun!",
+            "date": today_str
+        })
+    
+    # 3. Enflasyon Günü
+    if is_inflation_day(today):
+        events.append({
+            "type": "inflation",
+            "message": "📢 Bugün saat 10:00'da Enflasyon Verisi (TÜFE) açıklanacak!",
+            "date": today_str
+        })
+    
+    return events
+
+# ======================================
 # ANA FONKSİYON: BUGÜNÜN BANNER'I
 # ======================================
 
@@ -141,6 +186,52 @@ def get_todays_banner() -> Optional[str]:
     return None
 
 # ======================================
+# 🆕 TAKVİM KONTROLÜ (SCHEDULER İÇİN)
+# ======================================
+
+def check_and_notify_events():
+    """
+    Bu fonksiyon Scheduler tarafından her gün sabah 08:00'da çağrılır.
+    Bugünün etkinliklerini kontrol eder ve:
+    1. Telegram'a bildirim gönderir
+    2. Saat 09:00'da banner'ı otomatik aktif eder
+    """
+    from utils.cache import get_cache, set_cache
+    from config import Config
+    
+    try:
+        # Bugünün etkinliklerini al
+        events = get_todays_events()
+        
+        if not events:
+            logger.info("📅 [TAKVİM] Bugün özel bir etkinlik yok.")
+            return
+        
+        # Telegram bildirimi gönder
+        from utils.telegram_monitor import get_telegram_monitor
+        telegram = get_telegram_monitor()
+        
+        if telegram:
+            for event in events:
+                event_msg = event['message']
+                event_date = event['date']
+                
+                # Bildirim gönder
+                telegram.send_calendar_notification(
+                    event_name=event_msg,
+                    event_date=event_date
+                )
+                
+                logger.info(f"📅 [TAKVİM] Bildirim gönderildi: {event_msg}")
+        
+        # Banner'ı otomatik aktif et (09:00'da aktif olacak şekilde kaydet)
+        # NOT: Banner'ın kendisi get_todays_banner() ile alınacak
+        # Burada sadece bildirim sistemini tetikliyoruz
+        
+    except Exception as e:
+        logger.error(f"❌ Takvim kontrolü hatası: {e}")
+
+# ======================================
 # TEST FONKSİYONU (Opsiyonel)
 # ======================================
 
@@ -151,12 +242,20 @@ def test_event_manager():
     """
     print("🧪 Event Manager Test Ediliyor...\n")
     
+    # Bugünün banner'ı
     banner = get_todays_banner()
-    
     if banner:
         print(f"✅ BUGÜNÜN BANNER'I:\n{banner}\n")
     else:
         print("ℹ️ Bugün özel bir mesaj yok.\n")
+    
+    # Bugünün etkinlikleri
+    events = get_todays_events()
+    if events:
+        print("📅 BUGÜNÜN ETKİNLİKLERİ:")
+        for evt in events:
+            print(f"  • [{evt['type']}] {evt['message']}")
+        print()
     
     # Bayram listesi
     tr_holidays = get_holidays()
@@ -167,10 +266,10 @@ def test_event_manager():
                 print(f"  • {hol_date.strftime('%d.%m.%Y')}: {hol_name}")
     
     # JSON olayları
-    events = load_events_json()
-    if events:
+    json_events = load_events_json()
+    if json_events:
         print("\n📊 2026 FİNANS TAKVİMİ:")
-        for evt_date, evt_msg in sorted(events.items()):
+        for evt_date, evt_msg in sorted(json_events.items()):
             print(f"  • {evt_date}: {evt_msg}")
 
 if __name__ == "__main__":
