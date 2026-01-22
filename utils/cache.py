@@ -8,6 +8,7 @@ Redis Cache Utility - PRODUCTION READY (REDIS + DISK BACKUP) 🚀
 ✅ JSON SERIALIZATION: Verileri otomatik string/json yapar
 ✅ DISK BACKUP: Restart sonrası veri kaybını önler
 ✅ AUTO-RECOVERY: Redis çökse bile disk'ten veriyi yükler
+✅ get_redis_client() EXPORT: FCM notification desteği
 """
 
 import os
@@ -459,6 +460,23 @@ def flush_all_cache() -> bool:
     logger.warning("🧹 Disk Backup temizlendi!")
     
     return success or True
+
+
+# ======================================
+# 🔥 FCM NOTIFICATION SUPPORT
+# ======================================
+
+def get_redis_client():
+    """
+    Redis client'ı döndür
+    
+    Bu fonksiyon notification_service.py tarafından kullanılır.
+    FCM token'larını Redis Set'inde saklamak için gerekli.
+    
+    Returns:
+        Redis client instance veya None
+    """
+    return redis_wrapper.get_client()
 
 
 # ======================================
