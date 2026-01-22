@@ -1,5 +1,5 @@
 """
-General Routes - PRODUCTION READY (V4.0 - RATE LIMITING + SECURITY) 🚀
+General Routes - PRODUCTION READY (V4.0 - RATE LIMITING + SECURITY + FCM) 🚀
 ==========================================================
 ✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
@@ -9,6 +9,7 @@ General Routes - PRODUCTION READY (V4.0 - RATE LIMITING + SECURITY) 🚀
 ✅ ONLINE USER TRACKING: Her API çağrısında kullanıcıyı 5dk için işaretle
 ✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
+✅ FCM ENDPOINTS: Firebase token kayıt/silme
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -133,7 +134,7 @@ def check_user_agent():
     return True  # Şimdilik tüm isteklere izin ver
 
 # ======================================
-# ENDPOINTLER (RATE LIMITED!)
+# CURRENCY ENDPOINTLER (RATE LIMITED!)
 # ======================================
 
 @api_bp.route('/currency/all', methods=['GET'])
@@ -351,6 +352,184 @@ def get_regional_currencies():
         return create_response({}, 500, "Sunucu hatası")
 
 
+# ======================================
+# 🔥 FIREBASE PUSH NOTIFICATION ENDPOINTS
+# ======================================
+
+@api_bp.route('/fcm/register', methods=['POST'])
+@limiter.limit("10 per minute")  # Dakikada 10 kayıt (Spam önleme)
+def register_fcm_token():
+    """
+    Firebase Cloud Messaging Token Kayıt
+    
+    Request Body:
+    {
+        "token": "FCM_TOKEN_HERE"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "message": "Token başarıyla kaydedildi"
+    }
+    """
+    try:
+        # Request body'den token al
+        data = request.get_json()
+        
+        if not data or 'token' not in data:
+            return create_response(
+                None,
+                400,
+                "Token gerekli! Body: {\"token\": \"FCM_TOKEN\"}"
+            )
+        
+        token = data['token'].strip()
+        
+        # Token validasyonu (Firebase token'ları genelde 150+ karakter)
+        if len(token) < 100:
+            return create_response(
+                None,
+                400,
+                "Geçersiz token formatı"
+            )
+        
+        # Token'ı kaydet
+        from utils.notification_service import register_fcm_token as register_token
+        success = register_fcm_token(token)
+        
+        if success:
+            logger.info(f"✅ [FCM] Yeni token kaydedildi: {token[:20]}...")
+            
+            return create_response(
+                {"token": token[:20] + "..."},
+                200,
+                "Token başarıyla kaydedildi"
+            )
+        else:
+            return create_response(
+                None,
+                500,
+                "Token kaydedilemedi"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ [FCM] Token kayıt hatası: {e}")
+        return create_response(
+            None,
+            500,
+            f"Sunucu hatası: {str(e)}"
+        )
+
+
+@api_bp.route('/fcm/unregister', methods=['POST'])
+@limiter.limit("10 per minute")
+def unregister_fcm_token():
+    """
+    Firebase Cloud Messaging Token Silme
+    
+    Request Body:
+    {
+        "token": "FCM_TOKEN_HERE"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "message": "Token başarıyla silindi"
+    }
+    """
+    try:
+        # Request body'den token al
+        data = request.get_json()
+        
+        if not data or 'token' not in data:
+            return create_response(
+                None,
+                400,
+                "Token gerekli! Body: {\"token\": \"FCM_TOKEN\"}"
+            )
+        
+        token = data['token'].strip()
+        
+        # Token'ı sil
+        from utils.notification_service import unregister_fcm_token as unregister_token
+        success = unregister_fcm_token(token)
+        
+        if success:
+            logger.info(f"🗑️ [FCM] Token silindi: {token[:20]}...")
+            
+            return create_response(
+                {"token": token[:20] + "..."},
+                200,
+                "Token başarıyla silindi"
+            )
+        else:
+            return create_response(
+                None,
+                404,
+                "Token bulunamadı"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ [FCM] Token silme hatası: {e}")
+        return create_response(
+            None,
+            500,
+            f"Sunucu hatası: {str(e)}"
+        )
+
+
+@api_bp.route('/fcm/status', methods=['GET'])
+@limiter.limit("30 per minute")
+def fcm_status():
+    """
+    Firebase Bildirim Sistemi Durumu
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "total_tokens": 150,
+            "last_notification": "2025-01-22T10:30:00"
+        }
+    }
+    """
+    try:
+        from utils.notification_service import get_token_count
+        
+        # Token sayısını al
+        token_count = get_token_count()
+        
+        # Son bildirim zamanını al
+        last_notification = get_cache(Config.CACHE_KEYS['fcm_last_notification'])
+        
+        if last_notification:
+            last_notification = datetime.fromtimestamp(float(last_notification)).isoformat()
+        
+        return create_response(
+            {
+                "total_tokens": token_count,
+                "last_notification": last_notification,
+                "notification_enabled": Config.FIREBASE_NOTIFICATION_ENABLED
+            },
+            200,
+            "FCM durumu"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ [FCM] Durum sorgulama hatası: {e}")
+        return create_response(
+            None,
+            500,
+            f"Sunucu hatası: {str(e)}"
+        )
+
+
+# ======================================
+# SYSTEM ENDPOINTS
+# ======================================
+
 @api_bp.route('/metrics', methods=['GET'])
 @limiter.limit("10 per minute")  # Admin endpoint - çok sıkı limit
 def get_metrics():
@@ -375,7 +554,7 @@ def get_metrics():
 
 
 # ======================================
-# RATE LIMIT ERROR HANDLER
+# ERROR HANDLERS
 # ======================================
 
 @api_bp.errorhandler(429)
