@@ -1,12 +1,11 @@
 """
-Configuration - PRODUCTION READY V3.0 (BAKIM & ALARM SİSTEMİ) 🧠
+Configuration - PRODUCTION READY V4.0 (TRADINGVIEW YEDEK SİSTEMİ) 🧠
 ===================================================
-✅ API URLS: V5 (Primary), V4 & V3 (Fallbacks)
-✅ TIMEOUTS: Hızlı yanıt için optimize edilmiş süreler.
-✅ CACHE KEYS: Redis anahtarlarının tek merkezi.
-✅ REGIONS: 20 Döviz için Bölgesel Gruplama.
-✅ WORKER + SNAPSHOT + ŞEF SİSTEMİ: Akıllı backend yapılandırması
-✅ YENİ: BAKIM MODU & SELF-HEALING ALARM SİSTEMİ
+✅ API V5: Ana kaynak (Primary)
+✅ TRADINGVIEW: Yedek kaynak (Fallback) - V3/V4 kaldırıldı
+✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
+✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
+✅ BAKIM & SELF-HEALING ALARM SİSTEMİ
 """
 import os
 
@@ -15,18 +14,59 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "3.0.0"  # 🔥 YENİ VERSIYON
+    APP_VERSION = "4.0.0"  # 🔥 TRADINGVIEW YEDEK SİSTEMİ
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
     DEFAULT_TIMEZONE = "Europe/Istanbul"
     
     # ======================================
-    # API KAYNAĞI (SADECE V5)
+    # 🆕 API KAYNAKLARI (V5 + TRADINGVIEW)
     # ======================================
-    # V5 API (Tek ve Güvenilir Kaynak)
+    # V5 API (Ana Kaynak - Primary)
     API_V5_URL = "https://finance.truncgil.com/api/today.json"
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
+    
+    # 🆕 TRADINGVIEW (Yedek Kaynak - Fallback)
+    # TradingView sembolleri (Örnek: "USDTRY", "EURTRY", "XAUTRY")
+    TRADINGVIEW_SYMBOLS = {
+        # Dövizler (FX_IDC exchange)
+        "USD": "FX_IDC:USDTRY",
+        "EUR": "FX_IDC:EURTRY",
+        "GBP": "FX_IDC:GBPTRY",
+        "CHF": "FX_IDC:CHFTRY",
+        "CAD": "FX_IDC:CADTRY",
+        "AUD": "FX_IDC:AUDTRY",
+        "RUB": "FX_IDC:RUBTRY",
+        "SAR": "FX_IDC:SARTRY",
+        "AED": "FX_IDC:AEDTRY",
+        "KWD": "FX_IDC:KWDTRY",
+        "BHD": "FX_IDC:BHDTRY",
+        "OMR": "FX_IDC:OMRTRY",
+        "QAR": "FX_IDC:QARTRY",
+        "CNY": "FX_IDC:CNYTRY",
+        "SEK": "FX_IDC:SEKTRY",
+        "NOK": "FX_IDC:NOKTRY",
+        "PLN": "FX_IDC:PLNTRY",
+        "RON": "FX_IDC:RONTRY",
+        "CZK": "FX_IDC:CZKTRY",
+        "EGP": "FX_IDC:EGPTRY",
+        "RSD": "FX_IDC:RSDTRY",
+        "HUF": "FX_IDC:HUFTRY",
+        "BAM": "FX_IDC:BAMTRY",
+        
+        # Altın (TVC exchange)
+        "GOLD": "TVC:GOLD",  # Ons Altın (USD)
+        
+        # Gümüş (TVC exchange)
+        "SILVER": "TVC:SILVER"  # Ons Gümüş (USD)
+    }
+    
+    # TradingView timeout
+    TRADINGVIEW_TIMEOUT = 10  # 10 saniye
+    
+    # Kaynak seçimi (manuel geçiş için)
+    ACTIVE_SOURCE = "v5"  # Varsayılan: "v5" | Manuel: "tradingview"
     
     # ======================================
     # ZAMANLAYICI & PERFORMANS
@@ -40,7 +80,7 @@ class Config:
     SNAPSHOT_SECOND = 5  # Saniye 05 (00:00:05)
     
     # 👮 Şef (Controller) - Sistem denetim sıklığı (Dakika)
-    SUPERVISOR_INTERVAL = 10  # 🔥 YENİ: 10 Dakika (CPU/RAM kontrolü için)
+    SUPERVISOR_INTERVAL = 10  # 10 Dakika (CPU/RAM kontrolü için)
     
     # 📊 Telegram Günlük Rapor Saati (Sabah 09:00)
     TELEGRAM_DAILY_REPORT_HOUR = 9
@@ -50,13 +90,13 @@ class Config:
     CIRCUIT_BREAKER_TIMEOUT = 60           # 60 saniye bekle (Soğuma süresi)
     
     # ======================================
-    # 🚧 BAKIM MODU AYARLARI (YENİ!)
+    # 🚧 BAKIM MODU AYARLARI
     # ======================================
     # Bakım modu varsayılan mesajı
     MAINTENANCE_DEFAULT_MESSAGE = "Sistem bakımda. Veriler güncel olmayabilir."
     
     # ======================================
-    # 🚨 SELF-HEALING ALARM SİSTEMİ (YENİ!)
+    # 🚨 SELF-HEALING ALARM SİSTEMİ
     # ======================================
     # CPU Eşiği (Varsayılan %)
     CPU_THRESHOLD = 80  # %80
@@ -64,17 +104,28 @@ class Config:
     # RAM Eşiği (Varsayılan %)
     RAM_THRESHOLD = 85  # %85
     
-    # Alarm kontrol sıklığı (Saniye) - 🔥 HIZLI MÜDAHALE için 1 dakika!
-    ALARM_CHECK_INTERVAL = 60  # 1 dakika (60 saniye) - Kritik sorunları hızlıca yakalar
+    # Alarm kontrol sıklığı (Saniye) - HIZLI MÜDAHALE için 1 dakika!
+    ALARM_CHECK_INTERVAL = 60  # 1 dakika (60 saniye)
     
     # Müdahale sonrası bekleme süresi (Saniye)
-    ALARM_COOLDOWN = 300  # 5 dakika (Tekrar müdahale etmeden önce bekle)
+    ALARM_COOLDOWN = 300  # 5 dakika
     
-    # Alarm bildirimi aralığı (Saniye) - Aynı alarm için tekrar bildirim göndermeden önce bekle
+    # Alarm bildirimi aralığı (Saniye)
     ALARM_NOTIFICATION_INTERVAL = 1800  # 30 dakika
     
-    # CPU yüksek kalma süresi (Saniye) - CPU bu kadar süre yüksekse müdahale et
+    # CPU yüksek kalma süresi (Saniye)
     CPU_HIGH_DURATION = 300  # 5 dakika
+    
+    # ======================================
+    # 🗓️ TAKVİM BİLDİRİMLERİ (YENİ!)
+    # ======================================
+    # Takvim kontrol saati (Her gün sabah 08:00)
+    CALENDAR_CHECK_HOUR = 8
+    CALENDAR_CHECK_MINUTE = 0
+    
+    # Banner otomatik aktif olma saati (Etkinlik günü 09:00)
+    CALENDAR_BANNER_HOUR = 9
+    CALENDAR_BANNER_MINUTE = 0
     
     # ======================================
     # HAFTA SONU KİLİDİ
@@ -88,7 +139,7 @@ class Config:
     # Redis URL (Render otomatik verir, yoksa localhost)
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     
-    # Anahtar İsimleri (Kod içinde elle yazmamak için)
+    # Anahtar İsimleri
     CACHE_KEYS = {
         # Canlı veriler
         'currencies_all': 'kurabak:currencies:all',
@@ -97,21 +148,29 @@ class Config:
         'summary': 'kurabak:summary',
         
         # Yedek sistemler
-        'backup': 'kurabak:backup:all',  # 15 dakikalık kara kutu
+        'backup': 'kurabak:backup:all',
         
         # Worker + Snapshot + Şef sistemleri
-        'yesterday_prices': 'kurabak:yesterday_prices',  # 📸 Snapshot referans fiyatları
-        'last_worker_run': 'kurabak:last_worker_run',    # 👷 İşçi son çalışma zamanı
-        'backup_timestamp': 'kurabak:backup:timestamp',  # 📦 Backup son kayıt zamanı
+        'yesterday_prices': 'kurabak:yesterday_prices',
+        'last_worker_run': 'kurabak:last_worker_run',
+        'backup_timestamp': 'kurabak:backup:timestamp',
         
-        # 🔥 YENİ: Bakım ve Alarm Sistemleri
-        'maintenance': 'system_maintenance',             # 🚧 Bakım modu durumu
-        'banner': 'system_banner',                       # 📢 Banner mesajı
-        'mute': 'system_mute',                          # 🔇 Death Star modu
-        'alarm_cpu_state': 'alarm:cpu:state',           # 🧠 CPU alarm durumu
-        'alarm_ram_state': 'alarm:ram:state',           # 💾 RAM alarm durumu
-        'alarm_last_notification': 'alarm:last_notification',  # 🔔 Son bildirim zamanı
-        'system_was_down': 'system_was_down'            # 🔄 Sistem çökmüş mü?
+        # Bakım ve Alarm Sistemleri
+        'maintenance': 'system_maintenance',
+        'banner': 'system_banner',
+        'mute': 'system_mute',
+        'alarm_cpu_state': 'alarm:cpu:state',
+        'alarm_ram_state': 'alarm:ram:state',
+        'alarm_last_notification': 'alarm:last_notification',
+        'system_was_down': 'system_was_down',
+        
+        # 🆕 TradingView Kaynak Yönetimi
+        'active_source': 'system:active_source',  # Aktif kaynak (v5/tradingview)
+        'source_switch_count': 'system:source_switch_count',  # Kaç kere geçiş yapıldı
+        
+        # 🆕 Takvim Bildirimleri
+        'calendar_last_check': 'calendar:last_check',  # Son takvim kontrolü
+        'calendar_notified_events': 'calendar:notified_events'  # Bildirim gönderilen etkinlikler
     }
     
     # ======================================
@@ -119,12 +178,11 @@ class Config:
     # ======================================
     # Kaç yüzde değişimde "Sert Hareket" sayılsın?
     TREND_HIGH_THRESHOLD = 2.0    # %2 ve üzeri -> HIGH_UP / HIGH_DOWN
-    TREND_MEDIUM_THRESHOLD = 1.0  # %1-2 arası -> MEDIUM (Gelecekte eklenebilir)
+    TREND_MEDIUM_THRESHOLD = 1.0  # %1-2 arası -> MEDIUM
     
     # ======================================
-    # BÖLGESEL FİLTRELEME (LEGACY - Kullanılmıyor ama backward compatibility için duruyor)
+    # BÖLGESEL FİLTRELEME
     # ======================================
-    # Frontend'de "Asya", "Avrupa" sekmeleri için gruplama
     REGIONAL_CURRENCIES = {
         "north_america": ["USD", "CAD"],
         "europe": ["EUR", "GBP", "CHF", "SEK", "NOK"],
@@ -138,39 +196,16 @@ class Config:
     # ======================================
     # MOBİL UYGULAMANIN GÖSTERDIĞI VARLIKLAR
     # ======================================
-    # 23 Döviz (Halk Tipi Güncellenmiş Liste - TRY Hariç)
+    # 23 Döviz
     MOBILE_CURRENCIES = [
-        # Ana Dövizler (7)
         "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB",
-        
-        # Orta Doğu (6)
         "SAR", "AED", "KWD", "BHD", "OMR", "QAR",
-        
-        # Asya (1)
-        "CNY",
-        
-        # İskandinav (2)
-        "SEK", "NOK",
-        
-        # Halk Tipi Yeni Eklenenler (7)
-        "PLN",  # Polonya Zlotisi - Erasmus & Nakliye
-        "RON",  # Romanya Leyi - Komşu ticaret
-        "CZK",  # Çek Korunası - Prag turizmi
-        "EGP",  # Mısır Lirası - Vizesiz tatil
-        "RSD",  # Sırbistan Dinarı - Balkan turları
-        "HUF",  # Macar Forinti - Budapeşte
-        "BAM"   # Bosna-Hersek Markı - Duygusal bağ
+        "CNY", "SEK", "NOK",
+        "PLN", "RON", "CZK", "EGP", "RSD", "HUF", "BAM"
     ]
     
     # 6 Altın
-    MOBILE_GOLDS = [
-        "GRA",   # Gram Altın
-        "C22",   # Çeyrek Altın
-        "YAR",   # Yarım Altın
-        "TAM",   # Tam Altın
-        "CUM",   # Cumhuriyet Altını
-        "ATA"    # Atatürk Altını
-    ]
+    MOBILE_GOLDS = ["GRA", "C22", "YAR", "TAM", "CUM", "ATA"]
     
     # 1 Gümüş
     MOBILE_SILVER = "AG"
@@ -178,10 +213,7 @@ class Config:
     # ======================================
     # GÜVENLİK (CORS & RATE LIMIT)
     # ======================================
-    # Hangi siteler bu API'ye erişebilir? ("*" = Herkes)
     CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
-    
-    # Manuel güncelleme için API Anahtarı (Opsiyonel güvenlik)
     SECRET_KEY = os.environ.get("SECRET_KEY", "gizli-anahtar-degistir")
     
     # ======================================
@@ -190,32 +222,23 @@ class Config:
     TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
     
-    # Telegram Sessiz Mod (Sadece kritik ve rapor bildirimler)
+    # Telegram Sessiz Mod
     TELEGRAM_SILENT_MODE = True
     
     # ======================================
     # ŞEF (CONTROLLER) AYARLARI
     # ======================================
-    # İşçi (Worker) kaç dakika uyursa "kritik" kabul edilsin?
-    SUPERVISOR_WORKER_TIMEOUT = 600  # 10 dakika (saniye cinsinden)
-    
-    # Şef kaç dakika önce uyarı versin? (Warning seviyesi)
+    SUPERVISOR_WORKER_TIMEOUT = 600  # 10 dakika
     SUPERVISOR_WARNING_TIMEOUT = 300  # 5 dakika
     
     # ======================================
     # YEDEKLEME (BACKUP) SİSTEMİ
     # ======================================
-    # Backup kaç dakikada bir alınacak?
-    BACKUP_INTERVAL = 900  # 15 dakika (saniye cinsinden)
-    
-    # Backup kaç gün saklanacak? (Redis TTL)
-    BACKUP_TTL = 86400  # 24 saat (saniye cinsinden)
+    BACKUP_INTERVAL = 900  # 15 dakika
+    BACKUP_TTL = 86400  # 24 saat
     
     # ======================================
     # GELIŞTIRME AYARLARI
     # ======================================
-    # Debug modu (Sadece local development için)
     DEBUG = os.environ.get("DEBUG", "False").lower() == "true"
-    
-    # Log seviyesi
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
