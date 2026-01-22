@@ -1,16 +1,11 @@
 """
-Financial Service - PRODUCTION READY (MOBILE OPTIMIZED + BANNER + DEATH STAR + BAKIM MODU) 🚀
+Financial Service - PRODUCTION READY V4.0 🚀
 =========================================================
-✅ SADECE MOBİL UYGULAMANIN İHTİYACI OLAN VERİYİ ÇEKİYOR
-✅ 23 Döviz + 6 Altın + 1 Gümüş (Toplam 30 ürün)
-✅ Kripto ve gereksiz altınları atlar
-✅ %40 daha hızlı parse
-✅ WORKER (İşçi) + SNAPSHOT (Fotoğrafçı) SİSTEMİ
-✅ 📸 GECE REFERANS RAPORU (Patrona Telegram bildirimi)
-✅ 📢 BANNER SİSTEMİ (Manuel > Otomatik Takvim)
-✅ 🛑 DEATH STAR MODU (/sus ile tamamen susturma)
-✅ 🚧 BAKIM MODU (Senaryo A + B desteği)
-✅ 🔄 "DÜZELDİ" BİLDİRİMİ (Otomatik geri bildirim)
+✅ V5 + TRADINGVIEW: Dual source system (V3/V4 removed)
+✅ MANUEL KAYNAK GEÇİŞİ: Telegram komutlarıyla kontrol
+✅ MOBİL OPTİMİZE: 23 Döviz + 6 Altın + 1 Gümüş
+✅ WORKER + SNAPSHOT + BANNER + DEATH STAR + BAKIM MODU
+✅ SELF-HEALING: Otomatik kaynak değiştirme
 """
 
 import requests
@@ -31,50 +26,20 @@ logger = logging.getLogger(__name__)
 # 📱 MOBİL UYGULAMANIN KODLARI
 # ======================================
 
-# 23 Döviz (Halk Tipi Güncellenmiş Liste - TRY Hariç)
 MOBILE_CURRENCIES = [
-    # Ana Dövizler (7)
     "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB",
-    
-    # Orta Doğu (6)
     "SAR", "AED", "KWD", "BHD", "OMR", "QAR",
-    
-    # Asya (1)
-    "CNY",
-    
-    # İskandinav (2)
-    "SEK", "NOK",
-    
-    # Halk Tipi Yeni Eklenenler (7)
-    "PLN",  # Polonya Zlotisi - Erasmus & Nakliye
-    "RON",  # Romanya Leyi - Komşu ticaret
-    "CZK",  # Çek Korunası - Prag turizmi
-    "EGP",  # Mısır Lirası - Vizesiz tatil
-    "RSD",  # Sırbistan Dinarı - Balkan turları
-    "HUF",  # Macar Forinti - Budapeşte
-    "BAM"   # Bosna-Hersek Markı - Duygusal bağ
+    "CNY", "SEK", "NOK",
+    "PLN", "RON", "CZK", "EGP", "RSD", "HUF", "BAM"
 ]
 
-# 6 Altın (Android ile %100 uyumlu)
 MOBILE_GOLDS = {
-    # API Kodu: Standart Kod
-    "GRA": "GRA",           # Gram Altın
-    "CEYREKALTIN": "C22",   # Çeyrek Altın
-    "YARIMALTIN": "YAR",    # Yarım Altın
-    "TAMALTIN": "TAM",      # Tam Altın
-    "CUMHURIYETALTINI": "CUM",  # Cumhuriyet Altını
-    "ATAALTIN": "ATA",      # Atatürk Altını
-    
-    # V3/V4 için alternatifler
-    "gram-altin": "GRA",
-    "ceyrek-altin": "C22",
-    "yarim-altin": "YAR",
-    "tam-altin": "TAM",
-    "cumhuriyet-altini": "CUM",
-    "ata-altin": "ATA"
+    "GRA": "GRA", "CEYREKALTIN": "C22", "YARIMALTIN": "YAR",
+    "TAMALTIN": "TAM", "CUMHURIYETALTINI": "CUM", "ATAALTIN": "ATA",
+    "gram-altin": "GRA", "ceyrek-altin": "C22", "yarim-altin": "YAR",
+    "tam-altin": "TAM", "cumhuriyet-altini": "CUM", "ata-altin": "ATA"
 }
 
-# 1 Gümüş
 MOBILE_SILVER_CODES = ["GUMUS", "gumus", "AG", "SILVER"]
 
 # ======================================
@@ -82,7 +47,7 @@ MOBILE_SILVER_CODES = ["GUMUS", "gumus", "AG", "SILVER"]
 # ======================================
 
 class Metrics:
-    stats = {'v5': 0, 'v4': 0, 'v3': 0, 'backup': 0, 'errors': 0}
+    stats = {'v5': 0, 'tradingview': 0, 'backup': 0, 'errors': 0}
     
     @classmethod
     def inc(cls, key):
@@ -93,33 +58,25 @@ class Metrics:
         return cls.stats.copy()
 
 # ======================================
-# EVRENSEL PARSER
+# YARDIMCI FONKSİYONLAR
 # ======================================
 
 def clean_money_string(value: Any) -> float:
-    """
-    ULTIMATE NUMBER PARSER 🧮
-    """
+    """Number parser"""
     if isinstance(value, (int, float)):
         return float(value)
-    
     if not value:
         return 0.0
-        
-    v = str(value).strip()
-    v = v.replace("%", "").replace("$", "").replace("TL", "").replace("₺", "").strip()
-    
+    v = str(value).strip().replace("%", "").replace("$", "").replace("TL", "").replace("₺", "").strip()
     if not v or v.lower() in ["-", "nan", "null", "none"]:
         return 0.0
-
     try:
         if "." in v and "," in v:
             v = v.replace(".", "").replace(",", ".")
         elif "," in v:
             v = v.replace(",", ".")
-        
         return float(v)
-    except Exception:
+    except:
         return 0.0
 
 def create_item(code: str, raw_item: dict, item_type: str) -> dict:
@@ -127,396 +84,379 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     buying = clean_money_string(raw_item.get("Buying"))
     selling = clean_money_string(raw_item.get("Selling"))
     change = clean_money_string(raw_item.get("Change"))
-    
     if selling == 0: selling = buying
     if buying == 0: buying = selling
-    
     return {
-        "code": code,
-        "name": raw_item.get("Name", code),
-        "buying": round(buying, 4),
-        "selling": round(selling, 4),
-        "rate": round(selling, 4),
-        "change_percent": round(change, 2),
+        "code": code, "name": raw_item.get("Name", code),
+        "buying": round(buying, 4), "selling": round(selling, 4),
+        "rate": round(selling, 4), "change_percent": round(change, 2),
         "type": item_type
     }
 
 # ======================================
-# 🚀 OPTİMİZE EDİLMİŞ PARSER
+# TRADINGVIEW FETCH (YENİ!)
+# ======================================
+
+def fetch_from_tradingview() -> Optional[dict]:
+    """
+    TradingView'den veri çeker.
+    tradingview-ta kütüphanesini kullanır.
+    """
+    try:
+        from tradingview_ta import TA_Handler, Interval
+        
+        logger.info("📊 [TradingView] Veri çekiliyor...")
+        
+        rates = {}
+        
+        # Dövizler
+        for code, symbol in Config.TRADINGVIEW_SYMBOLS.items():
+            if code in ["GOLD", "SILVER"]:
+                continue
+            try:
+                handler = TA_Handler(
+                    symbol=symbol,
+                    screener="forex",
+                    exchange="FX_IDC",
+                    interval=Interval.INTERVAL_1_MINUTE
+                )
+                analysis = handler.get_analysis()
+                price = analysis.indicators.get("close", 0)
+                
+                if price > 0:
+                    rates[code] = {
+                        "Name": code,
+                        "Buying": price,
+                        "Selling": price,
+                        "Change": 0,
+                        "Type": "Currency"
+                    }
+            except Exception as e:
+                logger.debug(f"TradingView {code} hatası: {e}")
+        
+        # Altın (USD cinsinden)
+        try:
+            handler = TA_Handler(
+                symbol="GOLD",
+                screener="forex",
+                exchange="TVC",
+                interval=Interval.INTERVAL_1_MINUTE
+            )
+            analysis = handler.get_analysis()
+            gold_usd = analysis.indicators.get("close", 0)
+            
+            # USD/TRY kuru ile çarp
+            usd_try = rates.get("USD", {}).get("Selling", 0)
+            
+            if gold_usd > 0 and usd_try > 0:
+                # Ons altın -> Gram altın (1 ons = 31.1035 gram)
+                gram_try = (gold_usd * usd_try) / 31.1035
+                
+                rates["GRA"] = {
+                    "Name": "Gram Altın",
+                    "Buying": gram_try,
+                    "Selling": gram_try,
+                    "Change": 0,
+                    "Type": "Gold"
+                }
+                
+                # Diğer altınlar (Yaklaşık hesaplamalar)
+                rates["CEYREKALTIN"] = {
+                    "Name": "Çeyrek Altın",
+                    "Buying": gram_try * 1.75,
+                    "Selling": gram_try * 1.75,
+                    "Change": 0,
+                    "Type": "Gold"
+                }
+                rates["YARIMALTIN"] = {
+                    "Name": "Yarım Altın",
+                    "Buying": gram_try * 3.5,
+                    "Selling": gram_try * 3.5,
+                    "Change": 0,
+                    "Type": "Gold"
+                }
+                rates["TAMALTIN"] = {
+                    "Name": "Tam Altın",
+                    "Buying": gram_try * 7,
+                    "Selling": gram_try * 7,
+                    "Change": 0,
+                    "Type": "Gold"
+                }
+                rates["CUMHURIYETALTINI"] = {
+                    "Name": "Cumhuriyet Altını",
+                    "Buying": gram_try * 7.2,
+                    "Selling": gram_try * 7.2,
+                    "Change": 0,
+                    "Type": "Gold"
+                }
+                rates["ATAALTIN"] = {
+                    "Name": "Ata Altın",
+                    "Buying": gram_try * 7.2,
+                    "Selling": gram_try * 7.2,
+                    "Change": 0,
+                    "Type": "Gold"
+                }
+        except Exception as e:
+            logger.debug(f"TradingView GOLD hatası: {e}")
+        
+        # Gümüş
+        try:
+            handler = TA_Handler(
+                symbol="SILVER",
+                screener="forex",
+                exchange="TVC",
+                interval=Interval.INTERVAL_1_MINUTE
+            )
+            analysis = handler.get_analysis()
+            silver_usd = analysis.indicators.get("close", 0)
+            
+            usd_try = rates.get("USD", {}).get("Selling", 0)
+            
+            if silver_usd > 0 and usd_try > 0:
+                gram_try = (silver_usd * usd_try) / 31.1035
+                rates["GUMUS"] = {
+                    "Name": "Gümüş",
+                    "Buying": gram_try,
+                    "Selling": gram_try,
+                    "Change": 0,
+                    "Type": "Silver"
+                }
+        except Exception as e:
+            logger.debug(f"TradingView SILVER hatası: {e}")
+        
+        if rates:
+            logger.info(f"✅ [TradingView] {len(rates)} ürün çekildi")
+            return {"Rates": rates}
+        
+        return None
+        
+    except ImportError:
+        logger.error("❌ tradingview-ta kütüphanesi yok! pip install tradingview-ta")
+        return None
+    except Exception as e:
+        logger.error(f"❌ TradingView genel hata: {e}")
+        return None
+
+# ======================================
+# V5 FETCH
+# ======================================
+
+def fetch_from_v5() -> Optional[dict]:
+    """V5 API'den veri çek"""
+    try:
+        resp = requests.get(
+            Config.API_V5_URL,
+            timeout=Config.API_V5_TIMEOUT,
+            headers={"User-Agent": "KuraBak/Mobile"}
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.warning(f"⚠️ V5 Fetch Error: {str(e)[:50]}")
+    return None
+
+# ======================================
+# PARSER
 # ======================================
 
 def process_data_mobile_optimized(data: dict):
-    """
-    SADECE MOBİL UYGULAMANIN GÖSTERDIĞI 30 ÜRÜNÜ PARSE EDER
-    (23 Döviz + 6 Altın + 1 Gümüş)
-    Kripto ve gereksiz altınları atlar -> %40 daha hızlı
-    """
-    currencies = []
-    golds = []
-    silvers = []
-    
-    # Veri kaynağını bul
+    """23 Döviz + 6 Altın + 1 Gümüş parse"""
+    currencies, golds, silvers = [], [], []
     source_data = data.get("Rates", data)
     
-    # 1️⃣ 23 DÖVİZ (Sadece mobilde gösterilenler)
+    # Dövizler
     for code in MOBILE_CURRENCIES:
         item = source_data.get(code)
-        if item:
-            # Crypto mu kontrol et (Güvenlik)
-            i_type = str(item.get("Type", "")).lower()
-            if "crypto" in i_type:
-                continue
-            
+        if item and "crypto" not in str(item.get("Type", "")).lower():
             currencies.append(create_item(code, item, "currency"))
     
-    # 2️⃣ 6 ALTIN (Sadece mobilde gösterilenler)
+    # Altınlar
     processed_golds = set()
-    
     for api_key, standard_code in MOBILE_GOLDS.items():
         if standard_code in processed_golds:
             continue
-        
-        # API key ile veriyi bul (Case-insensitive)
-        item = None
-        if api_key in source_data:
-            item = source_data[api_key]
-        else:
+        item = source_data.get(api_key)
+        if not item:
             for k in source_data.keys():
                 if k.lower() == api_key.lower():
                     item = source_data[k]
                     break
-        
         if item:
             golds.append(create_item(standard_code, item, "gold"))
             processed_golds.add(standard_code)
     
-    # 3️⃣ 1 GÜMÜŞ
+    # Gümüş
     for silver_code in MOBILE_SILVER_CODES:
         item = source_data.get(silver_code)
         if not item:
-            # Case-insensitive arama
             for k in source_data.keys():
                 if k.lower() == silver_code.lower():
                     item = source_data[k]
                     break
-        
         if item:
             silvers.append(create_item("AG", item, "silver"))
-            break  # Bir tane bulunca dur
+            break
     
     return currencies, golds, silvers
-
-# ======================================
-# API FETCH
-# ======================================
-
-def fetch_from_api(version: str, url: str, timeout: tuple) -> Optional[dict]:
-    """API isteği"""
-    try:
-        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "KuraBak/Mobile"})
-        if resp.status_code == 200:
-            try:
-                return resp.json()
-            except json.JSONDecodeError:
-                text = resp.text.strip()
-                if not text.endswith('}'):
-                    text += '}'
-                try:
-                    return json.loads(text)
-                except:
-                    pass
-        return None
-    except Exception as e:
-        logger.warning(f"⚠️ {version} Fetch Error: {str(e)[:50]}")
-        return None
 
 def calculate_summary(currencies):
     """Kazanan ve Kaybeden"""
     if len(currencies) < 2:
         return {}
-    
     sorted_curr = sorted(currencies, key=lambda x: x['change_percent'])
-    return {
-        "loser": sorted_curr[0],
-        "winner": sorted_curr[-1]
-    }
+    return {"loser": sorted_curr[0], "winner": sorted_curr[-1]}
 
 # ======================================
-# 📢 BANNER BELİRLEYİCİ (DEATH STAR FİX)
+# BANNER
 # ======================================
 
 def determine_banner_message() -> Optional[str]:
-    """
-    ÖNCELİK SIRASI:
-    0. 🛑 SİSTEM SUSTURMA KİLİDİ (Death Star Modu)
-    1. Manuel Duyuru (Telegram /duyuru komutuyla yazılan)
-    2. Otomatik Takvim (TCMB, Bayram, Enflasyon, Piyasa Kapalı)
-    3. Hiçbiri yoksa -> None
-    """
-    # 0. 🛑 DEATH STAR KİLİDİ (ÖNCELİK #0)
-    is_muted = get_cache("system_mute")
-    if is_muted:
-        logger.info("🤫 [BANNER] Sistem susturulmuş, hiçbir banner gösterilmeyecek.")
+    """Banner öncelik: Mute > Manuel > Takvim"""
+    if get_cache("system_mute"):
+        logger.info("🤫 [BANNER] Sistem susturulmuş")
         return None
-    
-    # 1. Manuel Duyuru Kontrolü (Öncelik #1)
     manual_banner = get_cache("system_banner")
     if manual_banner:
         logger.info(f"📢 [BANNER] Manuel: {manual_banner}")
         return manual_banner
-    
-    # 2. Otomatik Takvim (Öncelik #2)
     auto_banner = get_todays_banner()
     if auto_banner:
         logger.info(f"📅 [BANNER] Otomatik: {auto_banner}")
         return auto_banner
-    
-    # 3. Hiçbir şey yok
     return None
 
 # ======================================
-# 📸 FOTOĞRAFÇI (SNAPSHOT) - GECE 00:00
+# SNAPSHOT
 # ======================================
 
-def take_daily_snapshot():
-    """
-    Her gece 00:00'da referans fiyatları Redis'e kaydeder.
-    Bu fiyatlar ertesi gün boyunca değişim hesaplaması için kullanılır.
-    📸 Patrona da Telegram ile rapor gönderir.
-    """
+def take_snapshot():
+    """Gece 00:00 snapshot + Telegram rapor"""
     logger.info("📸 [SNAPSHOT] Gün sonu kapanış fiyatları alınıyor...")
-    
     try:
-        # Mevcut canlı verileri al
         currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
         golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
         silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
         
         if not currencies_data:
-            logger.warning("⚠️ HATA: Canlı veri yok, snapshot alınamadı.")
+            logger.warning("⚠️ Canlı veri yok, snapshot alınamadı")
             return False
         
         snapshot = {}
-        report_lines = []  # 📢 Telegram raporu için
+        report_lines = []
         
-        # 1️⃣ DÖVİZLERİ EKLE
         for item in currencies_data.get("data", []):
-            code = item.get("code")
-            selling = item.get("selling", 0)
+            code, selling = item.get("code"), item.get("selling", 0)
             if code and selling > 0:
                 snapshot[code] = selling
-                # Önemli dövizleri rapora ekle
                 if code in ["USD", "EUR", "GBP", "CHF"]:
                     report_lines.append(f"💵 {code}: *{selling:.4f} ₺*")
         
-        # 2️⃣ ALTINLARI EKLE
         if golds_data:
             for item in golds_data.get("data", []):
-                code = item.get("code")
-                name = item.get("name", code)
-                selling = item.get("selling", 0)
+                code, name, selling = item.get("code"), item.get("name", ""), item.get("selling", 0)
                 if code and selling > 0:
                     snapshot[code] = selling
-                    # Önemli altınları rapora ekle
                     if code in ["GRA", "C22", "CUM"]:
-                        # Gram altın için farklı format (binlik ayracı)
-                        if code == "GRA":
-                            formatted_price = f"{selling:,.2f}".replace(",", ".")
-                            report_lines.append(f"🟡 {name}: *{formatted_price} ₺*")
-                        else:
-                            formatted_price = f"{selling:,.2f}".replace(",", ".")
-                            report_lines.append(f"🟡 {name}: *{formatted_price} ₺*")
+                        formatted = f"{selling:,.2f}".replace(",", ".")
+                        report_lines.append(f"🟡 {name}: *{formatted} ₺*")
         
-        # 3️⃣ GÜMÜŞÜ EKLE
         if silvers_data:
             for item in silvers_data.get("data", []):
-                code = item.get("code")
-                selling = item.get("selling", 0)
+                code, selling = item.get("code"), item.get("selling", 0)
                 if code and selling > 0:
                     snapshot[code] = selling
                     report_lines.append(f"⚪ Gümüş: *{selling:.2f} ₺*")
         
         if snapshot:
-            # Redis'e kaydet (TTL=0, silinmesin)
             set_cache("kurabak:yesterday_prices", snapshot, ttl=0)
-            logger.info(f"✅ KASA KİLİTLENDİ: {len(snapshot)} adet varlık (Döviz/Altın/Gümüş) kaydedildi.")
+            logger.info(f"✅ SNAPSHOT: {len(snapshot)} varlık kaydedildi")
             
-            # --- 📢 TELEGRAM RAPORU (KIYAK HAREKET) ---
             try:
                 from utils.telegram_monitor import telegram_monitor
                 if telegram_monitor:
                     tz = pytz.timezone('Europe/Istanbul')
                     date_str = datetime.now(tz).strftime("%d.%m.%Y")
-                    
-                    # Mesajı oluştur
                     msg = (
                         f"📸 *REFERANS FİYATLAR ALINDI* | {date_str}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"Patron, yarına kadar değişimler bu fiyatlara göre hesaplanacak:\n\n"
+                        + "\n".join(report_lines) +
+                        f"\n\n📦 *Toplam:* {len(snapshot)} varlık kilitlendi.\n✅ Sistem yarına hazır."
                     )
-                    
-                    # Listeyi mesaja dök
-                    msg += "\n".join(report_lines)
-                    
-                    msg += f"\n\n📦 *Toplam:* {len(snapshot)} varlık kilitlendi.\n"
-                    msg += f"✅ Sistem yarına hazır."
-                    
-                    # Rapor olarak gönder
                     telegram_monitor.send_message(msg, level='report')
-                    logger.info("📲 Telegram raporu patrona gönderildi.")
             except Exception as tg_err:
                 logger.error(f"⚠️ Telegram rapor hatası: {tg_err}")
-                
             return True
-        else:
-            logger.warning("⚠️ UYARI: Kaydedilecek geçerli fiyat bulunamadı.")
-            return False
-            
+        return False
     except Exception as e:
         logger.error(f"❌ Snapshot hatası: {e}", exc_info=True)
         return False
 
 # ======================================
-# 🚧 BAKIM MODU KONTROLLERİ (YENİ!)
+# BAKIM MODU
 # ======================================
 
 def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
-    """
-    Bakım modunu kontrol eder.
-    
-    Returns:
-        Tuple[bool, str, Optional[str]]: 
-        - (True, "MAINTENANCE", "mesaj") -> Bakım modu aktif
-        - (False, "OPEN", None) -> Normal çalışma
-    """
-    # Bakım kilidi var mı kontrol et
+    """Bakım modu kontrolü"""
     maintenance_data = get_cache("system_maintenance")
-    
     if not maintenance_data:
         return False, "OPEN", None
-    
-    # Veri formatı: {"message": "...", "mode": "full/limited", "end_time": timestamp}
     if isinstance(maintenance_data, dict):
         end_time = maintenance_data.get("end_time")
-        
-        # Süre dolmuş mu kontrol et
         if end_time and time.time() > end_time:
-            # Süre doldu, kilidi kaldır
             from utils.cache import delete_cache
             delete_cache("system_maintenance")
-            logger.info("✅ [BAKIM] Bakım süresi doldu, normal moda dönüldü.")
+            logger.info("✅ [BAKIM] Bakım süresi doldu")
             return False, "OPEN", None
-        
-        # Bakım modu hala aktif
         message = maintenance_data.get("message", "Sistem bakımda")
         mode = maintenance_data.get("mode", "limited")
-        
         status = "MAINTENANCE_FULL" if mode == "full" else "MAINTENANCE"
-        
         return True, status, message
-    
     return False, "OPEN", None
 
 # ======================================
-# 👷 İŞÇİ (WORKER) - 2 DAKİKADA BİR
+# WORKER (ANA FONKSİYON)
 # ======================================
 
 def update_financial_data():
     """
     Her 2 dakikada bir çalışır.
-    1. 🚧 BAKIM MODU KONTROLÜ (YENİ!)
-    2. Hafta sonu kontrolü yapar (Cumartesi/Pazar kilidi)
-    3. API'den veri çeker
-    4. 🔄 "DÜZELDİ" BİLDİRİMİ (YENİ!)
-    5. Referans fiyatlarla kıyaslayarak değişimi hesaplar
-    6. Trend analizi yapar (ALEV ROZETİ)
-    7. Market durumunu belirler
-    8. 📢 BANNER MESAJINI BELİRLER (DEATH STAR DESTEKLİ!)
+    V5 -> TradingView -> Backup (V3/V4 kaldırıldı)
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
     
-    # --- 1. 🚧 BAKIM MODU KONTROLÜ (ÖNCELİK #1) ---
+    # 1. Bakım kontrolü
     is_maintenance, maint_status, maint_message = check_maintenance_mode()
-    
     if is_maintenance:
-        logger.info(f"🚧 [WORKER] Bakım Modu Aktif ({maint_status}). Status güncellendi.")
-        
-        # Bakım modunda da mevcut verilerdeki status'u güncelle
-        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
-        golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
-        silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
-        summary_data = get_cache(Config.CACHE_KEYS['summary'])
-        
-        if currencies_data:
-            currencies_data['status'] = maint_status
-            currencies_data['market_msg'] = maint_message or "Sistem Bakımda"
-            currencies_data['last_update'] = now.strftime("%H:%M:%S")
-            currencies_data['banner'] = maint_message
-            set_cache(Config.CACHE_KEYS['currencies_all'], currencies_data, ttl=0)
-        
-        if golds_data:
-            golds_data['status'] = maint_status
-            set_cache(Config.CACHE_KEYS['golds_all'], golds_data, ttl=0)
-        
-        if silvers_data:
-            silvers_data['status'] = maint_status
-            set_cache(Config.CACHE_KEYS['silvers_all'], silvers_data, ttl=0)
-        
-        if summary_data:
-            summary_data['status'] = maint_status
-            set_cache(Config.CACHE_KEYS['summary'], summary_data, ttl=0)
-        
-        # Bakım modundaysa veri çekme, direkt dön
+        logger.info(f"🚧 [WORKER] Bakım Modu Aktif ({maint_status})")
+        for key in [Config.CACHE_KEYS['currencies_all'], Config.CACHE_KEYS['golds_all'], 
+                    Config.CACHE_KEYS['silvers_all'], Config.CACHE_KEYS['summary']]:
+            data = get_cache(key)
+            if data:
+                data['status'] = maint_status
+                data['market_msg'] = maint_message or "Sistem Bakımda"
+                data['last_update'] = now.strftime("%H:%M:%S")
+                data['banner'] = maint_message
+                set_cache(key, data, ttl=0)
         return True
     
-    # --- 2. HAFTA SONU KİLİDİ ---
-    market_status = "OPEN"
-    is_weekend_lock = False
-    
-    # Cumartesi (5) tüm gün, Pazar (6) saat 23:00'e kadar KAPALI
+    # 2. Hafta sonu kilidi
     if now.weekday() == 5 or (now.weekday() == 6 and now.hour < 23):
-        market_status = "CLOSED"
-        is_weekend_lock = True
+        logger.info(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')})")
+        for key in [Config.CACHE_KEYS['currencies_all'], Config.CACHE_KEYS['golds_all'],
+                    Config.CACHE_KEYS['silvers_all'], Config.CACHE_KEYS['summary']]:
+            data = get_cache(key)
+            if data:
+                data['status'] = "CLOSED"
+                data['market_msg'] = "Piyasalar Kapalı"
+                data['last_update'] = now.strftime("%H:%M:%S")
+                set_cache(key, data, ttl=0)
+        return True
     
-    # Eğer piyasa kapalıysa, sadece status'u güncelle
-    if is_weekend_lock:
-        logger.info(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')}). Status: CLOSED olarak güncellendi.")
-        
-        # Mevcut verilerdeki status'u güncelle
-        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
-        golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
-        silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
-        summary_data = get_cache(Config.CACHE_KEYS['summary'])
-        
-        if currencies_data:
-            currencies_data['status'] = "CLOSED"
-            currencies_data['market_msg'] = "Piyasalar Kapalı"
-            currencies_data['last_update'] = now.strftime("%H:%M:%S")
-            set_cache(Config.CACHE_KEYS['currencies_all'], currencies_data, ttl=0)
-        
-        if golds_data:
-            golds_data['status'] = "CLOSED"
-            set_cache(Config.CACHE_KEYS['golds_all'], golds_data, ttl=0)
-        
-        if silvers_data:
-            silvers_data['status'] = "CLOSED"
-            set_cache(Config.CACHE_KEYS['silvers_all'], silvers_data, ttl=0)
-        
-        if summary_data:
-            summary_data['status'] = "CLOSED"
-            set_cache(Config.CACHE_KEYS['summary'], summary_data, ttl=0)
-        
-        return True  # İşçi eve döner
+    # 3. Veri çek
+    logger.info("🔄 [WORKER] Piyasa açık, veri çekiliyor...")
     
-    # --- 3. PİYASA AÇIKSA VERİ ÇEK ---
-    logger.info("🔄 [WORKER] Piyasa açık, veri çekiliyor ve işleniyor...")
-    
-    start_time = time.time()
-    data_raw = None
-    source = None
-    
-    # Telegram import
     telegram_monitor = None
     try:
         from utils.telegram_monitor import telegram_monitor as tm
@@ -524,177 +464,141 @@ def update_financial_data():
     except:
         pass
     
-    # 🔄 "DÜZELDİ" BİLDİRİMİ İÇİN BAYRAK KONTROLÜ
     was_system_down = get_cache("system_was_down") or False
     
-    # V5 -> V4 -> V3 -> Backup
+    # Aktif kaynağı al
+    active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+    
+    data_raw = None
+    source = None
+    
+    # Kaynak seçimine göre öncelik
+    if active_source == "tradingview":
+        # Manuel TradingView seçilmiş
+        data_raw = fetch_from_tradingview()
+        if data_raw:
+            source = "TradingView"
+        else:
+            # TradingView başarısız, V5'e geç
+            logger.warning("⚠️ TradingView başarısız, V5'e geçiliyor...")
+            data_raw = fetch_from_v5()
+            if data_raw:
+                source = "V5"
+    else:
+        # Varsayılan: V5 -> TradingView
+        data_raw = fetch_from_v5()
+        if data_raw:
+            source = "V5"
+        else:
+            logger.warning("⚠️ V5 başarısız, TradingView'e geçiliyor...")
+            data_raw = fetch_from_tradingview()
+            if data_raw:
+                source = "TradingView"
+    
+    # Backup
     if not data_raw:
-        data_raw = fetch_from_api("V5", Config.API_V5_URL, Config.API_V5_TIMEOUT)
-        if data_raw: source = "V5"
-
-    if not data_raw:
-        data_raw = fetch_from_api("V4", Config.API_V4_URL, Config.API_V4_TIMEOUT)
-        if data_raw: source = "V4"
-
-    if not data_raw:
-        data_raw = fetch_from_api("V3", Config.API_V3_URL, Config.API_V3_TIMEOUT)
-        if data_raw: source = "V3"
-
-    # BACKUP
-    if not data_raw:
-        logger.error("🔴 TÜM API'LER ÇÖKTÜ! Backup aranıyor...")
-        
-        # Sistemi "çöktü" olarak işaretle
+        logger.error("🔴 TÜM KAYNAKLAR ÇÖKTÜ! Backup aranıyor...")
         set_cache("system_was_down", True, ttl=0)
         
         backup_data = get_cache("kurabak:backup:all")
-        
         if backup_data:
-            logger.warning("✅ Backup verisi yüklendi.")
-            
+            logger.warning("✅ Backup verisi yüklendi")
             if telegram_monitor:
                 telegram_monitor.send_message(
-                    "⚠️ *TÜM API'LER ÇÖKTÜ!*\n\nSistem 15 dakikalık yedeği kullanıyor.",
+                    "⚠️ *TÜM KAYNAKLAR ÇÖKTÜ!*\n\nSistem yedeği kullanıyor.",
                     "critical"
                 )
-            
-            # Backup'ı yükle ama status'u aç
-            backup_data['currencies']['status'] = "OPEN"
-            backup_data['golds']['status'] = "OPEN"
-            backup_data['silvers']['status'] = "OPEN"
-            backup_data['summary']['status'] = "OPEN"
-            
-            set_cache(Config.CACHE_KEYS['currencies_all'], backup_data['currencies'], ttl=0)
-            set_cache(Config.CACHE_KEYS['golds_all'], backup_data['golds'], ttl=0)
-            set_cache(Config.CACHE_KEYS['silvers_all'], backup_data['silvers'], ttl=0)
-            set_cache(Config.CACHE_KEYS['summary'], backup_data['summary'], ttl=0)
-            
+            for key in ['currencies', 'golds', 'silvers', 'summary']:
+                backup_data[key]['status'] = "OPEN"
+                set_cache(Config.CACHE_KEYS[f'{key}_all'], backup_data[key], ttl=0)
             Metrics.inc('backup')
             return True
         else:
             logger.critical("❌ BACKUP DA YOK!")
-            
             if telegram_monitor:
-                telegram_monitor.send_message(
-                    "🚨 *KRİTİK: SİSTEM VERİ ALMIYOR!*",
-                    "critical"
-                )
-            
+                telegram_monitor.send_message("🚨 *KRİTİK: SİSTEM VERİ ALMIYOR!*", "critical")
             Metrics.inc('errors')
             return False
     
-    # --- 4. 🔄 "DÜZELDİ" BİLDİRİMİ (YENİ!) ---
-    # Eğer sistem daha önce çökmüştü ve şimdi veri geliyorsa...
+    # 4. "Düzeldi" bildirimi
     if was_system_down and data_raw:
-        logger.info("✅ [WORKER] Sistem tekrar online oldu!")
-        
-        # Bayrağı kaldır
+        logger.info("✅ [WORKER] Sistem tekrar online!")
         from utils.cache import delete_cache
         delete_cache("system_was_down")
-        
-        # Patrona müjdeyi ver
         if telegram_monitor:
             telegram_monitor.send_message(
                 f"✅ *SİSTEM TEKRAR ONLINE!*\n\n"
-                f"Tüm servisler normale döndü Patron.\n"
+                f"Tüm servisler normale döndü.\n"
                 f"🚀 Kaynak: {source}\n"
                 f"⏰ Zaman: {now.strftime('%H:%M:%S')}",
                 level='report'
             )
-
-    # --- 5. VERİYİ İŞLE VE DEĞİŞİM HESAPLA ---
+    
+    # 5. Parse ve hesapla
     try:
-        # API'den gelen ham veriyi parse et
         currencies, golds, silvers = process_data_mobile_optimized(data_raw)
         
         if not currencies:
-            logger.error(f"❌ {source} verisi boş.")
+            logger.error(f"❌ {source} verisi boş")
             Metrics.inc('errors')
             return False
         
-        # Dünkü referans fiyatları al
         yesterday_prices = get_cache("kurabak:yesterday_prices") or {}
         
-        # --- 6. AKILLI HESAPLAMA + TREND ANALİZİ ---
         def enrich_with_calculation(items):
-            """Değişim hesapla ve trend ekle"""
             enriched = []
             for item in items:
-                code = item['code']
-                current_price = item['selling']
-                
-                # API'nin change'ini görmezden gel, kendin hesapla
+                code, current_price = item['code'], item['selling']
                 change_percent = 0.0
-                
                 if code in yesterday_prices:
                     old_price = yesterday_prices[code]
                     if old_price > 0:
                         change_percent = ((current_price - old_price) / old_price) * 100
-                
-                # ALEV ROZETİ (TREND)
                 trend = "NORMAL"
                 if change_percent >= 2.0:
-                    trend = "HIGH_UP"   # 🔥 Yukarı Alev
+                    trend = "HIGH_UP"
                 elif change_percent <= -2.0:
-                    trend = "HIGH_DOWN" # 🧊 Aşağı Sert Düşüş
-                
-                # Veriyi güncelle
+                    trend = "HIGH_DOWN"
                 item['change_percent'] = round(change_percent, 2)
                 item['trend'] = trend
-                
-                # ZEHİRLİ VERİ KONTROLÜ (Negatif veya 0 fiyat)
                 if current_price > 0:
                     enriched.append(item)
-            
             return enriched
         
-        # Tüm verilere hesaplamayı uygula
         currencies = enrich_with_calculation(currencies)
         golds = enrich_with_calculation(golds)
         silvers = enrich_with_calculation(silvers)
         
         if not currencies:
-            logger.error("❌ Tüm veriler zehirli, temiz veri yok!")
+            logger.error("❌ Tüm veriler zehirli!")
             Metrics.inc('errors')
             return False
         
         summary = calculate_summary(currencies)
-        Metrics.inc(source.lower())
+        Metrics.inc(source.lower().replace(" ", "_"))
         
-        # Tarih
         update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        meta = data_raw.get("Meta_Data", {})
-        if "Update_Date" in data_raw:
-            update_date_str = data_raw["Update_Date"]
-        elif "Update_Date" in meta:
-            update_date_str = meta["Update_Date"]
-
-        # 📢 BANNER MESAJINI BELİRLE (DEATH STAR DESTEKLİ!)
         banner_message = determine_banner_message()
-
+        
         base_meta = {
             "source": source,
             "update_date": update_date_str,
             "timestamp": time.time(),
-            "status": "OPEN",  # Piyasa açık
+            "status": "OPEN",
             "market_msg": "Piyasalar Canlı",
             "last_update": now.strftime("%H:%M:%S"),
-            "banner": banner_message  # 🔥 BANNER EKLENDİ (Death Star korumalı)
+            "banner": banner_message
         }
-
-        # CACHE'E KAYDET (TTL=0)
+        
         set_cache(Config.CACHE_KEYS['currencies_all'], {**base_meta, "data": currencies}, ttl=0)
         set_cache(Config.CACHE_KEYS['golds_all'], {**base_meta, "data": golds}, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_all'], {**base_meta, "data": silvers}, ttl=0)
         set_cache(Config.CACHE_KEYS['summary'], {**base_meta, "data": summary}, ttl=0)
-
-        # İşçi kart basıyor (Şef görsün diye)
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
-
-        # 15 DAKİKALIK BACKUP
+        
+        # 15 dakikalık backup
         last_backup_time = get_cache("kurabak:backup:timestamp") or 0
         current_time = time.time()
-        
         if current_time - float(last_backup_time) > 900:
             logger.info("📦 15 Dakikalık Backup...")
             backup_payload = {
@@ -705,32 +609,22 @@ def update_financial_data():
             }
             set_cache("kurabak:backup:all", backup_payload, ttl=0)
             set_cache("kurabak:backup:timestamp", current_time, ttl=0)
-
-        elapsed = time.time() - start_time
         
-        # PERFORMANS LOGU
         banner_info = f"Banner: {banner_message[:30]}..." if banner_message else "Banner: Yok"
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies)} Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
-            f"({elapsed:.2f}s - {banner_info})"
+            f"({banner_info})"
         )
         return True
-
+        
     except Exception as e:
         logger.error(f"❌ Worker hatası: {e}", exc_info=True)
         Metrics.inc('errors')
         return False
 
-# ======================================
-# ESKİ FONKSİYON (UYUMLULUK İÇİN)
-# ======================================
-
 def sync_financial_data() -> bool:
-    """
-    Eski kod için uyumluluk katmanı.
-    Artık update_financial_data() kullanılıyor.
-    """
+    """Eski kod uyumluluğu"""
     return update_financial_data()
 
 def get_service_metrics():
