@@ -6,7 +6,7 @@ Flask-Cors==4.0.0
 Werkzeug==2.3.7
 
 # ======================================
-# 🔒 GÜVENLİK: RATE LIMITING (YENİ!)
+# 🔒 GÜVENLİK: RATE LIMITING
 # ======================================
 Flask-Limiter==3.5.0
 
@@ -53,3 +53,8 @@ python-telegram-bot==20.7
 # AKILLI TAKVİM (Event Manager) 🗓️
 # ======================================
 holidays==0.36
+
+# ======================================
+# 🆕 TRADINGVIEW API (YEDEK KAYNAK)
+# ======================================
+tradingview-ta==3.3.0
