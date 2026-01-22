@@ -183,7 +183,7 @@ def get_all_currencies():
             'source': result.get('source'),
             'status': status,
             'market_msg': market_msg,
-            'banner': banner_msg
+            'banner': banner_msg  # 🎯 BANNER EKLEME - MOBİL İÇİN KRİTİK
         }
         
         return create_response(
@@ -260,21 +260,49 @@ def get_summary():
     """
     Piyasa Özeti (Kazanan/Kaybeden)
     🛡️ Rate limit: 60/dakika
+    📢 Banner Desteği Eklendi!
     """
     check_user_agent()
     track_online_user()
     
     try:
+        # 1. Veriyi Garantili Çek
         result = get_data_guaranteed(Config.CACHE_KEYS['summary'])
         
+        # 2. Veri yoksa bile boş dön, hata dönme
         if not result or not result.get('data'):
-            return create_response({}, 200, "Özet henüz hazır değil")
+            # Boş veri olsa bile banner varsa gösterelim
+            market_data = {}
+        else:
+            market_data = result.get('data', {})
+
+        # 3. 🔥 KRİTİK EKLEME: Banner ve Durum Bilgisi
+        # Banner'ı çek
+        banner_msg = get_cache("system_banner")
+        
+        # Piyasa durumunu çek
+        status = result.get('status', 'OPEN') if result else 'OPEN'
+        market_msg = result.get('market_msg') if result else None
+
+        # Eğer bakım varsa veya piyasa kapalıysa banner'ı güncelle
+        if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
+            banner_msg = market_msg or "🚧 Sistem bakımda."
+        elif status == 'CLOSED' and not banner_msg:
+            banner_msg = market_msg or "🌙 Piyasalar kapalı."
+
+        # 4. Meta verisine banner'ı paketle
+        meta_data = {
+            'status': status,
+            'banner': banner_msg  # 🎯 İşte mobilin beklediği veri!
+        }
 
         return create_response(
-            result.get('data', {}),
+            market_data,
             200,
-            "Piyasa özeti getirildi"
+            "Piyasa özeti getirildi",
+            meta_data  # Meta verisini buraya ekledik
         )
+        
     except Exception as e:
         logger.error(f"Summary Error: {e}")
         return create_response({}, 500, "Sunucu hatası")
