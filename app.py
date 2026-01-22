@@ -1,12 +1,11 @@
 """
-KuraBak Backend - ENTRY POINT (ASYNCHRONOUS & FAST) 🚀
+KuraBak Backend - ENTRY POINT V4.0 🚀
 =====================================================
-✅ RENDER/HEROKU READY: Port timeout sorununu çözen asenkron yapı.
-✅ NO 503: Başlangıçta bile cache boşsa 'Stale' veya boş liste döner, hata vermez.
-✅ SILENT START: Arka plan işlemleri sessizce başlar.
-✅ BLUEPRINT ARCHITECTURE: Modüler yapı.
-✅ WORKER + SNAPSHOT + ŞEF SİSTEMİ: Akıllı backend mimarisi
-✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder (10dk beklemez!)
+✅ TRADINGVIEW YEDEK SİSTEMİ: V5 düşerse otomatik geçiş
+✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
+✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
+✅ SILENT START: Arka plan işlemleri sessizce başlar
+✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
 """
 import os
 import logging
@@ -59,14 +58,14 @@ def background_initialization():
     Böylece Flask anında ayağa kalkar ve Render portu kapatmaz.
     
     BAŞLATMA SIRASI:
-    1. Telegram Monitor (Sessiz Mod)
-    2. Scheduler (Worker + Snapshot + Şef)
-    3. 🔥 İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
+    1. Telegram Monitor (Sessiz Mod + Komut Sistemi)
+    2. Scheduler (Worker + Snapshot + Şef + Takvim)
+    3. İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
     logger.info("⏳ [Arka Plan] Sistem servisleri başlatılıyor...")
     time.sleep(1)  # Kısa bir nefes alma payı
     
-    # 1. Telegram Monitor'ü Başlat (Sessiz Mod)
+    # 1. Telegram Monitor'ü Başlat (Komut Sistemi Aktif)
     telegram = init_telegram_monitor()
     
     # 2. Scheduler'ı (Zamanlayıcı) Başlat
@@ -74,9 +73,10 @@ def background_initialization():
     # - İlk veri çekme (Worker)
     # - Gece 00:00'da Snapshot (Fotoğrafçı)
     # - Her 10dk'da Şef kontrolü (Controller)
+    # - Her gün 08:00'da Takvim kontrolü
     start_scheduler()
     
-    # 3. 🔥 İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
+    # 3. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
     logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
     logger.info("   📸 Snapshot yoksa hemen alınacak")
     logger.info("   👷 İşçi uyuyorsa uyandırılacak")
@@ -92,8 +92,9 @@ def background_initialization():
     logger.info("   👷 İşçi (Worker): 2 dakikada bir çalışıyor")
     logger.info("   📸 Fotoğrafçı (Snapshot): Gece 00:00'da çalışacak")
     logger.info("   👮 Şef (Controller): 10 dakikada bir denetliyor")
+    logger.info("   🗓️ Takvim: Her gün 08:00'da kontrol ediliyor")
     
-    # Telegram'a başlangıç mesajı gönder (İsteğe bağlı)
+    # Telegram'a başlangıç mesajı gönder
     if telegram:
         try:
             telegram.send_startup_message()
@@ -101,7 +102,6 @@ def background_initialization():
             pass
 
 # Uygulama başlatıldığında arka plan thread'ini ateşle
-# Gunicorn birden fazla worker çalıştırırsa her biri için çalışır (güvenlidir)
 if os.environ.get("WERKZEUG_RUN_MAIN") != "true":  # Sadece ana proseste
     init_thread = threading.Thread(target=background_initialization, daemon=True)
     init_thread.start()
@@ -115,12 +115,14 @@ def index():
     """Health Check & Info"""
     return jsonify({
         "app": Config.APP_NAME,
-        "version": "2.0.1",  # 🔥 Yeni Versiyon (İlk Şef Kontrolü eklendi)
+        "version": Config.APP_VERSION,
         "status": "active",
         "environment": Config.ENVIRONMENT,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "features": [
-            "Triple Fallback API (V5/V4/V3)",
+            "V5 + TradingView Dual Source (V3/V4 Kaldırıldı)",
+            "Telegram Manual Source Switch",
+            "Calendar Event Notifications",
             "Universal Data Parser",
             "15-Min Backup System",
             "No-503 Cache Architecture",
@@ -129,12 +131,18 @@ def index():
             "Weekend Lock (Market Closed Detection)",
             "Trend Analysis (Volatility Alert 🔥)",
             "Self-Healing Mechanism",
-            "Instant Supervisor Check on Startup"  # 🔥 YENİ
+            "Instant Supervisor Check on Startup"
         ],
         "components": {
             "worker": "Her 2 dakikada veri çeker ve değişim hesaplar",
             "snapshot": "Gece 00:00'da referans fiyatları kaydeder",
-            "controller": "Her 10 dakikada sistemi denetler ve onarır (İlk kontrol: Başlangıçta)"
+            "controller": "Her 10 dakikada sistemi denetler ve onarır",
+            "calendar": "Her gün 08:00'da etkinlikleri kontrol eder"
+        },
+        "sources": {
+            "primary": "V5 API",
+            "fallback": "TradingView",
+            "manual_switch": "Telegram /source komutları"
         }
     }), 200
 
@@ -147,7 +155,7 @@ def health():
 def system_status():
     """
     Detaylı Sistem Durumu
-    Şef, Worker ve Snapshot durumlarını gösterir
+    Şef, Worker, Snapshot ve Kaynak durumlarını gösterir
     """
     try:
         from services.maintenance_service import get_scheduler_status
@@ -173,6 +181,9 @@ def system_status():
         snapshot_exists = bool(get_cache("kurabak:yesterday_prices"))
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
         
+        # Aktif kaynak
+        active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+        
         return jsonify({
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -191,6 +202,10 @@ def system_status():
                 "controller": {
                     "status": "🟢 Aktif" if scheduler_status.get("running") else "🔴 Durdu"
                 }
+            },
+            "data_source": {
+                "active": active_source,
+                "available": ["v5", "tradingview"]
             },
             "circuit_breaker": scheduler_status.get("circuit_breaker", {}),
             "metrics": metrics
@@ -224,6 +239,6 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"🌍 Local Sunucu Başlatılıyor: http://localhost:{port}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    logger.info("🚀 KuraBak Backend v2.0.1")
+    logger.info(f"🚀 KuraBak Backend v{Config.APP_VERSION}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
