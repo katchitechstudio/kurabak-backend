@@ -1,9 +1,11 @@
 """
-Maintenance Service - PRODUCTION READY V3.0 🚧
+Maintenance Service - PRODUCTION READY V4.0 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
-✅ SADECE V5 API: V4/V3 tamamen kaldırıldı
+✅ TRADINGVIEW: Yedek kaynak desteği (V3/V4 kaldırıldı)
 ✅ BANNER SİSTEMİ: Uygulama tarafına özel mesaj gönderme
+✅ SCHEDULER: Worker + Snapshot + Şef + Takvim
+✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ THREAD-SAFE: Güvenli veri erişimi
 ✅ SMART RECOVERY: Sistem çökerse otomatik kurtarma
 """
@@ -11,11 +13,20 @@ Maintenance Service - PRODUCTION READY V3.0 🚧
 import logging
 import time
 from typing import Optional, Dict, Any
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from utils.cache import get_cache, set_cache, delete_cache
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# ======================================
+# SCHEDULER (GLOBAL)
+# ======================================
+
+scheduler = None
 
 # ======================================
 # BAKIM MODU YÖNETİMİ
@@ -158,18 +169,19 @@ def get_current_banner() -> Optional[str]:
 
 
 # ======================================
-# VERİ GÜVENLİĞİ (SADECE V5)
+# VERİ GÜVENLİĞİ (V5 + TRADINGVIEW)
 # ======================================
 
 def fetch_all_data_safe() -> bool:
     """
-    Acil durumda tüm verileri yeniden çeker (Sadece V5).
+    Acil durumda tüm verileri yeniden çeker (Aktif kaynaktan).
     
     Returns:
         bool: Başarılı mı?
     """
     try:
-        logger.info("🔄 Acil veri çekimi başlatılıyor (V5 API)...")
+        active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+        logger.info(f"🔄 Acil veri çekimi başlatılıyor ({active_source.upper()})...")
         
         # financial_service'den veri çek
         from services.financial_service import update_financial_data
@@ -188,21 +200,246 @@ def fetch_all_data_safe() -> bool:
         return False
 
 
+def force_worker_update():
+    """
+    Worker'ı manuel olarak tetikle (Telegram komutları için).
+    """
+    try:
+        logger.info("⚡ Worker manuel olarak tetiklendi...")
+        fetch_all_data_safe()
+    except Exception as e:
+        logger.error(f"❌ Manuel worker tetikleme hatası: {e}")
+
+
 # ======================================
-# SCHEDULER STATUS (ŞEF İÇİN)
+# SCHEDULER FONKSİYONLARI
 # ======================================
+
+def worker_job():
+    """
+    👷 İŞÇİ (WORKER)
+    Her 2 dakikada bir veri çeker ve cache'e yazar.
+    """
+    try:
+        logger.info("👷 [WORKER] Veri güncelleme başlıyor...")
+        
+        from services.financial_service import update_financial_data
+        success = update_financial_data()
+        
+        if success:
+            # Son çalışma zamanını kaydet
+            set_cache(Config.CACHE_KEYS['last_worker_run'], str(time.time()), ttl=0)
+            logger.info("✅ [WORKER] Veri başarıyla güncellendi")
+        else:
+            logger.warning("⚠️ [WORKER] Veri güncellenemedi")
+            
+    except Exception as e:
+        logger.error(f"❌ [WORKER] Hata: {e}")
+
+
+def snapshot_job():
+    """
+    📸 FOTOĞRAFÇI (SNAPSHOT)
+    Her gece 00:00:05'te referans fiyatlarını alır.
+    """
+    try:
+        logger.info("📸 [SNAPSHOT] Gece fotoğrafı çekiliyor...")
+        
+        from services.financial_service import take_snapshot
+        success = take_snapshot()
+        
+        if success:
+            logger.info("✅ [SNAPSHOT] Başarıyla kaydedildi")
+        else:
+            logger.warning("⚠️ [SNAPSHOT] Kayıt başarısız")
+            
+    except Exception as e:
+        logger.error(f"❌ [SNAPSHOT] Hata: {e}")
+
+
+def supervisor_check():
+    """
+    👮 ŞEF (CONTROLLER)
+    Her 10 dakikada bir sistemi kontrol eder ve onarır.
+    """
+    try:
+        logger.info("👮 [ŞEF] Sistem kontrolü başlıyor...")
+        
+        # 1. Snapshot kontrolü
+        snapshot_exists = bool(get_cache(Config.CACHE_KEYS['yesterday_prices']))
+        if not snapshot_exists:
+            logger.warning("⚠️ [ŞEF] Snapshot kayıp! Acil snapshot alınıyor...")
+            from services.financial_service import take_snapshot
+            take_snapshot()
+        
+        # 2. Worker kontrolü
+        last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
+        if last_worker_run:
+            time_diff = time.time() - float(last_worker_run)
+            if time_diff > Config.SUPERVISOR_WORKER_TIMEOUT:
+                logger.warning(f"⚠️ [ŞEF] Worker {int(time_diff/60)} dakikadır uyuyor! Uyandırılıyor...")
+                worker_job()
+        
+        logger.info("✅ [ŞEF] Kontrol tamamlandı")
+        
+    except Exception as e:
+        logger.error(f"❌ [ŞEF] Hata: {e}")
+
+
+def calendar_check():
+    """
+    🗓️ TAKVİM KONTROLÜ
+    Her gün sabah 08:00'da bugünün etkinliklerini kontrol eder.
+    """
+    try:
+        logger.info("🗓️ [TAKVİM] Bugünün etkinlikleri kontrol ediliyor...")
+        
+        from utils.event_manager import check_and_notify_events
+        check_and_notify_events()
+        
+        logger.info("✅ [TAKVİM] Kontrol tamamlandı")
+        
+    except Exception as e:
+        logger.error(f"❌ [TAKVİM] Hata: {e}")
+
+
+def daily_report():
+    """
+    📊 GÜNLÜK RAPOR
+    Her gün 09:00'da Telegram'a rapor gönderir.
+    """
+    try:
+        logger.info("📊 [RAPOR] Günlük rapor hazırlanıyor...")
+        
+        from utils.telegram_monitor import get_telegram_monitor
+        from services.financial_service import get_service_metrics
+        
+        telegram = get_telegram_monitor()
+        if telegram:
+            metrics = get_service_metrics()
+            telegram.send_daily_report(metrics)
+        
+        logger.info("✅ [RAPOR] Rapor gönderildi")
+        
+    except Exception as e:
+        logger.error(f"❌ [RAPOR] Hata: {e}")
+
+
+# ======================================
+# SCHEDULER YÖNETİMİ
+# ======================================
+
+def start_scheduler():
+    """
+    Zamanlayıcıyı başlat ve tüm job'ları ekle.
+    """
+    global scheduler
+    
+    if scheduler and scheduler.running:
+        logger.warning("⚠️ Scheduler zaten çalışıyor!")
+        return
+    
+    scheduler = BackgroundScheduler(timezone=Config.DEFAULT_TIMEZONE)
+    
+    # 👷 WORKER: Her 2 dakikada bir (120 saniye)
+    scheduler.add_job(
+        worker_job,
+        trigger=IntervalTrigger(seconds=Config.UPDATE_INTERVAL),
+        id='worker',
+        name='Worker (Veri Güncelleyici)',
+        replace_existing=True
+    )
+    
+    # 📸 SNAPSHOT: Her gece 00:00:05
+    scheduler.add_job(
+        snapshot_job,
+        trigger=CronTrigger(
+            hour=Config.SNAPSHOT_HOUR,
+            minute=Config.SNAPSHOT_MINUTE,
+            second=Config.SNAPSHOT_SECOND
+        ),
+        id='snapshot',
+        name='Snapshot (Referans Fiyatları)',
+        replace_existing=True
+    )
+    
+    # 👮 ŞEF: Her 10 dakikada bir
+    scheduler.add_job(
+        supervisor_check,
+        trigger=IntervalTrigger(minutes=Config.SUPERVISOR_INTERVAL),
+        id='supervisor',
+        name='Şef (Sistem Kontrolü)',
+        replace_existing=True
+    )
+    
+    # 🗓️ TAKVİM: Her gün 08:00
+    scheduler.add_job(
+        calendar_check,
+        trigger=CronTrigger(
+            hour=Config.CALENDAR_CHECK_HOUR,
+            minute=Config.CALENDAR_CHECK_MINUTE
+        ),
+        id='calendar',
+        name='Takvim (Etkinlik Kontrolü)',
+        replace_existing=True
+    )
+    
+    # 📊 GÜNLÜK RAPOR: Her gün 09:00
+    scheduler.add_job(
+        daily_report,
+        trigger=CronTrigger(hour=Config.TELEGRAM_DAILY_REPORT_HOUR),
+        id='daily_report',
+        name='Günlük Rapor',
+        replace_existing=True
+    )
+    
+    # Başlat
+    scheduler.start()
+    logger.info("✅ Scheduler başlatıldı!")
+    logger.info("   👷 Worker: Her 2 dakikada")
+    logger.info("   📸 Snapshot: Her gece 00:00:05")
+    logger.info("   👮 Şef: Her 10 dakikada")
+    logger.info("   🗓️ Takvim: Her gün 08:00")
+    logger.info("   📊 Rapor: Her gün 09:00")
+
+
+def stop_scheduler():
+    """
+    Zamanlayıcıyı durdur.
+    """
+    global scheduler
+    
+    if scheduler and scheduler.running:
+        scheduler.shutdown()
+        logger.info("🛑 Scheduler durduruldu")
+    else:
+        logger.warning("⚠️ Scheduler zaten durmuş")
+
 
 def get_scheduler_status() -> Dict[str, Any]:
     """
-    Zamanlayıcı durumunu döner (Şef için).
+    Zamanlayıcı durumunu döner.
     
     Returns:
         Dict: Scheduler bilgileri
     """
     try:
+        if not scheduler:
+            return {'running': False, 'jobs': []}
+        
+        jobs = []
+        for job in scheduler.get_jobs():
+            jobs.append({
+                'id': job.id,
+                'name': job.name,
+                'next_run': str(job.next_run_time) if job.next_run_time else None
+            })
+        
         last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
         
         status = {
+            'running': scheduler.running,
+            'jobs': jobs,
             'last_worker_run': last_worker_run,
             'worker_interval': Config.UPDATE_INTERVAL,
             'alarm_interval': Config.ALARM_CHECK_INTERVAL,
@@ -213,4 +450,4 @@ def get_scheduler_status() -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"❌ Scheduler status hatası: {e}")
-        return {}
+        return {'running': False, 'jobs': []}
