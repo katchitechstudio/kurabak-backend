@@ -6,6 +6,7 @@ Configuration - PRODUCTION READY V4.0 (TRADINGVIEW YEDEK SİSTEMİ) 🧠
 ✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ BAKIM & SELF-HEALING ALARM SİSTEMİ
+✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
 """
 import os
 
@@ -67,6 +68,20 @@ class Config:
     
     # Kaynak seçimi (manuel geçiş için)
     ACTIVE_SOURCE = "v5"  # Varsayılan: "v5" | Manuel: "tradingview"
+    
+    # ======================================
+    # 🔥 FIREBASE PUSH NOTIFICATIONS
+    # ======================================
+    # Firebase Admin SDK Credentials dosya yolu (Render Secret Files)
+    FIREBASE_CREDENTIALS_PATH = os.environ.get(
+        "FIREBASE_CREDENTIALS_PATH", 
+        "/etc/secrets/firebase_credentials.json"
+    )
+    
+    # Firebase bildirim ayarları
+    FIREBASE_NOTIFICATION_ENABLED = True  # Bildirimleri aç/kapat
+    FIREBASE_PRIORITY = "high"  # high | normal
+    FIREBASE_SOUND = "default"  # Bildirim sesi
     
     # ======================================
     # ZAMANLAYICI & PERFORMANS
@@ -170,7 +185,11 @@ class Config:
         
         # 🆕 Takvim Bildirimleri
         'calendar_last_check': 'calendar:last_check',  # Son takvim kontrolü
-        'calendar_notified_events': 'calendar:notified_events'  # Bildirim gönderilen etkinlikler
+        'calendar_notified_events': 'calendar:notified_events',  # Bildirim gönderilen etkinlikler
+        
+        # 🔥 Firebase Push Notifications
+        'fcm_tokens': 'firebase:fcm_tokens',  # Cihaz tokenları (Set)
+        'fcm_last_notification': 'firebase:last_notification'  # Son bildirim zamanı
     }
     
     # ======================================
