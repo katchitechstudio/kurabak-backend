@@ -1,12 +1,11 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V3.0 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.0 🤖
 =======================================================
-✅ KOMUTLAR: /durum, /online, /temizle, /analiz, /duyuru, /sus, /konus
-✅ YENİ: /bakim, /bakim kapat
+✅ YENİ KOMUTLAR: /kaynak, /kaynak v5, /kaynak tradingview, /kaynak durum
+✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ SELF-HEALING: Otomatik CPU/RAM izleme ve müdahale
-✅ SADECE V5: V4/V3 referansları kaldırıldı
+✅ TRADINGVIEW: Yedek kaynak desteği
 ✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller
-✅ THREAD-SAFE: Arka planda sessizce çalışır
 ✅ 🔒 ADMİN GÜVENLİĞİ: Sadece yetkili Telegram ID komut gönderebilir
 """
 
@@ -35,9 +34,10 @@ class TelegramMonitor:
     Gelişmiş Telegram Bot:
     1. RAPOR MODU: Sessiz bildirimler, günlük raporlar
     2. KOMUT MODU: Komutları dinler ve cevaplar
-    3. BAKIM MODU: Sistem bakım yönetimi
-    4. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
-    5. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
+    3. KAYNAK YÖNETİMİ: Manuel V5/TradingView geçişi
+    4. TAKVİM SİSTEMİ: Etkinlik bildirimleri
+    5. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
+    6. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -114,14 +114,12 @@ class TelegramMonitor:
         return False
 
     def send_daily_report(self, metrics: Dict[str, Any]):
-        """
-        🌙 GÜN SONU MODERN RAPORU
-        """
+        """🌙 GÜN SONU MODERN RAPORU"""
         now = datetime.now()
         date_str = now.strftime("%d.%m.%Y")
         
-        # Başarı oranı hesapla (sadece V5)
-        total = metrics.get('v5', 0) + metrics.get('backup', 0)
+        # Başarı oranı hesapla
+        total = metrics.get('v5', 0) + metrics.get('tradingview', 0) + metrics.get('backup', 0)
         success_rate = 100
         if total > 0:
             success_rate = ((total - metrics.get('errors', 0)) / total) * 100
@@ -140,15 +138,40 @@ class TelegramMonitor:
             
             f"🔌 *KAYNAK KULLANIMI*\n"
             f"• 🚀 V5 API: `{metrics.get('v5', 0)}`\n"
+            f"• 📊 TradingView: `{metrics.get('tradingview', 0)}`\n"
             f"• 📦 Backup: `{metrics.get('backup', 0)}`\n\n"
             
             f"🛡️ *GÜVENLİK & HATALAR*\n"
             f"• Hatalar: `{metrics.get('errors', 0)}`\n\n"
             
-            f"_KuraBak Backend v3.0 • {now.strftime('%H:%M')}_"
+            f"_KuraBak Backend v4.0 • {now.strftime('%H:%M')}_"
         )
         
         self.send_message(report, level='report')
+
+    def send_calendar_notification(self, event_name: str, event_date: str):
+        """📅 TAKVİM ETKİNLİK BİLDİRİMİ"""
+        msg = (
+            f"📅 *TAKVİM UYARISI*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📌 *Etkinlik:* {event_name}\n"
+            f"🗓️ *Tarih:* {event_date}\n\n"
+            f"ℹ️ Banner otomatik olarak aktif edilecek (09:00)."
+        )
+        self.send_message(msg, level='report')
+
+    def send_startup_message(self):
+        """Başlangıç mesajı"""
+        from config import Config
+        msg = (
+            f"🚀 *SİSTEM BAŞLATILDI*\n\n"
+            f"📦 *Versiyon:* {Config.APP_VERSION}\n"
+            f"🔌 *Kaynak:* V5 + TradingView\n"
+            f"🤖 *Self-Healing:* Aktif\n"
+            f"🗓️ *Takvim:* Aktif\n\n"
+            f"✅ Tüm sistemler hazır!"
+        )
+        self.send_message(msg, level='report')
 
     # ==========================================
     # BÖLÜM 2: KOMUT SİSTEMİ
@@ -233,6 +256,8 @@ class TelegramMonitor:
                         self._handle_konus()
                     elif text.startswith('/bakim'):
                         self._handle_bakim(text)
+                    elif text.startswith('/kaynak'):
+                        self._handle_kaynak(text)
                     elif text.startswith('/'):
                         self._send_help()
                 
@@ -244,6 +269,11 @@ class TelegramMonitor:
         """Yardım Mesajı"""
         self._send_raw(
             "❓ *KOMUT LİSTESİ* 🔒\n\n"
+            "🔌 *KAYNAK YÖNETİMİ:*\n"
+            "`/kaynak durum` - Aktif kaynak\n"
+            "`/kaynak v5` - V5'e geç\n"
+            "`/kaynak tradingview` - TradingView'e geç\n"
+            "`/kaynak ornek` - Veri örnekleri göster\n\n"
             "📢 *YÖNETİM:*\n"
             "`/duyuru [mesaj]` - Duyuru as\n"
             "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
@@ -260,6 +290,117 @@ class TelegramMonitor:
             "`/analiz` - Sistem analizi\n\n"
             "🔒 _Bu komutlar sadece yetkili admin tarafından kullanılabilir._"
         )
+
+    def _handle_kaynak(self, text):
+        """🔌 KAYNAK YÖNETİMİ"""
+        try:
+            from utils.cache import get_cache, set_cache
+            from config import Config
+            
+            raw_content = text.replace('/kaynak', '').strip().lower()
+            
+            # Durum kontrolü
+            if raw_content == 'durum' or raw_content == '':
+                active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+                switch_count = get_cache(Config.CACHE_KEYS['source_switch_count']) or "0"
+                
+                self._send_raw(
+                    f"🔌 *KAYNAK DURUMU*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"✅ *Aktif:* {active_source.upper()}\n"
+                    f"📊 *Geçiş Sayısı:* {switch_count}\n\n"
+                    f"🔄 *Mevcut Kaynaklar:*\n"
+                    f"• V5 (Ana kaynak)\n"
+                    f"• TradingView (Yedek)\n\n"
+                    f"💡 Geçiş için: `/kaynak v5` veya `/kaynak tradingview`"
+                )
+                return
+            
+            # Örnek veri göster
+            if raw_content == 'ornek':
+                self._show_source_examples()
+                return
+            
+            # Kaynak değiştirme
+            if raw_content in ['v5', 'tradingview']:
+                active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+                
+                if active_source == raw_content:
+                    self._send_raw(f"ℹ️ Zaten *{raw_content.upper()}* kaynağı aktif!")
+                    return
+                
+                # Geçişi yap
+                set_cache(Config.CACHE_KEYS['active_source'], raw_content, ttl=0)
+                
+                # Geçiş sayısını artır
+                switch_count = int(get_cache(Config.CACHE_KEYS['source_switch_count']) or "0")
+                set_cache(Config.CACHE_KEYS['source_switch_count'], str(switch_count + 1), ttl=0)
+                
+                self._send_raw(
+                    f"✅ *KAYNAK DEĞİŞTİRİLDİ!*\n\n"
+                    f"🔄 *Önceki:* {active_source.upper()}\n"
+                    f"✅ *Yeni:* {raw_content.upper()}\n\n"
+                    f"Worker bir sonraki güncellemede yeni kaynaktan veri çekecek (max 2dk)."
+                )
+                
+                # Worker'ı hemen tetikle (opsiyonel)
+                try:
+                    from services.maintenance_service import force_worker_update
+                    force_worker_update()
+                    self._send_raw("⚡ Worker manuel olarak tetiklendi!")
+                except:
+                    pass
+                
+                return
+            
+            # Geçersiz komut
+            self._send_raw(
+                "❌ Geçersiz kaynak!\n\n"
+                "Kullanım:\n"
+                "`/kaynak durum` - Mevcut durum\n"
+                "`/kaynak v5` - V5'e geç\n"
+                "`/kaynak tradingview` - TradingView'e geç\n"
+                "`/kaynak ornek` - Veri örnekleri"
+            )
+            
+        except Exception as e:
+            self._send_raw(f"❌ Kaynak yönetimi hatası: {str(e)}")
+
+    def _show_source_examples(self):
+        """📊 KAYNAK ÖRNEKLERİ"""
+        try:
+            from services.financial_service import fetch_from_v5, fetch_from_tradingview
+            
+            self._send_raw("⏳ Veri örnekleri çekiliyor...")
+            
+            # V5 örneği
+            v5_data = fetch_from_v5()
+            v5_example = "❌ Veri çekilemedi"
+            if v5_data and 'currencies' in v5_data and v5_data['currencies']:
+                usd = next((c for c in v5_data['currencies'] if c.get('code') == 'USD'), None)
+                if usd:
+                    v5_example = f"USD: {usd.get('buy', 'N/A')} / {usd.get('sell', 'N/A')}"
+            
+            # TradingView örneği
+            tv_data = fetch_from_tradingview()
+            tv_example = "❌ Veri çekilemedi"
+            if tv_data and 'currencies' in tv_data and tv_data['currencies']:
+                usd = next((c for c in tv_data['currencies'] if c.get('code') == 'USD'), None)
+                if usd:
+                    tv_example = f"USD: {usd.get('buy', 'N/A')} / {usd.get('sell', 'N/A')}"
+            
+            self._send_raw(
+                f"📊 *KAYNAK ÖRNEKLERİ*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"🚀 *V5 API:*\n"
+                f"```\n{v5_example}\n```\n\n"
+                f"📊 *TradingView:*\n"
+                f"```\n{tv_example}\n```\n\n"
+                f"💡 Her iki kaynak da çalışıyorsa sistem sağlıklı!"
+            )
+            
+        except Exception as e:
+            self._send_raw(f"❌ Örnek veri hatası: {str(e)}")
 
     def _handle_durum(self):
         """Sistem Durumu Raporu"""
@@ -302,6 +443,9 @@ class TelegramMonitor:
             # Self-Healing durumu
             healing_status = "🟢 Aktif" if self.is_healing_active else "🔴 Kapalı"
             
+            # Aktif kaynak
+            active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+            
             report = (
                 f"👮‍♂️ *SİSTEM DURUMU RAPORU*\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -316,12 +460,14 @@ class TelegramMonitor:
                 f"• {snapshot_icon} Snapshot: `{'Mevcut' if snapshot_exists else 'Kayıp'}`\n"
                 f"• 🤖 Self-Healing: {healing_status}\n\n"
                 
+                f"🔌 *VERİ KAYNAĞI*\n"
+                f"• Aktif: `{active_source.upper()}`\n\n"
+                
                 f"🚧 *ÖZEL MODLAR*\n"
                 f"• Bakım: {maintenance_status}\n\n"
                 
                 f"🔒 *GÜVENLİK*\n"
-                f"• Admin Filter: `Aktif`\n"
-                f"• API: `V5 Only`\n\n"
+                f"• Admin Filter: `Aktif`\n\n"
                 
                 f"_Rapor Zamanı: {datetime.now().strftime('%H:%M:%S')}_"
             )
@@ -380,11 +526,12 @@ class TelegramMonitor:
         try:
             self._send_raw(
                 "📊 *SİSTEM ANALİZİ*\n\n"
-                "🚀 *API:* V5 Only (Optimized)\n"
+                "🚀 *API:* V5 + TradingView\n"
                 "🤖 *Self-Healing:* Aktif\n"
                 "⏱️ *Kontrol Sıklığı:* 1 dakika\n"
                 "🎯 *CPU Eşik:* %80\n"
-                "💾 *RAM Eşik:* %85\n\n"
+                "💾 *RAM Eşik:* %85\n"
+                "🗓️ *Takvim:* Her gün 08:00\n\n"
                 "_Sistem otomatik olarak yüksek yük durumlarını tespit edip düzeltiyor._"
             )
             
@@ -483,7 +630,7 @@ class TelegramMonitor:
             self._send_raw(f"❌ Açma hatası: {str(e)}")
 
     def _handle_bakim(self, text):
-        """🚧 BAKIM MODU (Basit Versiyon)"""
+        """🚧 BAKIM MODU"""
         try:
             from services.maintenance_service import activate_maintenance, deactivate_maintenance
             
@@ -550,7 +697,6 @@ class TelegramMonitor:
                     
                     # 5 dakika boyunca yüksekse müdahale et
                     if (now - cpu_high_since) > Config.CPU_HIGH_DURATION:
-                        # Müdahale: Gereksiz processleri temizle (örnek)
                         logger.warning(f"🔥 CPU yüksek ({cpu}%), müdahale ediliyor...")
                         
                         # Bildirim gönder (30 dakikada bir)
@@ -563,10 +709,6 @@ class TelegramMonitor:
                                 f"Sistem müdahale edecek..."
                             )
                             last_cpu_notification = now
-                        
-                        # Burada cache temizliği veya restart gibi işlemler yapılabilir
-                        # Örnek: from utils.cache import flush_all_cache
-                        # flush_all_cache()
                         
                         cpu_high_since = None  # Reset
                 else:
@@ -640,7 +782,7 @@ def init_telegram_monitor():
         # Self-Healing Sistemini Başlat
         telegram_monitor.start_self_healing()
         
-        logger.info("✅ Telegram Monitor (Komut + Self-Healing + V5 Only) başlatıldı.")
+        logger.info("✅ Telegram Monitor (Komut + Self-Healing + TradingView) başlatıldı.")
         return telegram_monitor
     else:
         logger.warning("⚠️ Telegram Monitor başlatılamadı: Token veya Chat ID eksik!")
