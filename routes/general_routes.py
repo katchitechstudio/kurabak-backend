@@ -25,7 +25,7 @@ from config import Config
 from utils.cache import get_cache, set_cache
 # Maintenance servisten güvenli veri çekme fonksiyonu
 from services.maintenance_service import fetch_all_data_safe
-# 🔥 FCM servisleri
+# 🔥 Notification servisleri (utils klasöründe)
 from utils.notification_service import (
     register_fcm_token,
     unregister_fcm_token,
