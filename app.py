@@ -1,6 +1,8 @@
 """
-KuraBak Backend - ENTRY POINT V4.0 🚀
+KuraBak Backend - ENTRY POINT V4.1 🚀
 =====================================================
+✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
+✅ CİHAZ KAYIT SİSTEMİ: FCM Token yönetimi
 ✅ TRADINGVIEW YEDEK SİSTEMİ: V5 düşerse otomatik geçiş
 ✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
@@ -23,9 +25,10 @@ from routes.general_routes import api_bp
 
 # Servisler
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
+from services.notification_service import register_fcm_token, send_test_notification
 
 # Utilities
-from utils.telegram_monitor import init_telegram_monitor
+from utils.telegram_monitor import init_telegram_monitor, TelegramMonitor
 
 # ======================================
 # 🔥 FIREBASE INITIALIZATION
@@ -43,6 +46,10 @@ def init_firebase():
         
         # Credentials dosyasının varlığını kontrol et
         cred_path = Config.FIREBASE_CREDENTIALS_PATH
+        
+        # Render ortamı için özel kontrol
+        if os.environ.get("RENDER"):
+            cred_path = "/etc/secrets/firebase_credentials.json"
         
         if not os.path.exists(cred_path):
             logger.warning(f"⚠️ [Firebase] Credentials dosyası bulunamadı: {cred_path}")
@@ -171,6 +178,8 @@ def index():
             "Telegram Manual Source Switch",
             "Calendar Event Notifications",
             "Firebase Push Notifications (Android)",
+            "User Feedback System (Telegram Integration)",
+            "FCM Device Registration",
             "Universal Data Parser",
             "15-Min Backup System",
             "No-503 Cache Architecture",
@@ -272,6 +281,76 @@ def system_status():
             "success": False,
             "error": str(e)
         }), 500
+
+# ======================================
+# 🔥 GERİ BİLDİRİM & CİHAZ KAYIT SİSTEMİ
+# ======================================
+
+@app.route('/api/feedback/send', methods=['POST'])
+def send_feedback():
+    """
+    Kullanıcı geri bildirimlerini Telegram'a iletir
+    Günde 1 mesaj sınırı Android tarafında kontrol edilir
+    Maksimum 250 karakter sınırı
+    """
+    try:
+        data = request.json
+        message = data.get('message', '').strip()
+        
+        # Validasyon
+        if not message:
+            return jsonify({"success": False, "error": "Mesaj boş olamaz"}), 400
+        
+        if len(message) > 250:
+            return jsonify({"success": False, "error": "Mesaj çok uzun (max 250 karakter)"}), 400
+
+        # Telegram'a Gönder (Anonim)
+        monitor = TelegramMonitor()
+        telegram_msg = f"📩 **YENİ GERİ BİLDİRİM**\n\n{message}"
+        monitor._send_raw(telegram_msg)
+        
+        logger.info(f"✅ [Feedback] Anonim mesaj iletildi ({len(message)} karakter)")
+        return jsonify({"success": True, "message": "Mesajınız iletildi"}), 200
+
+    except Exception as e:
+        logger.error(f"❌ [Feedback] Hata: {e}")
+        return jsonify({"success": False, "error": "Sunucu hatası"}), 500
+
+@app.route('/api/device/register', methods=['POST'])
+def register_device():
+    """
+    FCM Token kaydı (Push Notification için)
+    """
+    try:
+        data = request.json
+        token = data.get('token')
+        
+        if not token:
+            return jsonify({"success": False, "error": "Token eksik"}), 400
+            
+        success = register_fcm_token(token)
+        
+        if success:
+            logger.info(f"✅ [FCM] Cihaz kaydedildi")
+            return jsonify({"success": True, "message": "Cihaz kaydedildi"}), 200
+        else:
+            return jsonify({"success": False, "error": "Kayıt başarısız"}), 500
+
+    except Exception as e:
+        logger.error(f"❌ [FCM] Token kayıt hatası: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/device/test-push', methods=['GET'])
+def trigger_test_push():
+    """
+    Manuel Push Notification testi
+    """
+    try:
+        result = send_test_notification()
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"❌ [Push Test] Hata: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ======================================
 # TEMİZLİK (SHUTDOWN)
