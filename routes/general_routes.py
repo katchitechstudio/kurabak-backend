@@ -298,36 +298,42 @@ def get_summary():
     Piyasa Özeti (Kazanan/Kaybeden)
     🛡️ Rate limit: 60/dakika
     📢 Banner Desteği Eklendi!
-    🔥 SUMMARY SYNC FIX: Her zaman currencies_all'dan hesaplanır!
+    🔥 SUMMARY SYNC FIX: Artık currencies cache'inin içinden alınır!
     
     ÖNCEKİ SORUN:
     - Summary ayrı cache'den geliyordu
     - Currencies başka cache'den geliyordu
     - Senkronizasyon sorunu vardı (Sterlin üstte kırmızı, altta yeşil!)
     
-    YENİ ÇÖZÜM:
-    - Summary artık currencies_all cache'inden ANINDA hesaplanıyor
-    - Her zaman aynı veriyi kullanıyor
+    YENİ ÇÖZÜM V2:
+    - Summary artık currencies_all cache'inin içinde
+    - Worker tarafında hesaplanıp gömülüyor
+    - Tek kaynak prensibi uygulandı
     - Senkronizasyon sorunu %100 çözüldü!
+    - Döviz + Altın + Gümüş hepsi dahil
     """
     check_user_agent()
     track_online_user()
     
     try:
-        # 🔥 KRİTİK DEĞİŞİKLİK: Artık summary cache'i kullanmıyoruz!
-        # Direkt currencies_all'dan hesaplıyoruz
-        
+        # 🔥 YENİ YÖNTEM: Summary artık currencies içinde gömülü
         currencies_result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
         
         # Veri yoksa bile boş dön, hata dönme
-        if not currencies_result or not currencies_result.get('data'):
+        if not currencies_result:
             market_data = {}
             status = 'OPEN'
             market_msg = None
         else:
-            # 🎯 ÖZETİ ANINDA HESAPLA (Cached değil!)
-            currencies_list = currencies_result.get('data', [])
-            market_data = calculate_summary_from_currencies(currencies_list)
+            # 🎯 Summary'yi direkt cache'den al (Worker tarafında hesaplanmış)
+            market_data = currencies_result.get('summary', {})
+            
+            # Eğer yoksa (eski cache formatı), o zaman hesapla (fallback)
+            if not market_data:
+                logger.warning("⚠️ Eski cache formatı tespit edildi, fallback hesaplama yapılıyor")
+                currencies_list = currencies_result.get('data', [])
+                if currencies_list:
+                    market_data = calculate_summary_from_currencies(currencies_list)
             
             # Durum bilgilerini al
             status = currencies_result.get('status', 'OPEN')
@@ -346,10 +352,11 @@ def get_summary():
         meta_data = {
             'status': status,
             'banner': banner_msg,
-            'sync_source': 'currencies_all'  # Debug için: Hangi kaynaktan hesaplandı
+            'sync_source': 'embedded_in_currencies',  # Debug için: Worker'da hesaplandı
+            'items_count': len(market_data)
         }
 
-        logger.debug(f"✅ [Summary] Currencies'den hesaplandı: {len(market_data)} item")
+        logger.debug(f"✅ [Summary] Currencies'den alındı: {len(market_data)} item")
         
         return create_response(
             market_data,
