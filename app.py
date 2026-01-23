@@ -25,10 +25,10 @@ from routes.general_routes import api_bp
 
 # Servisler
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
-from services.notification_service import register_fcm_token, send_test_notification
 
 # Utilities
 from utils.telegram_monitor import init_telegram_monitor, TelegramMonitor
+from utils.notification_service import register_fcm_token, send_test_notification
 
 # ======================================
 # 🔥 FIREBASE INITIALIZATION
