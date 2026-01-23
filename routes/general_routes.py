@@ -9,7 +9,7 @@ General Routes - PRODUCTION READY (V4.0 - RATE LIMITING + SECURITY + FCM) 🚀
 ✅ ONLINE USER TRACKING: Her API çağrısında kullanıcıyı 5dk için işaretle
 ✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
-✅ FCM ENDPOINTS: Firebase token kayıt/silme
+✅ FCM ENDPOINTS: Firebase token kayıt/silme (HATA DÜZELTİLDİ!)
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -24,6 +24,12 @@ from config import Config
 from utils.cache import get_cache, set_cache
 # Maintenance servisten güvenli veri çekme fonksiyonu
 from services.maintenance_service import fetch_all_data_safe
+# 🔥 FCM servisleri (import isimlerini düzelttik!)
+from utils.notification_service import (
+    register_fcm_token,
+    unregister_fcm_token,
+    get_token_count
+)
 
 logger = logging.getLogger(__name__)
 
@@ -358,7 +364,7 @@ def get_regional_currencies():
 
 @api_bp.route('/fcm/register', methods=['POST'])
 @limiter.limit("10 per minute")  # Dakikada 10 kayıt (Spam önleme)
-def register_fcm_token():
+def register_fcm_token_endpoint():
     """
     Firebase Cloud Messaging Token Kayıt
     
@@ -394,8 +400,7 @@ def register_fcm_token():
                 "Geçersiz token formatı"
             )
         
-        # Token'ı kaydet
-        from utils.notification_service import register_fcm_token as register_token
+        # 🔥 Token'ı kaydet (düzeltilmiş import!)
         success = register_fcm_token(token)
         
         if success:
@@ -424,7 +429,7 @@ def register_fcm_token():
 
 @api_bp.route('/fcm/unregister', methods=['POST'])
 @limiter.limit("10 per minute")
-def unregister_fcm_token():
+def unregister_fcm_token_endpoint():
     """
     Firebase Cloud Messaging Token Silme
     
@@ -452,8 +457,7 @@ def unregister_fcm_token():
         
         token = data['token'].strip()
         
-        # Token'ı sil
-        from utils.notification_service import unregister_fcm_token as unregister_token
+        # 🔥 Token'ı sil (düzeltilmiş import!)
         success = unregister_fcm_token(token)
         
         if success:
@@ -496,8 +500,6 @@ def fcm_status():
     }
     """
     try:
-        from utils.notification_service import get_token_count
-        
         # Token sayısını al
         token_count = get_token_count()
         
