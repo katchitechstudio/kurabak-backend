@@ -1,5 +1,5 @@
 """
-General Routes - PRODUCTION READY (V4.0 - RATE LIMITING + SECURITY + FCM) 🚀
+General Routes - PRODUCTION READY (V4.1 - SUMMARY SYNC FIX) 🚀
 ==========================================================
 ✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
@@ -9,7 +9,8 @@ General Routes - PRODUCTION READY (V4.0 - RATE LIMITING + SECURITY + FCM) 🚀
 ✅ ONLINE USER TRACKING: Her API çağrısında kullanıcıyı 5dk için işaretle
 ✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
-✅ FCM ENDPOINTS: Firebase token kayıt/silme (HATA DÜZELTİLDİ!)
+✅ FCM ENDPOINTS: Firebase token kayıt/silme
+✅ SUMMARY SYNC FIX: Özet her zaman currencies'den hesaplanır (Sterlin sorunu çözüldü!)
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -24,7 +25,7 @@ from config import Config
 from utils.cache import get_cache, set_cache
 # Maintenance servisten güvenli veri çekme fonksiyonu
 from services.maintenance_service import fetch_all_data_safe
-# 🔥 FCM servisleri (import isimlerini düzelttik!)
+# 🔥 FCM servisleri
 from utils.notification_service import (
     register_fcm_token,
     unregister_fcm_token,
@@ -138,6 +139,35 @@ def check_user_agent():
         # İsterseniz burada rate limit'i daha da sıkılaştırabilirsiniz
     
     return True  # Şimdilik tüm isteklere izin ver
+
+
+def calculate_summary_from_currencies(currencies_list):
+    """
+    🔥 YENİ FONKSİYON: Currencies listesinden özet hesapla
+    
+    Bu sayede summary her zaman güncel currencies verisiyle senkron olur.
+    Sterlin'in kişilik bölünmesi sorunu çözülür!
+    
+    Args:
+        currencies_list: Döviz listesi
+        
+    Returns:
+        dict: {"loser": {...}, "winner": {...}}
+    """
+    if not currencies_list or len(currencies_list) < 2:
+        return {}
+    
+    try:
+        # En düşük ve en yüksek değişimi bul
+        sorted_curr = sorted(currencies_list, key=lambda x: x.get('change_percent', 0))
+        
+        return {
+            "loser": sorted_curr[0],
+            "winner": sorted_curr[-1]
+        }
+    except Exception as e:
+        logger.error(f"❌ Summary hesaplama hatası: {e}")
+        return {}
 
 # ======================================
 # CURRENCY ENDPOINTLER (RATE LIMITED!)
@@ -268,46 +298,64 @@ def get_summary():
     Piyasa Özeti (Kazanan/Kaybeden)
     🛡️ Rate limit: 60/dakika
     📢 Banner Desteği Eklendi!
+    🔥 SUMMARY SYNC FIX: Her zaman currencies_all'dan hesaplanır!
+    
+    ÖNCEKİ SORUN:
+    - Summary ayrı cache'den geliyordu
+    - Currencies başka cache'den geliyordu
+    - Senkronizasyon sorunu vardı (Sterlin üstte kırmızı, altta yeşil!)
+    
+    YENİ ÇÖZÜM:
+    - Summary artık currencies_all cache'inden ANINDA hesaplanıyor
+    - Her zaman aynı veriyi kullanıyor
+    - Senkronizasyon sorunu %100 çözüldü!
     """
     check_user_agent()
     track_online_user()
     
     try:
-        # 1. Veriyi Garantili Çek
-        result = get_data_guaranteed(Config.CACHE_KEYS['summary'])
+        # 🔥 KRİTİK DEĞİŞİKLİK: Artık summary cache'i kullanmıyoruz!
+        # Direkt currencies_all'dan hesaplıyoruz
         
-        # 2. Veri yoksa bile boş dön, hata dönme
-        if not result or not result.get('data'):
-            # Boş veri olsa bile banner varsa gösterelim
+        currencies_result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
+        
+        # Veri yoksa bile boş dön, hata dönme
+        if not currencies_result or not currencies_result.get('data'):
             market_data = {}
+            status = 'OPEN'
+            market_msg = None
         else:
-            market_data = result.get('data', {})
+            # 🎯 ÖZETİ ANINDA HESAPLA (Cached değil!)
+            currencies_list = currencies_result.get('data', [])
+            market_data = calculate_summary_from_currencies(currencies_list)
+            
+            # Durum bilgilerini al
+            status = currencies_result.get('status', 'OPEN')
+            market_msg = currencies_result.get('market_msg')
 
-        # 3. 🔥 KRİTİK EKLEME: Banner ve Durum Bilgisi
         # Banner'ı çek
         banner_msg = get_cache("system_banner")
         
-        # Piyasa durumunu çek
-        status = result.get('status', 'OPEN') if result else 'OPEN'
-        market_msg = result.get('market_msg') if result else None
-
         # Eğer bakım varsa veya piyasa kapalıysa banner'ı güncelle
         if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
             banner_msg = market_msg or "🚧 Sistem bakımda."
         elif status == 'CLOSED' and not banner_msg:
             banner_msg = market_msg or "🌙 Piyasalar kapalı."
 
-        # 4. Meta verisine banner'ı paketle
+        # Meta verisine banner'ı paketle
         meta_data = {
             'status': status,
-            'banner': banner_msg  # 🎯 İşte mobilin beklediği veri!
+            'banner': banner_msg,
+            'sync_source': 'currencies_all'  # Debug için: Hangi kaynaktan hesaplandı
         }
 
+        logger.debug(f"✅ [Summary] Currencies'den hesaplandı: {len(market_data)} item")
+        
         return create_response(
             market_data,
             200,
             "Piyasa özeti getirildi",
-            meta_data  # Meta verisini buraya ekledik
+            meta_data
         )
         
     except Exception as e:
@@ -400,7 +448,7 @@ def register_fcm_token_endpoint():
                 "Geçersiz token formatı"
             )
         
-        # 🔥 Token'ı kaydet (düzeltilmiş import!)
+        # 🔥 Token'ı kaydet
         success = register_fcm_token(token)
         
         if success:
@@ -457,7 +505,7 @@ def unregister_fcm_token_endpoint():
         
         token = data['token'].strip()
         
-        # 🔥 Token'ı sil (düzeltilmiş import!)
+        # 🔥 Token'ı sil
         success = unregister_fcm_token(token)
         
         if success:
