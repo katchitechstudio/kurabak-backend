@@ -1,11 +1,13 @@
 """
-Financial Service - PRODUCTION READY V4.0 🚀
+Financial Service - PRODUCTION READY V4.1 🚀
 =========================================================
 ✅ V5 + TRADINGVIEW: Dual source system (V3/V4 removed)
 ✅ MANUEL KAYNAK GEÇİŞİ: Telegram komutlarıyla kontrol
 ✅ MOBİL OPTİMİZE: 23 Döviz + 6 Altın + 1 Gümüş
 ✅ WORKER + SNAPSHOT + BANNER + DEATH STAR + BAKIM MODU
 ✅ SELF-HEALING: Otomatik kaynak değiştirme
+✅ SUMMARY SYNC FIX: Özet artık currencies içinde (Sterlin sorunu çözüldü!)
+✅ SMART SUMMARY: Düşüş/yükseliş yoksa null döner (mantıklı)
 """
 
 import requests
@@ -94,7 +96,7 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     }
 
 # ======================================
-# TRADINGVIEW FETCH (YENİ!)
+# TRADINGVIEW FETCH
 # ======================================
 
 def fetch_from_tradingview() -> Optional[dict]:
@@ -299,12 +301,54 @@ def process_data_mobile_optimized(data: dict):
     
     return currencies, golds, silvers
 
-def calculate_summary(currencies):
-    """Kazanan ve Kaybeden"""
-    if len(currencies) < 2:
+def calculate_summary(all_items: List[dict]) -> dict:
+    """
+    🔥 YENİ VERSİYON: Tüm varlıklardan (Döviz + Altın + Gümüş) özet hesapla
+    
+    KURALLAR:
+    - Tüm piyasa yükseliyorsa (en düşük bile pozitif) → loser yok
+    - Tüm piyasa düşüyorsa (en yüksek bile negatif) → winner yok
+    - Normal durumda → ikisi de var
+    
+    Args:
+        all_items: Tüm varlıkların listesi (currencies + golds + silvers)
+        
+    Returns:
+        dict: {"winner": {...}, "loser": {...}} veya sadece biri veya hiçbiri
+    """
+    if not all_items or len(all_items) < 2:
         return {}
-    sorted_curr = sorted(currencies, key=lambda x: x['change_percent'])
-    return {"loser": sorted_curr[0], "winner": sorted_curr[-1]}
+    
+    try:
+        # Değişim yüzdesine göre sırala
+        sorted_items = sorted(all_items, key=lambda x: x.get('change_percent', 0))
+        
+        loser = sorted_items[0]  # En düşük
+        winner = sorted_items[-1]  # En yüksek
+        
+        result = {}
+        
+        # Kaybeden kontrolü: En düşük >= 0 ise → Herkes kazanıyor, kaybeden yok
+        if loser.get('change_percent', 0) < 0:
+            result['loser'] = loser
+        
+        # Kazanan kontrolü: En yüksek <= 0 ise → Herkes kaybediyor, kazanan yok
+        if winner.get('change_percent', 0) > 0:
+            result['winner'] = winner
+        
+        logger.debug(
+            f"📊 [Summary] "
+            f"Winner: {result.get('winner', {}).get('code', 'YOK')} "
+            f"({result.get('winner', {}).get('change_percent', 0):+.2f}%) | "
+            f"Loser: {result.get('loser', {}).get('code', 'YOK')} "
+            f"({result.get('loser', {}).get('change_percent', 0):+.2f}%)"
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Summary hesaplama hatası: {e}")
+        return {}
 
 # ======================================
 # BANNER
@@ -421,7 +465,9 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 def update_financial_data():
     """
     Her 2 dakikada bir çalışır.
-    V5 -> TradingView -> Backup (V3/V4 kaldırıldı)
+    V5 -> TradingView -> Backup
+    
+    🔥 YENİ: Summary artık currencies cache'ine gömülü (Tek kaynak prensibi)
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -431,7 +477,7 @@ def update_financial_data():
     if is_maintenance:
         logger.info(f"🚧 [WORKER] Bakım Modu Aktif ({maint_status})")
         for key in [Config.CACHE_KEYS['currencies_all'], Config.CACHE_KEYS['golds_all'], 
-                    Config.CACHE_KEYS['silvers_all'], Config.CACHE_KEYS['summary']]:
+                    Config.CACHE_KEYS['silvers_all']]:
             data = get_cache(key)
             if data:
                 data['status'] = maint_status
@@ -445,7 +491,7 @@ def update_financial_data():
     if now.weekday() == 5 or (now.weekday() == 6 and now.hour < 23):
         logger.info(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')})")
         for key in [Config.CACHE_KEYS['currencies_all'], Config.CACHE_KEYS['golds_all'],
-                    Config.CACHE_KEYS['silvers_all'], Config.CACHE_KEYS['summary']]:
+                    Config.CACHE_KEYS['silvers_all']]:
             data = get_cache(key)
             if data:
                 data['status'] = "CLOSED"
@@ -508,7 +554,7 @@ def update_financial_data():
                     "⚠️ *TÜM KAYNAKLAR ÇÖKTÜ!*\n\nSistem yedeği kullanıyor.",
                     "critical"
                 )
-            for key in ['currencies', 'golds', 'silvers', 'summary']:
+            for key in ['currencies', 'golds', 'silvers']:
                 backup_data[key]['status'] = "OPEN"
                 set_cache(Config.CACHE_KEYS[f'{key}_all'], backup_data[key], ttl=0)
             Metrics.inc('backup')
@@ -574,7 +620,10 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
         
-        summary = calculate_summary(currencies)
+        # 🔥 YENİ: Tüm varlıkları birleştir ve summary hesapla
+        all_items = currencies + golds + silvers
+        summary = calculate_summary(all_items)
+        
         Metrics.inc(source.lower().replace(" ", "_"))
         
         update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -590,10 +639,15 @@ def update_financial_data():
             "banner": banner_message
         }
         
-        set_cache(Config.CACHE_KEYS['currencies_all'], {**base_meta, "data": currencies}, ttl=0)
+        # 🔥 SUMMARY ARTIK CURRENCIES İÇİNDE (Tek Kaynak Prensibi)
+        set_cache(Config.CACHE_KEYS['currencies_all'], {
+            **base_meta, 
+            "data": currencies,
+            "summary": summary  # 🎯 İşte senkronizasyon!
+        }, ttl=0)
+        
         set_cache(Config.CACHE_KEYS['golds_all'], {**base_meta, "data": golds}, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_all'], {**base_meta, "data": silvers}, ttl=0)
-        set_cache(Config.CACHE_KEYS['summary'], {**base_meta, "data": summary}, ttl=0)
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
         
         # 15 dakikalık backup
@@ -602,19 +656,26 @@ def update_financial_data():
         if current_time - float(last_backup_time) > 900:
             logger.info("📦 15 Dakikalık Backup...")
             backup_payload = {
-                "currencies": {**base_meta, "data": currencies},
+                "currencies": {**base_meta, "data": currencies, "summary": summary},
                 "golds": {**base_meta, "data": golds},
-                "silvers": {**base_meta, "data": silvers},
-                "summary": {**base_meta, "data": summary}
+                "silvers": {**base_meta, "data": silvers}
             }
             set_cache("kurabak:backup:all", backup_payload, ttl=0)
             set_cache("kurabak:backup:timestamp", current_time, ttl=0)
         
         banner_info = f"Banner: {banner_message[:30]}..." if banner_message else "Banner: Yok"
+        
+        # Summary bilgisini loglara ekle
+        summary_info = ""
+        if summary:
+            winner_code = summary.get('winner', {}).get('code', 'YOK')
+            loser_code = summary.get('loser', {}).get('code', 'YOK')
+            summary_info = f" | Winner: {winner_code}, Loser: {loser_code}"
+        
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies)} Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
-            f"({banner_info})"
+            f"({banner_info}){summary_info}"
         )
         return True
         
