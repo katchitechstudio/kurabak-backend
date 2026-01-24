@@ -1,14 +1,13 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.1 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.2 🤖
 =======================================================
-✅ YENİ KOMUTLAR: /test, /test mobil, /test detay
-✅ KAYNAK YÖNETİMİ: /kaynak v5, /kaynak tradingview, /kaynak durum, /kaynak örnek
+✅ TEST SİSTEMİ: /test, /test mobil, /test detay
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ SELF-HEALING: Otomatik CPU/RAM izleme ve müdahale
-✅ TRADINGVIEW: Yedek kaynak desteği
 ✅ TÜRKÇE KARAKTER FIX: 'ı', 'ş', 'ğ', 'ü', 'ö', 'ç' otomatik düzeltme
 ✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller
 ✅ 🔒 ADMİN GÜVENLİĞİ: Sadece yetkili Telegram ID komut gönderebilir
+✅ V5 ONLY: Tek kaynak sistemi (TradingView kaldırıldı)
 """
 
 import os
@@ -30,10 +29,9 @@ class TelegramMonitor:
     1. RAPOR MODU: Sessiz bildirimler, günlük raporlar
     2. KOMUT MODU: Komutları dinler ve cevaplar
     3. TEST SİSTEMİ: Otomatik sistem sağlık kontrolü
-    4. KAYNAK YÖNETİMİ: Manuel V5/TradingView geçişi
-    5. TAKVİM SİSTEMİ: Etkinlik bildirimleri
-    6. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
-    7. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
+    4. TAKVİM SİSTEMİ: Etkinlik bildirimleri
+    5. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
+    6. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -99,7 +97,7 @@ class TelegramMonitor:
         now = datetime.now()
         date_str = now.strftime("%d.%m.%Y")
         
-        total = metrics.get('v5', 0) + metrics.get('tradingview', 0) + metrics.get('backup', 0)
+        total = metrics.get('v5', 0) + metrics.get('backup', 0)
         success_rate = 100
         if total > 0:
             success_rate = ((total - metrics.get('errors', 0)) / total) * 100
@@ -117,13 +115,12 @@ class TelegramMonitor:
             
             f"🔌 *KAYNAK KULLANIMI*\n"
             f"• 🚀 V5 API: `{metrics.get('v5', 0)}`\n"
-            f"• 📊 TradingView: `{metrics.get('tradingview', 0)}`\n"
             f"• 📦 Backup: `{metrics.get('backup', 0)}`\n\n"
             
             f"🛡️ *GÜVENLİK & HATALAR*\n"
             f"• Hatalar: `{metrics.get('errors', 0)}`\n\n"
             
-            f"_KuraBak Backend v4.1 • {now.strftime('%H:%M')}_"
+            f"_KuraBak Backend v4.2 • {now.strftime('%H:%M')}_"
         )
         
         self.send_message(report, level='report')
@@ -145,7 +142,8 @@ class TelegramMonitor:
         msg = (
             f"🚀 *SİSTEM BAŞLATILDI*\n\n"
             f"📦 *Versiyon:* {Config.APP_VERSION}\n"
-            f"🔌 *Kaynak:* V5 + TradingView\n"
+            f"🔌 *Kaynak:* V5 API Only\n"
+            f"💾 *Backup:* 15 dakikalık otomatik\n"
             f"🤖 *Self-Healing:* Aktif\n"
             f"🗓️ *Takvim:* Aktif\n"
             f"🧪 *Test:* /test komutu aktif\n\n"
@@ -229,8 +227,6 @@ class TelegramMonitor:
                         self._handle_konus()
                     elif text.startswith('/bakim'):
                         self._handle_bakim(text)
-                    elif text.startswith('/kaynak'):
-                        self._handle_kaynak(text)
                     elif text.startswith('/test'):
                         self._handle_test(text)
                     elif text.startswith('/'):
@@ -248,11 +244,6 @@ class TelegramMonitor:
             "`/test` - Basit sağlık testi (5sn)\n"
             "`/test mobil` - Mobil uyumluluk\n"
             "`/test detay` - Detaylı sistem testi\n\n"
-            "🔌 *KAYNAK YÖNETİMİ:*\n"
-            "`/kaynak durum` - Aktif kaynak\n"
-            "`/kaynak v5` - V5'e geç\n"
-            "`/kaynak tradingview` - TradingView'e geç\n"
-            "`/kaynak örnek` - Veri örnekleri\n\n"
             "📢 *YÖNETİM:*\n"
             "`/duyuru [mesaj]` - Duyuru as\n"
             "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
@@ -391,7 +382,12 @@ class TelegramMonitor:
             if silvers:
                 silver_data = silvers.get('data', [])
                 if len(silver_data) >= 1:
-                    results.append("✅ Gümüş: 1/1")
+                    # İsim kontrolü
+                    silver_name = silver_data[0].get('name', '')
+                    if silver_name == "Gümüş":
+                        results.append("✅ Gümüş: 1/1 (İsim: Gümüş)")
+                    else:
+                        results.append(f"⚠️ Gümüş: 1/1 (İsim: {silver_name})")
                 else:
                     results.append("❌ Gümüş: 0/1")
             else:
@@ -449,12 +445,20 @@ class TelegramMonitor:
             currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
             golds = get_cache(Config.CACHE_KEYS['golds_all'])
             silvers = get_cache(Config.CACHE_KEYS['silvers_all'])
-            summary = get_cache(Config.CACHE_KEYS['summary'])
             
             if currencies:
                 results.append(f"  ✅ Döviz: {len(currencies.get('data', []))} adet")
                 results.append(f"     Kaynak: {currencies.get('source', 'Unknown')}")
                 results.append(f"     Güncelleme: {currencies.get('last_update', 'Unknown')}")
+                
+                # Summary kontrolü
+                summary = currencies.get('summary', {})
+                if summary:
+                    winner = summary.get('winner', {}).get('name', 'YOK')
+                    loser = summary.get('loser', {}).get('name', 'YOK')
+                    results.append(f"     Summary: Winner={winner}, Loser={loser}")
+                else:
+                    results.append("     Summary: Yok")
             else:
                 results.append("  ❌ Döviz: Veri yok")
             
@@ -464,14 +468,14 @@ class TelegramMonitor:
                 results.append("  ❌ Altın: Veri yok")
             
             if silvers:
-                results.append(f"  ✅ Gümüş: {len(silvers.get('data', []))} adet")
+                silver_data = silvers.get('data', [])
+                if silver_data:
+                    silver_name = silver_data[0].get('name', 'Unknown')
+                    results.append(f"  ✅ Gümüş: {len(silver_data)} adet (İsim: {silver_name})")
+                else:
+                    results.append("  ❌ Gümüş: Veri yok")
             else:
                 results.append("  ❌ Gümüş: Veri yok")
-            
-            if summary:
-                results.append("  ✅ Summary: Mevcut")
-            else:
-                results.append("  ❌ Summary: Yok")
             
             results.append("\n🔹 *BİLEŞENLER*")
             last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
@@ -501,8 +505,8 @@ class TelegramMonitor:
             results.append(f"  {ram_status} RAM: %{ram:.1f}")
             
             results.append("\n🔹 *KAYNAK*")
-            active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
-            results.append(f"  ℹ️ Aktif: {active_source.upper()}")
+            results.append(f"  ℹ️ Aktif: V5 API Only")
+            results.append(f"  ℹ️ Backup: 15 dakikalık otomatik")
             
             all_results = "\n".join(results)
             passed = all_results.count("✅")
@@ -521,109 +525,6 @@ class TelegramMonitor:
             
         except Exception as e:
             return f"❌ Test hatası: {str(e)}"
-
-    def _handle_kaynak(self, text):
-        """🔌 KAYNAK YÖNETİMİ (TÜRKÇE KARAKTER DÜZELTMESİ İLE)"""
-        try:
-            from utils.cache import get_cache, set_cache
-            from config import Config
-            
-            raw_content = text.replace('/kaynak', '').strip().lower()
-            raw_content = raw_content.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g').replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
-            
-            if raw_content == 'durum' or raw_content == '':
-                active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
-                switch_count = get_cache(Config.CACHE_KEYS['source_switch_count']) or "0"
-                
-                self._send_raw(
-                    f"🔌 *KAYNAK DURUMU*\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"✅ *Aktif:* {active_source.upper()}\n"
-                    f"📊 *Geçiş Sayısı:* {switch_count}\n\n"
-                    f"🔄 *Mevcut Kaynaklar:*\n"
-                    f"• V5 (Ana kaynak)\n"
-                    f"• TradingView (Yedek)\n\n"
-                    f"💡 Geçiş için: `/kaynak v5` veya `/kaynak tradingview`"
-                )
-                return
-            
-            if raw_content == 'ornek':
-                self._show_source_examples()
-                return
-            
-            if raw_content in ['v5', 'tradingview']:
-                active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
-                
-                if active_source == raw_content:
-                    self._send_raw(f"ℹ️ Zaten *{raw_content.upper()}* kaynağı aktif!")
-                    return
-                
-                set_cache(Config.CACHE_KEYS['active_source'], raw_content, ttl=0)
-                
-                switch_count = int(get_cache(Config.CACHE_KEYS['source_switch_count']) or "0")
-                set_cache(Config.CACHE_KEYS['source_switch_count'], str(switch_count + 1), ttl=0)
-                
-                self._send_raw(
-                    f"✅ *KAYNAK DEĞİŞTİRİLDİ!*\n\n"
-                    f"🔄 *Önceki:* {active_source.upper()}\n"
-                    f"✅ *Yeni:* {raw_content.upper()}\n\n"
-                    f"Worker bir sonraki güncellemede yeni kaynaktan veri çekecek (max 2dk)."
-                )
-                
-                try:
-                    from services.maintenance_service import force_worker_update
-                    force_worker_update()
-                    self._send_raw("⚡ Worker manuel olarak tetiklendi!")
-                except:
-                    pass
-                
-                return
-            
-            self._send_raw(
-                "❌ Geçersiz kaynak!\n\n"
-                "Kullanım:\n"
-                "`/kaynak durum` - Mevcut durum\n"
-                "`/kaynak v5` - V5'e geç\n"
-                "`/kaynak tradingview` - TradingView'e geç\n"
-                "`/kaynak örnek` - Veri örnekleri"
-            )
-            
-        except Exception as e:
-            self._send_raw(f"❌ Kaynak yönetimi hatası: {str(e)}")
-
-    def _show_source_examples(self):
-        """📊 KAYNAK ÖRNEKLERİ"""
-        try:
-            from services.financial_service import fetch_from_v5, fetch_from_tradingview
-            
-            self._send_raw("⏳ Veri örnekleri çekiliyor...")
-            
-            v5_data = fetch_from_v5()
-            v5_example = "❌ Veri çekilemedi"
-            if v5_data and 'currencies' in v5_data and v5_data['currencies']:
-                usd = next((c for c in v5_data['currencies'] if c.get('code') == 'USD'), None)
-                if usd:
-                    v5_example = f"USD: {usd.get('buy', 'N/A')} / {usd.get('sell', 'N/A')}"
-            
-            tv_data = fetch_from_tradingview()
-            tv_example = "❌ Veri çekilemedi"
-            if tv_data and 'currencies' in tv_data and tv_data['currencies']:
-                usd = next((c for c in tv_data['currencies'] if c.get('code') == 'USD'), None)
-                if usd:
-                    tv_example = f"USD: {usd.get('buy', 'N/A')} / {usd.get('sell', 'N/A')}"
-            
-            self._send_raw(
-                f"📊 *KAYNAK ÖRNEKLERİ*\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🚀 *V5 API:*\n"
-                f"```\n{v5_example}\n```\n\n"
-                f"📊 *TradingView:*\n"
-                f"```\n{tv_example}\n```\n\n"
-                f"💡 Her iki kaynak da çalışıyorsa sistem sağlıklı!"
-            )
-            
-        except Exception as e:
-            self._send_raw(f"❌ Örnek veri hatası: {str(e)}")
 
     def _handle_durum(self):
         """Sistem Durumu Raporu"""
@@ -660,8 +561,6 @@ class TelegramMonitor:
             
             healing_status = "🟢 Aktif" if self.is_healing_active else "🔴 Kapalı"
             
-            active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
-            
             report = (
                 f"👮‍♂️ *SİSTEM DURUMU RAPORU*\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -677,7 +576,8 @@ class TelegramMonitor:
                 f"• 🤖 Self-Healing: {healing_status}\n\n"
                 
                 f"🔌 *VERİ KAYNAĞI*\n"
-                f"• Aktif: `{active_source.upper()}`\n\n"
+                f"• Aktif: `V5 API Only`\n"
+                f"• Backup: `15 dakikalık otomatik`\n\n"
                 
                 f"🚧 *ÖZEL MODLAR*\n"
                 f"• Bakım: {maintenance_status}\n\n"
@@ -742,7 +642,8 @@ class TelegramMonitor:
         try:
             self._send_raw(
                 "📊 *SİSTEM ANALİZİ*\n\n"
-                "🚀 *API:* V5 + TradingView\n"
+                "🚀 *API:* V5 Only\n"
+                "💾 *Backup:* 15 dakikalık otomatik\n"
                 "🤖 *Self-Healing:* Aktif\n"
                 "⏱️ *Kontrol Sıklığı:* 1 dakika\n"
                 "🎯 *CPU Eşik:* %80\n"
