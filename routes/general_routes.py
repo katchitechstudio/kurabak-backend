@@ -1,16 +1,16 @@
 """
-General Routes - PRODUCTION READY (V4.1 - SUMMARY SYNC FIX) 🚀
+General Routes - PRODUCTION READY V4.3 🚀
 ==========================================================
 ✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
 ✅ REGIONAL SUPPORT: 20 Döviz için Bölgesel Filtreleme
 ✅ SMART RECOVERY: Cache boşsa anlık tetikleme yapar
 ✅ STANDARDIZED RESPONSE: Frontend (Android) için sabit format
-✅ ONLINE USER TRACKING: Her API çağrısında kullanıcıyı 5dk için işaretle
+✅ GELİŞMİŞ TRACKING: Header bazlı kullanıcı takibi + istatistik
 ✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
 ✅ FCM ENDPOINTS: Firebase token kayıt/silme
-✅ SUMMARY SYNC FIX: Özet her zaman currencies'den hesaplanır (Sterlin sorunu çözüldü!)
+✅ SUMMARY SYNC FIX: Özet her zaman currencies'den hesaplanır
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -56,21 +56,42 @@ def track_online_user():
     """
     🕵️ AJAN: Kullanıcıyı "Online" olarak işaretle
     
+    Öncelik Sırası:
+    1. Custom Headers (X-Client-Id, X-Device-Id) - Mobil uygulama gönderecek
+    2. Query Parameters (user_id, device_id) - Eski versiyon uyumluluğu
+    3. IP Adresi (fallback) - Son çare
+    
     Her API isteğinde otomatik çalışır.
-    Kullanıcının kimliğini (user_id veya IP) Redis'e yazar.
-    5 dakika (300 saniye) sonra otomatik silinir.
+    Kullanıcının kimliğini Redis'e yazar (5 dakika ömürlü).
+    Ayrıca 24 saatlik istek istatistiği tutar.
     """
     try:
-        # 1. Kullanıcı kimliğini belirle (user_id > IP)
-        user_id = request.args.get('user_id') or request.args.get('device_id')
+        # 1. Öncelik: Custom headers (Mobil uygulama gönderecek)
+        user_id = request.headers.get('X-Client-Id')
+        device_id = request.headers.get('X-Device-Id')
         
+        # 2. Fallback: Query params (Eski versiyon uyumluluğu)
         if not user_id:
-            # user_id yoksa IP adresini kullan
+            user_id = request.args.get('user_id') or request.args.get('device_id')
+        
+        if not device_id:
+            device_id = request.args.get('device_id')
+        
+        # 3. Son çare: IP adresi
+        if not user_id and not device_id:
             user_id = request.remote_addr or request.headers.get('X-Forwarded-For', 'unknown')
         
-        # 2. Redis'e kaydet (5 dakika ömürlü)
-        cache_key = f"online_user:{user_id}"
+        # Benzersiz anahtar oluştur
+        unique_key = f"{user_id or 'unknown'}:{device_id or 'unknown'}"
+        
+        # Redis'e kaydet (5 dakika ömürlü - online tracking)
+        cache_key = f"online_user:{unique_key}"
         set_cache(cache_key, "1", ttl=300)  # 300 saniye = 5 dakika
+        
+        # 📊 İstatistik için de kaydet (24 saat ömürlü)
+        log_key = f"api_request:{unique_key}"
+        count = get_cache(log_key) or 0
+        set_cache(log_key, int(count) + 1, ttl=86400)  # 24 saat
         
     except Exception as e:
         # Hata olsa bile API durmasın
@@ -178,7 +199,7 @@ def calculate_summary_from_currencies(currencies_list):
 def get_all_currencies():
     """
     Tüm Döviz Kurları (23 Adet)
-    🕵️ Online tracking aktif!
+    🕵️ Gelişmiş tracking aktif!
     📢 Banner desteği eklendi!
     🛡️ Rate limit: 60/dakika
     🚧 Bakım Modu: Otomatik banner güncelleme
@@ -186,7 +207,7 @@ def get_all_currencies():
     # Bot kontrolü
     check_user_agent()
     
-    # Kullanıcıyı işaretle
+    # Kullanıcıyı işaretle (gelişmiş tracking)
     track_online_user()
     
     try:
@@ -299,18 +320,6 @@ def get_summary():
     🛡️ Rate limit: 60/dakika
     📢 Banner Desteği Eklendi!
     🔥 SUMMARY SYNC FIX: Artık currencies cache'inin içinden alınır!
-    
-    ÖNCEKİ SORUN:
-    - Summary ayrı cache'den geliyordu
-    - Currencies başka cache'den geliyordu
-    - Senkronizasyon sorunu vardı (Sterlin üstte kırmızı, altta yeşil!)
-    
-    YENİ ÇÖZÜM V2:
-    - Summary artık currencies_all cache'inin içinde
-    - Worker tarafında hesaplanıp gömülüyor
-    - Tek kaynak prensibi uygulandı
-    - Senkronizasyon sorunu %100 çözüldü!
-    - Döviz + Altın + Gümüş hepsi dahil
     """
     check_user_agent()
     track_online_user()
