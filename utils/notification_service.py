@@ -1,11 +1,12 @@
 """
-Firebase Push Notification Service 🔥
+Firebase Push Notification Service V4.4 🔥
 =====================================
 ✅ Token Yönetimi (Kayıt/Silme)
 ✅ Bildirim Gönderme (Tekil/Toplu)
 ✅ 500 Token Batch Limiti (Firebase Compliant)
 ✅ Özel Bildirim Tipleri (Fiyat Alarmı, Günlük Özet, vb.)
 ✅ Hata Yönetimi ve Logging
+✅ GÜNLÜK ÖZET: Öğlen 12:00 otomatik gönderim
 """
 import logging
 import json
@@ -287,40 +288,116 @@ def send_price_alert(currency_code: str, price: float, change_percent: float) ->
     
     return send_to_all(title, body, data)
 
-def send_daily_summary(summary_data: Dict) -> Dict:
+def send_daily_summary() -> Dict:
     """
-    Günlük özet bildirimi
+    🔔 GÜNLÜK ÖZET BİLDİRİMİ (Öğlen 12:00)
     
-    Args:
-        summary_data: Özet veriler
-        
+    Canlı verilerden en çok yükselen/düşen varlıkları alır ve bildirim gönderir.
+    
     Returns:
-        Dict: Sonuç
+        Dict: {
+            'success': bool,
+            'recipient_count': int,
+            'winner': dict,
+            'loser': dict,
+            'error': str (opsiyonel)
+        }
     """
     try:
+        logger.info("📊 [PUSH] Günlük özet hazırlanıyor...")
+        
+        # Canlı verilerden currencies'i al (summary içinde)
+        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
+        
+        if not currencies_data:
+            logger.warning("⚠️ [PUSH] Canlı veri bulunamadı!")
+            return {
+                'success': False,
+                'error': 'No live data available',
+                'recipient_count': 0
+            }
+        
+        # Summary'i al
+        summary = currencies_data.get('summary', {})
+        
+        if not summary:
+            logger.warning("⚠️ [PUSH] Özet verisi bulunamadı!")
+            return {
+                'success': False,
+                'error': 'No summary data',
+                'recipient_count': 0
+            }
+        
         # En çok yükselen
-        top_gainer = summary_data.get('top_gainer', {})
-        top_gainer_name = top_gainer.get('name', 'N/A')
-        top_gainer_change = top_gainer.get('change_percent', 0)
+        winner = summary.get('winner', {})
+        winner_name = winner.get('name', 'N/A')
+        winner_code = winner.get('code', 'N/A')
+        winner_change = winner.get('change_percent', 0)
         
         # En çok düşen
-        top_loser = summary_data.get('top_loser', {})
-        top_loser_name = top_loser.get('name', 'N/A')
-        top_loser_change = top_loser.get('change_percent', 0)
+        loser = summary.get('loser', {})
+        loser_name = loser.get('name', 'N/A')
+        loser_code = loser.get('code', 'N/A')
+        loser_change = loser.get('change_percent', 0)
         
-        title = "📊 Günlük Piyasa Özeti"
-        body = f"📈 En yükselen: {top_gainer_name} ({top_gainer_change:+.2f}%)\n📉 En düşen: {top_loser_name} ({top_loser_change:+.2f}%)"
+        # Bildirim metni oluştur
+        title = "📊 Bugünün Özeti"
         
+        # Body formatı
+        body_parts = []
+        
+        if winner:
+            body_parts.append(f"📈 En çok yükselen: {winner_name} ({winner_change:+.2f}%)")
+        
+        if loser:
+            body_parts.append(f"📉 En çok düşen: {loser_name} ({loser_change:+.2f}%)")
+        
+        if not body_parts:
+            body = "Bugün piyasalar sakin."
+        else:
+            body = "\n".join(body_parts)
+        
+        # Data payload
         data = {
             "type": "daily_summary",
-            "data": json.dumps(summary_data)
+            "winner_code": winner_code,
+            "winner_change": str(winner_change),
+            "loser_code": loser_code,
+            "loser_change": str(loser_change),
+            "timestamp": str(datetime.now().timestamp())
         }
         
-        return send_to_all(title, body, data)
+        # Gönder
+        result = send_to_all(title, body, data)
+        
+        # Sonuç bilgisi
+        if result.get('success'):
+            recipient_count = result.get('success_count', 0)
+            logger.info(f"✅ [PUSH] Günlük özet gönderildi ({recipient_count} kullanıcı)")
+            
+            return {
+                'success': True,
+                'recipient_count': recipient_count,
+                'winner': winner,
+                'loser': loser,
+                'title': title,
+                'body': body
+            }
+        else:
+            logger.error(f"❌ [PUSH] Gönderim başarısız: {result.get('error')}")
+            return {
+                'success': False,
+                'error': result.get('error'),
+                'recipient_count': 0
+            }
         
     except Exception as e:
-        logger.error(f"❌ [FCM] Günlük özet hatası: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"❌ [PUSH] Günlük özet hatası: {e}")
+        return {
+            'success': False,
+            'error': str(e),
+            'recipient_count': 0
+        }
 
 def send_market_alert(event_title: str, event_description: str) -> Dict:
     """
