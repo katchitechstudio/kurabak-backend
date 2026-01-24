@@ -1,14 +1,15 @@
 """
-KuraBak Backend - ENTRY POINT V4.1 🚀
+KuraBak Backend - ENTRY POINT V4.2 🚀
 =====================================================
+✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
 ✅ CİHAZ KAYIT SİSTEMİ: FCM Token yönetimi
-✅ TRADINGVIEW YEDEK SİSTEMİ: V5 düşerse otomatik geçiş
-✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
+✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
 ✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
+✅ SUMMARY SYNC FIX: Sterlin sorunu çözüldü
 """
 import os
 import logging
@@ -174,33 +175,32 @@ def index():
         "environment": Config.ENVIRONMENT,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "features": [
-            "V5 + TradingView Dual Source (V3/V4 Kaldırıldı)",
-            "Telegram Manual Source Switch",
-            "Calendar Event Notifications",
-            "Firebase Push Notifications (Android)",
+            "V5 API (Single Reliable Source)",
             "User Feedback System (Telegram Integration)",
             "FCM Device Registration",
-            "Universal Data Parser",
+            "Calendar Event Notifications",
+            "Firebase Push Notifications (Android)",
             "15-Min Backup System",
             "No-503 Cache Architecture",
             "Worker + Snapshot + Controller System",
-            "Smart Change Calculation (API Independent)",
+            "Smart Change Calculation (Snapshot Based)",
             "Weekend Lock (Market Closed Detection)",
             "Trend Analysis (Volatility Alert 🔥)",
             "Self-Healing Mechanism",
-            "Instant Supervisor Check on Startup"
+            "Instant Supervisor Check on Startup",
+            "Summary Sync Fix (Embedded in Currencies)"
         ],
         "components": {
             "worker": "Her 2 dakikada veri çeker ve değişim hesaplar",
             "snapshot": "Gece 00:00'da referans fiyatları kaydeder",
             "controller": "Her 10 dakikada sistemi denetler ve onarır",
             "calendar": "Her gün 08:00'da etkinlikleri kontrol eder",
-            "firebase": "Push notification sistemi (Android)"
+            "firebase": "Push notification sistemi (Android)",
+            "backup": "15 dakikada bir otomatik yedekleme"
         },
-        "sources": {
+        "data_source": {
             "primary": "V5 API",
-            "fallback": "TradingView",
-            "manual_switch": "Telegram /source komutları"
+            "backup": "15-minute rolling backup"
         }
     }), 200
 
@@ -240,7 +240,7 @@ def system_status():
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
         
         # Aktif kaynak
-        active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+        data_source = "V5 API"
         
         # Firebase durumu
         firebase_status = "🟢 Aktif" if firebase_admin._apps else "🔴 Devre Dışı"
@@ -268,8 +268,8 @@ def system_status():
                 }
             },
             "data_source": {
-                "active": active_source,
-                "available": ["v5", "tradingview"]
+                "active": data_source,
+                "backup": "15-minute rolling backup"
             },
             "circuit_breaker": scheduler_status.get("circuit_breaker", {}),
             "metrics": metrics
