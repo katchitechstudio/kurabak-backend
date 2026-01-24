@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V4.2 🚀
+Financial Service - PRODUCTION READY V4.3 🚀
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -9,6 +9,7 @@ Financial Service - PRODUCTION READY V4.2 🚀
 ✅ SUMMARY SYNC FIX: Özet currencies içinde (Sterlin sorunu çözüldü!)
 ✅ NAME FIX: Tüm varlıklar Türkçe isimlerle gösteriliyor
 ✅ BANNER FIX: Takvim mesajları öncelikli
+✅ AKILLI LOGLAMA: Piyasa kapalı spam önleme
 """
 
 import requests
@@ -19,7 +20,7 @@ import pytz
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
-from utils.cache import set_cache, get_cache
+from utils.cache import set_cache, get_cache, delete_cache
 from utils.event_manager import get_todays_banner
 from config import Config
 
@@ -376,7 +377,6 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
     if isinstance(maintenance_data, dict):
         end_time = maintenance_data.get("end_time")
         if end_time and time.time() > end_time:
-            from utils.cache import delete_cache
             delete_cache("system_maintenance")
             logger.info("✅ [BAKIM] Bakım süresi doldu")
             return False, "OPEN", None
@@ -395,7 +395,9 @@ def update_financial_data():
     Her 2 dakikada bir çalışır.
     V5 API (Tek Kaynak) → Backup
     
-    🔥 YENİ: Summary artık currencies cache'ine gömülü (Tek kaynak prensibi)
+    🔥 YENİ V4.3: 
+    - Summary artık currencies cache'ine gömülü (Tek kaynak prensibi)
+    - Akıllı loglama: Piyasa kapalı spam önleme
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -415,9 +417,15 @@ def update_financial_data():
                 set_cache(key, data, ttl=0)
         return True
     
-    # 2. Hafta sonu kilidi
+    # 2. Hafta sonu kilidi (🔥 AKILLI LOGLAMA)
     if now.weekday() == 5 or (now.weekday() == 6 and now.hour < 23):
-        logger.info(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')})")
+        # 🔥 YENİ: Akıllı loglama - İlk kez kapalıysa INFO, sonrası DEBUG
+        if not get_cache("market_closed_logged"):
+            logger.info(f"🔒 [WORKER] Piyasa Kapalı - Hafta sonu modu başladı")
+            set_cache("market_closed_logged", "true", ttl=43200)  # 12 saat
+        else:
+            logger.debug(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')})")
+        
         for key in [Config.CACHE_KEYS['currencies_all'], Config.CACHE_KEYS['golds_all'],
                     Config.CACHE_KEYS['silvers_all']]:
             data = get_cache(key)
@@ -427,6 +435,11 @@ def update_financial_data():
                 data['last_update'] = now.strftime("%H:%M:%S")
                 set_cache(key, data, ttl=0)
         return True
+    
+    # 🔥 YENİ: Piyasa açıldığında log at ve flag temizle
+    if get_cache("market_closed_logged"):
+        logger.info("🔓 [WORKER] Piyasa açıldı - Normal mod başladı")
+        delete_cache("market_closed_logged")
     
     # 3. Veri çek (V5 ONLY)
     logger.info("🔄 [WORKER] Piyasa açık, V5'ten veri çekiliyor...")
@@ -472,7 +485,6 @@ def update_financial_data():
     # 4. "Düzeldi" bildirimi
     if was_system_down and data_raw:
         logger.info("✅ [WORKER] Sistem tekrar online!")
-        from utils.cache import delete_cache
         delete_cache("system_was_down")
         if telegram_monitor:
             telegram_monitor.send_message(
