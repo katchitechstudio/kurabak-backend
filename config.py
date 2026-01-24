@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V4.3 🧠
+Configuration - PRODUCTION READY V4.4 🧠
 ===================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -10,6 +10,10 @@ Configuration - PRODUCTION READY V4.3 🧠
 ✅ SUMMARY SYNC FIX: Özet currencies içinde (Sterlin sorunu çözüldü!)
 ✅ AKILLI LOGLAMA: Piyasa kapalı spam önleme
 ✅ GELİŞMİŞ TRACKING: Header bazlı kullanıcı takibi
+✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
+✅ CIRCUIT BREAKER: API hata yönetimi
+✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
+✅ TEMİZLİK MEKANİZMASI: 7 günlük otomatik temizlik
 """
 import os
 
@@ -18,7 +22,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "4.3.0"  # 🔥 Akıllı Loglama + Gelişmiş Tracking
+    APP_VERSION = "4.4.0"  # 🔥 Trend + Circuit Breaker + Push + Temizlik
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -62,9 +66,20 @@ class Config:
     # 📊 Telegram Günlük Rapor Saati (Sabah 09:00)
     TELEGRAM_DAILY_REPORT_HOUR = 9
     
+    # 🔔 Push Notification Günlük Özet Saati (Öğlen 12:00)
+    PUSH_NOTIFICATION_DAILY_HOUR = 12
+    PUSH_NOTIFICATION_DAILY_MINUTE = 0
+    
     # 🛡️ Circuit Breaker (Sigorta) Ayarları
     CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3  # 3 kere üst üste hata alırsa dur
     CIRCUIT_BREAKER_TIMEOUT = 60           # 60 saniye bekle (Soğuma süresi)
+    
+    # ======================================
+    # 🧹 TEMİZLİK MEKANİZMASI
+    # ======================================
+    # Disk backup temizlik ayarları
+    CLEANUP_BACKUP_AGE_DAYS = 7  # 7 günden eski backup'ları sil
+    CLEANUP_CHECK_INTERVAL = 86400  # Her gün kontrol et (24 saat)
     
     # ======================================
     # 🚧 BAKIM MODU AYARLARI
@@ -150,15 +165,21 @@ class Config:
         
         # 🔥 YENİ: Akıllı Loglama & Tracking
         'market_closed_logged': 'market:closed:logged',
-        'api_request_stats': 'api:request:stats'
+        'api_request_stats': 'api:request:stats',
+        
+        # 🔥 YENİ: Circuit Breaker & Temizlik
+        'circuit_breaker_state': 'circuit:breaker:state',
+        'circuit_breaker_failures': 'circuit:breaker:failures',
+        'circuit_breaker_last_open': 'circuit:breaker:last_open',
+        'cleanup_last_run': 'cleanup:last_run'
     }
     
     # ======================================
     # TREND ANALİZİ (ALEV ROZETİ 🔥)
     # ======================================
     # Kaç yüzde değişimde "Sert Hareket" sayılsın?
-    TREND_HIGH_THRESHOLD = 2.0    # %2 ve üzeri -> HIGH_UP / HIGH_DOWN
-    TREND_MEDIUM_THRESHOLD = 1.0  # %1-2 arası -> MEDIUM
+    TREND_HIGH_THRESHOLD = 5.0    # %5 ve üzeri -> HIGH_UP / HIGH_DOWN ✅ DEĞİŞTİ!
+    TREND_MEDIUM_THRESHOLD = 1.0  # %1-5 arası -> MEDIUM
     
     # ======================================
     # BÖLGESEL FİLTRELEME
@@ -193,7 +214,7 @@ class Config:
     # ======================================
     # GÜVENLİK (CORS & RATE LIMIT)
     # ======================================
-    CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
+    CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "")  # ✅ Boş = Sadece mobil
     SECRET_KEY = os.environ.get("SECRET_KEY", "gizli-anahtar-degistir")
     
     # ======================================
