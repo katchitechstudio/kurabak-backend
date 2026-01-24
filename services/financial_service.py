@@ -1,13 +1,14 @@
 """
-Financial Service - PRODUCTION READY V4.1 🚀
+Financial Service - PRODUCTION READY V4.2 🚀
 =========================================================
-✅ V5 + TRADINGVIEW: Dual source system (V3/V4 removed)
-✅ MANUEL KAYNAK GEÇİŞİ: Telegram komutlarıyla kontrol
+✅ V5 API: Tek ve güvenilir kaynak
+✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
 ✅ MOBİL OPTİMİZE: 23 Döviz + 6 Altın + 1 Gümüş
-✅ WORKER + SNAPSHOT + BANNER + DEATH STAR + BAKIM MODU
-✅ SELF-HEALING: Otomatik kaynak değiştirme
-✅ SUMMARY SYNC FIX: Özet artık currencies içinde (Sterlin sorunu çözüldü!)
-✅ SMART SUMMARY: Düşüş/yükseliş yoksa null döner (mantıklı)
+✅ WORKER + SNAPSHOT + BANNER + BAKIM MODU
+✅ SELF-HEALING: Otomatik sistem kurtarma
+✅ SUMMARY SYNC FIX: Özet currencies içinde (Sterlin sorunu çözüldü!)
+✅ NAME FIX: Tüm varlıklar Türkçe isimlerle gösteriliyor
+✅ BANNER FIX: Takvim mesajları öncelikli
 """
 
 import requests
@@ -45,11 +46,55 @@ MOBILE_GOLDS = {
 MOBILE_SILVER_CODES = ["GUMUS", "gumus", "AG", "SILVER"]
 
 # ======================================
+# 🆕 TÜRKÇE İSİM HARITALAMASI
+# ======================================
+
+TURKISH_NAMES = {
+    # Dövizler
+    "USD": "Amerikan Doları",
+    "EUR": "Euro",
+    "GBP": "İngiliz Sterlini",
+    "CHF": "İsviçre Frangı",
+    "CAD": "Kanada Doları",
+    "AUD": "Avustralya Doları",
+    "RUB": "Rus Rublesi",
+    "SAR": "Suudi Arabistan Riyali",
+    "AED": "BAE Dirhemi",
+    "KWD": "Kuveyt Dinarı",
+    "BHD": "Bahreyn Dinarı",
+    "OMR": "Umman Riyali",
+    "QAR": "Katar Riyali",
+    "CNY": "Çin Yuanı",
+    "SEK": "İsveç Kronu",
+    "NOK": "Norveç Kronu",
+    "PLN": "Polonya Zlotisi",
+    "RON": "Romanya Leyi",
+    "CZK": "Çek Kronu",
+    "EGP": "Mısır Lirası",
+    "RSD": "Sırp Dinarı",
+    "HUF": "Macar Forinti",
+    "BAM": "Bosna Markı",
+    
+    # Altınlar
+    "GRA": "Gram Altın",
+    "C22": "Çeyrek Altın",
+    "YAR": "Yarım Altın",
+    "TAM": "Tam Altın",
+    "CUM": "Cumhuriyet Altını",
+    "ATA": "Ata Altın",
+    
+    # Gümüş
+    "AG": "Gümüş",
+    "GUMUS": "Gümüş",
+    "SILVER": "Gümüş"
+}
+
+# ======================================
 # METRİKLER
 # ======================================
 
 class Metrics:
-    stats = {'v5': 0, 'tradingview': 0, 'backup': 0, 'errors': 0}
+    stats = {'v5': 0, 'backup': 0, 'errors': 0}
     
     @classmethod
     def inc(cls, key):
@@ -82,162 +127,28 @@ def clean_money_string(value: Any) -> float:
         return 0.0
 
 def create_item(code: str, raw_item: dict, item_type: str) -> dict:
-    """Standart veri objesi"""
+    """Standart veri objesi - Türkçe isimlerle"""
     buying = clean_money_string(raw_item.get("Buying"))
     selling = clean_money_string(raw_item.get("Selling"))
     change = clean_money_string(raw_item.get("Change"))
     if selling == 0: selling = buying
     if buying == 0: buying = selling
+    
+    # 🔥 Türkçe isim al (varsa map'ten, yoksa API'den)
+    turkish_name = TURKISH_NAMES.get(code)
+    if not turkish_name:
+        # API'den gelen isim varsa onu kullan
+        turkish_name = raw_item.get("Name", code)
+    
     return {
-        "code": code, "name": raw_item.get("Name", code),
-        "buying": round(buying, 4), "selling": round(selling, 4),
-        "rate": round(selling, 4), "change_percent": round(change, 2),
+        "code": code, 
+        "name": turkish_name,
+        "buying": round(buying, 4), 
+        "selling": round(selling, 4),
+        "rate": round(selling, 4), 
+        "change_percent": round(change, 2),
         "type": item_type
     }
-
-# ======================================
-# TRADINGVIEW FETCH
-# ======================================
-
-def fetch_from_tradingview() -> Optional[dict]:
-    """
-    TradingView'den veri çeker.
-    tradingview-ta kütüphanesini kullanır.
-    """
-    try:
-        from tradingview_ta import TA_Handler, Interval
-        
-        logger.info("📊 [TradingView] Veri çekiliyor...")
-        
-        rates = {}
-        
-        # Dövizler
-        for code, symbol in Config.TRADINGVIEW_SYMBOLS.items():
-            if code in ["GOLD", "SILVER"]:
-                continue
-            try:
-                handler = TA_Handler(
-                    symbol=symbol,
-                    screener="forex",
-                    exchange="FX_IDC",
-                    interval=Interval.INTERVAL_1_MINUTE
-                )
-                analysis = handler.get_analysis()
-                price = analysis.indicators.get("close", 0)
-                
-                if price > 0:
-                    rates[code] = {
-                        "Name": code,
-                        "Buying": price,
-                        "Selling": price,
-                        "Change": 0,
-                        "Type": "Currency"
-                    }
-            except Exception as e:
-                logger.debug(f"TradingView {code} hatası: {e}")
-        
-        # Altın (USD cinsinden)
-        try:
-            handler = TA_Handler(
-                symbol="GOLD",
-                screener="forex",
-                exchange="TVC",
-                interval=Interval.INTERVAL_1_MINUTE
-            )
-            analysis = handler.get_analysis()
-            gold_usd = analysis.indicators.get("close", 0)
-            
-            # USD/TRY kuru ile çarp
-            usd_try = rates.get("USD", {}).get("Selling", 0)
-            
-            if gold_usd > 0 and usd_try > 0:
-                # Ons altın -> Gram altın (1 ons = 31.1035 gram)
-                gram_try = (gold_usd * usd_try) / 31.1035
-                
-                rates["GRA"] = {
-                    "Name": "Gram Altın",
-                    "Buying": gram_try,
-                    "Selling": gram_try,
-                    "Change": 0,
-                    "Type": "Gold"
-                }
-                
-                # Diğer altınlar (Yaklaşık hesaplamalar)
-                rates["CEYREKALTIN"] = {
-                    "Name": "Çeyrek Altın",
-                    "Buying": gram_try * 1.75,
-                    "Selling": gram_try * 1.75,
-                    "Change": 0,
-                    "Type": "Gold"
-                }
-                rates["YARIMALTIN"] = {
-                    "Name": "Yarım Altın",
-                    "Buying": gram_try * 3.5,
-                    "Selling": gram_try * 3.5,
-                    "Change": 0,
-                    "Type": "Gold"
-                }
-                rates["TAMALTIN"] = {
-                    "Name": "Tam Altın",
-                    "Buying": gram_try * 7,
-                    "Selling": gram_try * 7,
-                    "Change": 0,
-                    "Type": "Gold"
-                }
-                rates["CUMHURIYETALTINI"] = {
-                    "Name": "Cumhuriyet Altını",
-                    "Buying": gram_try * 7.2,
-                    "Selling": gram_try * 7.2,
-                    "Change": 0,
-                    "Type": "Gold"
-                }
-                rates["ATAALTIN"] = {
-                    "Name": "Ata Altın",
-                    "Buying": gram_try * 7.2,
-                    "Selling": gram_try * 7.2,
-                    "Change": 0,
-                    "Type": "Gold"
-                }
-        except Exception as e:
-            logger.debug(f"TradingView GOLD hatası: {e}")
-        
-        # Gümüş
-        try:
-            handler = TA_Handler(
-                symbol="SILVER",
-                screener="forex",
-                exchange="TVC",
-                interval=Interval.INTERVAL_1_MINUTE
-            )
-            analysis = handler.get_analysis()
-            silver_usd = analysis.indicators.get("close", 0)
-            
-            usd_try = rates.get("USD", {}).get("Selling", 0)
-            
-            if silver_usd > 0 and usd_try > 0:
-                gram_try = (silver_usd * usd_try) / 31.1035
-                rates["GUMUS"] = {
-                    "Name": "Gümüş",
-                    "Buying": gram_try,
-                    "Selling": gram_try,
-                    "Change": 0,
-                    "Type": "Silver"
-                }
-        except Exception as e:
-            logger.debug(f"TradingView SILVER hatası: {e}")
-        
-        if rates:
-            logger.info(f"✅ [TradingView] {len(rates)} ürün çekildi")
-            return {"Rates": rates}
-        
-        return None
-        
-    except ImportError:
-        logger.error("❌ tradingview-ta kütüphanesi yok! pip install tradingview-ta")
-        return None
-    except Exception as e:
-        logger.error(f"❌ TradingView genel hata: {e}")
-        return None
 
 # ======================================
 # V5 FETCH
@@ -252,7 +163,10 @@ def fetch_from_v5() -> Optional[dict]:
             headers={"User-Agent": "KuraBak/Mobile"}
         )
         if resp.status_code == 200:
+            logger.info("✅ [V5] Veri başarıyla çekildi")
             return resp.json()
+        else:
+            logger.warning(f"⚠️ [V5] HTTP {resp.status_code}")
     except Exception as e:
         logger.warning(f"⚠️ V5 Fetch Error: {str(e)[:50]}")
     return None
@@ -303,7 +217,7 @@ def process_data_mobile_optimized(data: dict):
 
 def calculate_summary(all_items: List[dict]) -> dict:
     """
-    🔥 YENİ VERSİYON: Tüm varlıklardan (Döviz + Altın + Gümüş) özet hesapla
+    🔥 Tüm varlıklardan (Döviz + Altın + Gümüş) özet hesapla
     
     KURALLAR:
     - Tüm piyasa yükseliyorsa (en düşük bile pozitif) → loser yok
@@ -351,22 +265,36 @@ def calculate_summary(all_items: List[dict]) -> dict:
         return {}
 
 # ======================================
-# BANNER
+# BANNER (ÖNCELİK DÜZELTMESİ!)
 # ======================================
 
 def determine_banner_message() -> Optional[str]:
-    """Banner öncelik: Mute > Manuel > Takvim"""
+    """
+    🔥 Banner Öncelik Sırası (DÜZELTİLDİ):
+    1. Manuel Duyuru (Telegram /duyuru) [En yüksek öncelik]
+    2. Sistem Mute kontrolü
+    3. Takvim Otomatik Mesajı (get_todays_banner) [Otomatik banner]
+    
+    NOT: Worker'ın market_msg'si artık banner olarak kullanılmıyor!
+    """
+    # 1. Sistem susturulmuş mu?
     if get_cache("system_mute"):
         logger.info("🤫 [BANNER] Sistem susturulmuş")
         return None
+    
+    # 2. Manuel banner var mı? (En yüksek öncelik)
     manual_banner = get_cache("system_banner")
     if manual_banner:
         logger.info(f"📢 [BANNER] Manuel: {manual_banner}")
         return manual_banner
+    
+    # 3. Takvim otomatik mesajı
     auto_banner = get_todays_banner()
     if auto_banner:
         logger.info(f"📅 [BANNER] Otomatik: {auto_banner}")
         return auto_banner
+    
+    # 4. Hiçbiri yok
     return None
 
 # ======================================
@@ -465,7 +393,7 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 def update_financial_data():
     """
     Her 2 dakikada bir çalışır.
-    V5 -> TradingView -> Backup
+    V5 API (Tek Kaynak) → Backup
     
     🔥 YENİ: Summary artık currencies cache'ine gömülü (Tek kaynak prensibi)
     """
@@ -500,8 +428,8 @@ def update_financial_data():
                 set_cache(key, data, ttl=0)
         return True
     
-    # 3. Veri çek
-    logger.info("🔄 [WORKER] Piyasa açık, veri çekiliyor...")
+    # 3. Veri çek (V5 ONLY)
+    logger.info("🔄 [WORKER] Piyasa açık, V5'ten veri çekiliyor...")
     
     telegram_monitor = None
     try:
@@ -512,38 +440,13 @@ def update_financial_data():
     
     was_system_down = get_cache("system_was_down") or False
     
-    # Aktif kaynağı al
-    active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
+    # V5 API'den veri çek
+    data_raw = fetch_from_v5()
+    source = "V5"
     
-    data_raw = None
-    source = None
-    
-    # Kaynak seçimine göre öncelik
-    if active_source == "tradingview":
-        # Manuel TradingView seçilmiş
-        data_raw = fetch_from_tradingview()
-        if data_raw:
-            source = "TradingView"
-        else:
-            # TradingView başarısız, V5'e geç
-            logger.warning("⚠️ TradingView başarısız, V5'e geçiliyor...")
-            data_raw = fetch_from_v5()
-            if data_raw:
-                source = "V5"
-    else:
-        # Varsayılan: V5 -> TradingView
-        data_raw = fetch_from_v5()
-        if data_raw:
-            source = "V5"
-        else:
-            logger.warning("⚠️ V5 başarısız, TradingView'e geçiliyor...")
-            data_raw = fetch_from_tradingview()
-            if data_raw:
-                source = "TradingView"
-    
-    # Backup
+    # Backup kontrolü
     if not data_raw:
-        logger.error("🔴 TÜM KAYNAKLAR ÇÖKTÜ! Backup aranıyor...")
+        logger.error("🔴 V5 API ÇÖKTÜ! Backup aranıyor...")
         set_cache("system_was_down", True, ttl=0)
         
         backup_data = get_cache("kurabak:backup:all")
@@ -551,7 +454,7 @@ def update_financial_data():
             logger.warning("✅ Backup verisi yüklendi")
             if telegram_monitor:
                 telegram_monitor.send_message(
-                    "⚠️ *TÜM KAYNAKLAR ÇÖKTÜ!*\n\nSistem yedeği kullanıyor.",
+                    "⚠️ *V5 API ÇÖKTÜ!*\n\nSistem yedeği kullanıyor.",
                     "critical"
                 )
             for key in ['currencies', 'golds', 'silvers']:
@@ -620,11 +523,11 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
         
-        # 🔥 YENİ: Tüm varlıkları birleştir ve summary hesapla
+        # 🔥 Tüm varlıkları birleştir ve summary hesapla
         all_items = currencies + golds + silvers
         summary = calculate_summary(all_items)
         
-        Metrics.inc(source.lower().replace(" ", "_"))
+        Metrics.inc('v5')
         
         update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         banner_message = determine_banner_message()
