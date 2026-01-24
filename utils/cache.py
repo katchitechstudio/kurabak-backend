@@ -1,5 +1,5 @@
 """
-Redis Cache Utility - PRODUCTION READY (REDIS + DISK BACKUP) 🚀
+Redis Cache Utility - PRODUCTION READY V4.4 🚀
 =======================================================
 ✅ CONNECTION POOL: 50 bağlantı sınırını patlatmaz (max=20)
 ✅ INFINITE TTL SUPPORT: ttl=0 gönderilirse veri ASLA silinmez
@@ -9,6 +9,7 @@ Redis Cache Utility - PRODUCTION READY (REDIS + DISK BACKUP) 🚀
 ✅ DISK BACKUP: Restart sonrası veri kaybını önler
 ✅ AUTO-RECOVERY: Redis çökse bile disk'ten veriyi yükler
 ✅ get_redis_client() EXPORT: FCM notification desteği
+✅ CLEANUP SYSTEM: 7 günden eski backup'ları otomatik sil
 """
 
 import os
@@ -18,6 +19,7 @@ import time
 import threading
 from typing import Optional, Any, Dict
 from pathlib import Path
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +122,94 @@ class DiskBackup:
         except Exception as e:
             logger.error(f"❌ Disk listeleme hatası: {e}")
             return []
+    
+    def cleanup_old_backups(self, max_age_days: int = 7) -> int:
+        """
+        🧹 Eski backup dosyalarını temizle
+        
+        Args:
+            max_age_days: Kaç günden eski dosyalar silinsin (varsayılan 7)
+            
+        Returns:
+            Silinen dosya sayısı
+        """
+        try:
+            with self._lock:
+                deleted_count = 0
+                cutoff_time = time.time() - (max_age_days * 86400)
+                
+                for file_path in self.backup_dir.glob("*.json"):
+                    try:
+                        # Dosyayı oku ve timestamp'ini kontrol et
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            backup = json.load(f)
+                            timestamp = backup.get('timestamp', 0)
+                        
+                        # Eski mi?
+                        if timestamp < cutoff_time:
+                            file_path.unlink()
+                            deleted_count += 1
+                            age_days = (time.time() - timestamp) / 86400
+                            logger.info(f"🗑️ Eski backup silindi: {file_path.name} ({age_days:.1f} gün)")
+                    
+                    except Exception as e:
+                        logger.warning(f"⚠️ Dosya temizleme hatası [{file_path.name}]: {e}")
+                        continue
+                
+                if deleted_count > 0:
+                    logger.info(f"✅ {deleted_count} adet eski backup temizlendi!")
+                
+                return deleted_count
+        
+        except Exception as e:
+            logger.error(f"❌ Cleanup hatası: {e}")
+            return 0
+    
+    def get_backup_stats(self) -> dict:
+        """
+        📊 Backup istatistiklerini getir
+        
+        Returns:
+            {
+                'total_files': int,
+                'total_size_mb': float,
+                'oldest_backup': datetime,
+                'newest_backup': datetime
+            }
+        """
+        try:
+            with self._lock:
+                files = list(self.backup_dir.glob("*.json"))
+                
+                if not files:
+                    return {
+                        'total_files': 0,
+                        'total_size_mb': 0,
+                        'oldest_backup': None,
+                        'newest_backup': None
+                    }
+                
+                total_size = sum(f.stat().st_size for f in files)
+                timestamps = []
+                
+                for file_path in files:
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            backup = json.load(f)
+                            timestamps.append(backup.get('timestamp', 0))
+                    except:
+                        continue
+                
+                return {
+                    'total_files': len(files),
+                    'total_size_mb': round(total_size / (1024 * 1024), 2),
+                    'oldest_backup': datetime.fromtimestamp(min(timestamps)) if timestamps else None,
+                    'newest_backup': datetime.fromtimestamp(max(timestamps)) if timestamps else None
+                }
+        
+        except Exception as e:
+            logger.error(f"❌ Stats hatası: {e}")
+            return {'total_files': 0, 'total_size_mb': 0, 'oldest_backup': None, 'newest_backup': None}
 
 # Global Disk Backup
 disk_backup = DiskBackup()
@@ -460,6 +550,47 @@ def flush_all_cache() -> bool:
     logger.warning("🧹 Disk Backup temizlendi!")
     
     return success or True
+
+
+# ======================================
+# 🧹 TEMİZLİK FONKSİYONU (PUBLIC API)
+# ======================================
+
+def cleanup_old_disk_backups(max_age_days: int = 7) -> dict:
+    """
+    🧹 Eski disk backup'larını temizle
+    
+    Args:
+        max_age_days: Kaç günden eski dosyalar silinsin (varsayılan 7)
+        
+    Returns:
+        {
+            'deleted_count': int,
+            'before_stats': dict,
+            'after_stats': dict
+        }
+    """
+    # Önceki durum
+    before_stats = disk_backup.get_backup_stats()
+    
+    # Temizlik yap
+    deleted_count = disk_backup.cleanup_old_backups(max_age_days)
+    
+    # Sonraki durum
+    after_stats = disk_backup.get_backup_stats()
+    
+    return {
+        'deleted_count': deleted_count,
+        'before_stats': before_stats,
+        'after_stats': after_stats
+    }
+
+
+def get_disk_backup_stats() -> dict:
+    """
+    📊 Disk backup istatistiklerini getir
+    """
+    return disk_backup.get_backup_stats()
 
 
 # ======================================
