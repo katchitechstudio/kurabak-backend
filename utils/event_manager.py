@@ -115,17 +115,19 @@ def get_todays_events() -> List[Dict[str, str]]:
     tr_holidays = get_holidays()
     if tr_holidays and today in tr_holidays:
         holiday_name = tr_holidays.get(today)
+        # 🔥 EMOJİ SONDA
         events.append({
             "type": "bayram",
-            "message": f"🎉 {holiday_name} Kutlu Olsun!",
+            "message": f"{holiday_name} Kutlu Olsun! 🎉",
             "date": today_str
         })
     
     # 3. Enflasyon Günü
     if is_inflation_day(today):
+        # 🔥 📢 EMOJİSİ KALDIRILDI
         events.append({
             "type": "inflation",
-            "message": "📢 Bugün saat 10:00'da Enflasyon Verisi (TÜFE) açıklanacak!",
+            "message": "Bugün saat 10:00'da Enflasyon Verisi (TÜFE) açıklanacak!",
             "date": today_str
         })
     
@@ -163,24 +165,28 @@ def get_todays_banner() -> Optional[str]:
     tr_holidays = get_holidays()
     if tr_holidays and today in tr_holidays:
         holiday_name = tr_holidays.get(today)
-        msg = f"🎉 {holiday_name} Kutlu Olsun!"
+        # 🔥 EMOJİ SONDA
+        msg = f"{holiday_name} Kutlu Olsun! 🎉"
         logger.info(f"📅 [BAYRAM] {msg}")
         return msg
     
     # --- 3. ENFLASYON GÜNÜ ---
     if is_inflation_day(today):
-        msg = "📢 Bugün saat 10:00'da Enflasyon Verisi (TÜFE) açıklanacak!"
+        # 🔥 📢 EMOJİSİ KALDIRILDI
+        msg = "Bugün saat 10:00'da Enflasyon Verisi (TÜFE) açıklanacak!"
         logger.info(f"📅 [ENFLASYON] {msg}")
         return msg
     
     # --- 4. PİYASA KAPALI MI? (Hafta Sonu) ---
     # Cumartesi (5) - Pazar (6) tüm gün kapalı
     if weekday == 5 or weekday == 6:
-        return "🌙 Piyasalar kapalı, iyi hafta sonları!"
+        # 🔥 TAM MESAJ + EMOJİ SONDA
+        return "Piyasalar kapalı, iyi hafta sonları! 🌙"
     
     # Cuma akşam 18:00 sonrası
     if weekday == 4 and current_hour >= 18:
-        return "🌙 Piyasalar kapandı, iyi hafta sonları!"
+        # 🔥 TAM MESAJ + EMOJİ SONDA
+        return "Piyasalar kapandı, iyi hafta sonları! 🌙"
     
     # --- 5. HİÇBİR ŞEY YOK ---
     return None
