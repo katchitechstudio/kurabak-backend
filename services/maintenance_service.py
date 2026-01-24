@@ -1,13 +1,15 @@
 """
-Maintenance Service - PRODUCTION READY V4.0 🚧
+Maintenance Service - PRODUCTION READY V4.4 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
-✅ TRADINGVIEW: Yedek kaynak desteği (V3/V4 kaldırıldı)
+✅ API V5: Tek kaynak sistemi
 ✅ BANNER SİSTEMİ: Uygulama tarafına özel mesaj gönderme
-✅ SCHEDULER: Worker + Snapshot + Şef + Takvim
+✅ SCHEDULER: Worker + Snapshot + Şef + Takvim + Push Notification
 ✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ THREAD-SAFE: Güvenli veri erişimi
 ✅ SMART RECOVERY: Sistem çökerse otomatik kurtarma
+✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
+✅ CLEANUP SYSTEM: Her gün eski backup'ları temizle
 """
 
 import logging
@@ -325,6 +327,61 @@ def daily_report():
         logger.error(f"❌ [RAPOR] Hata: {e}")
 
 
+def push_notification_daily():
+    """
+    🔔 GÜNLÜK PUSH NOTIFICATION
+    Her gün 12:00'de Firebase üzerinden günlük özet gönderir.
+    """
+    try:
+        logger.info("🔔 [PUSH] Günlük push notification hazırlanıyor...")
+        
+        from utils.notification_service import send_daily_summary
+        
+        # Günlük özeti gönder
+        result = send_daily_summary()
+        
+        if result.get('success'):
+            logger.info(f"✅ [PUSH] Özet gönderildi ({result.get('recipient_count', 0)} kullanıcı)")
+        else:
+            logger.warning(f"⚠️ [PUSH] Gönderim başarısız: {result.get('error')}")
+        
+    except Exception as e:
+        logger.error(f"❌ [PUSH] Hata: {e}")
+
+
+def cleanup_old_backups():
+    """
+    🧹 ESKİ BACKUP TEMİZLİĞİ
+    Her gün 7 günden eski disk backup'larını siler.
+    """
+    try:
+        logger.info("🧹 [CLEANUP] Eski backup temizliği başlıyor...")
+        
+        from utils.cache import cleanup_old_disk_backups, get_disk_backup_stats
+        
+        # Önceki durum
+        before_stats = get_disk_backup_stats()
+        
+        # Temizlik yap
+        result = cleanup_old_disk_backups(max_age_days=Config.CLEANUP_BACKUP_AGE_DAYS)
+        
+        deleted_count = result.get('deleted_count', 0)
+        after_stats = result.get('after_stats', {})
+        
+        if deleted_count > 0:
+            logger.info(f"✅ [CLEANUP] {deleted_count} adet eski backup silindi")
+            logger.info(f"   📊 Önce: {before_stats.get('total_files', 0)} dosya, {before_stats.get('total_size_mb', 0)} MB")
+            logger.info(f"   📊 Sonra: {after_stats.get('total_files', 0)} dosya, {after_stats.get('total_size_mb', 0)} MB")
+        else:
+            logger.info("✅ [CLEANUP] Silinecek eski backup bulunamadı")
+        
+        # Son temizlik zamanını kaydet
+        set_cache(Config.CACHE_KEYS['cleanup_last_run'], str(time.time()), ttl=0)
+        
+    except Exception as e:
+        logger.error(f"❌ [CLEANUP] Hata: {e}")
+
+
 # ======================================
 # SCHEDULER YÖNETİMİ
 # ======================================
@@ -393,6 +450,27 @@ def start_scheduler():
         replace_existing=True
     )
     
+    # 🔔 PUSH NOTIFICATION: Her gün 12:00
+    scheduler.add_job(
+        push_notification_daily,
+        trigger=CronTrigger(
+            hour=Config.PUSH_NOTIFICATION_DAILY_HOUR,
+            minute=Config.PUSH_NOTIFICATION_DAILY_MINUTE
+        ),
+        id='push_notification',
+        name='Push Notification (Günlük Özet)',
+        replace_existing=True
+    )
+    
+    # 🧹 CLEANUP: Her gün 03:00 (Gece saatlerinde)
+    scheduler.add_job(
+        cleanup_old_backups,
+        trigger=CronTrigger(hour=3, minute=0),
+        id='cleanup',
+        name='Cleanup (Eski Backup Temizliği)',
+        replace_existing=True
+    )
+    
     # Başlat
     scheduler.start()
     logger.info("✅ Scheduler başlatıldı!")
@@ -401,6 +479,8 @@ def start_scheduler():
     logger.info("   👮 Şef: Her 10 dakikada")
     logger.info("   🗓️ Takvim: Her gün 08:00")
     logger.info("   📊 Rapor: Her gün 09:00")
+    logger.info("   🔔 Push: Her gün 12:00")
+    logger.info("   🧹 Cleanup: Her gün 03:00")
 
 
 def stop_scheduler():
@@ -436,13 +516,16 @@ def get_scheduler_status() -> Dict[str, Any]:
             })
         
         last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
+        last_cleanup_run = get_cache(Config.CACHE_KEYS['cleanup_last_run'])
         
         status = {
             'running': scheduler.running,
             'jobs': jobs,
             'last_worker_run': last_worker_run,
+            'last_cleanup_run': last_cleanup_run,
             'worker_interval': Config.UPDATE_INTERVAL,
             'alarm_interval': Config.ALARM_CHECK_INTERVAL,
+            'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active']
         }
         
