@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V4.2 (V5 ONLY - SIMPLIFIED) 🧠
+Configuration - PRODUCTION READY V4.3 🧠
 ===================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -8,6 +8,8 @@ Configuration - PRODUCTION READY V4.2 (V5 ONLY - SIMPLIFIED) 🧠
 ✅ BAKIM & SELF-HEALING ALARM SİSTEMİ
 ✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
 ✅ SUMMARY SYNC FIX: Özet currencies içinde (Sterlin sorunu çözüldü!)
+✅ AKILLI LOGLAMA: Piyasa kapalı spam önleme
+✅ GELİŞMİŞ TRACKING: Header bazlı kullanıcı takibi
 """
 import os
 
@@ -16,7 +18,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "4.2.0"  # 🔥 V5 ONLY - SIMPLIFIED
+    APP_VERSION = "4.3.0"  # 🔥 Akıllı Loglama + Gelişmiş Tracking
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -144,7 +146,11 @@ class Config:
         
         # 🔥 Firebase Push Notifications
         'fcm_tokens': 'firebase:fcm_tokens',
-        'fcm_last_notification': 'firebase:last_notification'
+        'fcm_last_notification': 'firebase:last_notification',
+        
+        # 🔥 YENİ: Akıllı Loglama & Tracking
+        'market_closed_logged': 'market:closed:logged',
+        'api_request_stats': 'api:request:stats'
     }
     
     # ======================================
