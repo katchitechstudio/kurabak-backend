@@ -1,12 +1,13 @@
 """
-Configuration - PRODUCTION READY V4.0 (TRADINGVIEW YEDEK SİSTEMİ) 🧠
+Configuration - PRODUCTION READY V4.2 (V5 ONLY - SIMPLIFIED) 🧠
 ===================================================
-✅ API V5: Ana kaynak (Primary)
-✅ TRADINGVIEW: Yedek kaynak (Fallback) - V3/V4 kaldırıldı
-✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
+✅ API V5: Tek kaynak (Primary & Only)
+✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
+✅ TELEGRAM: Rapor ve bildirim sistemi
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ BAKIM & SELF-HEALING ALARM SİSTEMİ
 ✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
+✅ SUMMARY SYNC FIX: Özet currencies içinde (Sterlin sorunu çözüldü!)
 """
 import os
 
@@ -15,59 +16,18 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "4.0.0"  # 🔥 TRADINGVIEW YEDEK SİSTEMİ
+    APP_VERSION = "4.2.0"  # 🔥 V5 ONLY - SIMPLIFIED
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
     DEFAULT_TIMEZONE = "Europe/Istanbul"
     
     # ======================================
-    # 🆕 API KAYNAKLARI (V5 + TRADINGVIEW)
+    # 🔥 API KAYNAK (V5 ONLY)
     # ======================================
-    # V5 API (Ana Kaynak - Primary)
+    # V5 API (Tek ve Ana Kaynak)
     API_V5_URL = "https://finance.truncgil.com/api/today.json"
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
-    
-    # 🆕 TRADINGVIEW (Yedek Kaynak - Fallback)
-    # TradingView sembolleri (Örnek: "USDTRY", "EURTRY", "XAUTRY")
-    TRADINGVIEW_SYMBOLS = {
-        # Dövizler (FX_IDC exchange)
-        "USD": "FX_IDC:USDTRY",
-        "EUR": "FX_IDC:EURTRY",
-        "GBP": "FX_IDC:GBPTRY",
-        "CHF": "FX_IDC:CHFTRY",
-        "CAD": "FX_IDC:CADTRY",
-        "AUD": "FX_IDC:AUDTRY",
-        "RUB": "FX_IDC:RUBTRY",
-        "SAR": "FX_IDC:SARTRY",
-        "AED": "FX_IDC:AEDTRY",
-        "KWD": "FX_IDC:KWDTRY",
-        "BHD": "FX_IDC:BHDTRY",
-        "OMR": "FX_IDC:OMRTRY",
-        "QAR": "FX_IDC:QARTRY",
-        "CNY": "FX_IDC:CNYTRY",
-        "SEK": "FX_IDC:SEKTRY",
-        "NOK": "FX_IDC:NOKTRY",
-        "PLN": "FX_IDC:PLNTRY",
-        "RON": "FX_IDC:RONTRY",
-        "CZK": "FX_IDC:CZKTRY",
-        "EGP": "FX_IDC:EGPTRY",
-        "RSD": "FX_IDC:RSDTRY",
-        "HUF": "FX_IDC:HUFTRY",
-        "BAM": "FX_IDC:BAMTRY",
-        
-        # Altın (TVC exchange)
-        "GOLD": "TVC:GOLD",  # Ons Altın (USD)
-        
-        # Gümüş (TVC exchange)
-        "SILVER": "TVC:SILVER"  # Ons Gümüş (USD)
-    }
-    
-    # TradingView timeout
-    TRADINGVIEW_TIMEOUT = 10  # 10 saniye
-    
-    # Kaynak seçimi (manuel geçiş için)
-    ACTIVE_SOURCE = "v5"  # Varsayılan: "v5" | Manuel: "tradingview"
     
     # ======================================
     # 🔥 FIREBASE PUSH NOTIFICATIONS
@@ -132,7 +92,7 @@ class Config:
     CPU_HIGH_DURATION = 300  # 5 dakika
     
     # ======================================
-    # 🗓️ TAKVİM BİLDİRİMLERİ (YENİ!)
+    # 🗓️ TAKVİM BİLDİRİMLERİ
     # ======================================
     # Takvim kontrol saati (Her gün sabah 08:00)
     CALENDAR_CHECK_HOUR = 8
@@ -160,7 +120,6 @@ class Config:
         'currencies_all': 'kurabak:currencies:all',
         'golds_all': 'kurabak:golds:all',
         'silvers_all': 'kurabak:silvers:all',
-        'summary': 'kurabak:summary',
         
         # Yedek sistemler
         'backup': 'kurabak:backup:all',
@@ -179,17 +138,13 @@ class Config:
         'alarm_last_notification': 'alarm:last_notification',
         'system_was_down': 'system_was_down',
         
-        # 🆕 TradingView Kaynak Yönetimi
-        'active_source': 'system:active_source',  # Aktif kaynak (v5/tradingview)
-        'source_switch_count': 'system:source_switch_count',  # Kaç kere geçiş yapıldı
-        
-        # 🆕 Takvim Bildirimleri
-        'calendar_last_check': 'calendar:last_check',  # Son takvim kontrolü
-        'calendar_notified_events': 'calendar:notified_events',  # Bildirim gönderilen etkinlikler
+        # Takvim Bildirimleri
+        'calendar_last_check': 'calendar:last_check',
+        'calendar_notified_events': 'calendar:notified_events',
         
         # 🔥 Firebase Push Notifications
-        'fcm_tokens': 'firebase:fcm_tokens',  # Cihaz tokenları (Set)
-        'fcm_last_notification': 'firebase:last_notification'  # Son bildirim zamanı
+        'fcm_tokens': 'firebase:fcm_tokens',
+        'fcm_last_notification': 'firebase:last_notification'
     }
     
     # ======================================
