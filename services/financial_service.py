@@ -47,7 +47,7 @@ MOBILE_GOLDS = {
 MOBILE_SILVER_CODES = ["GUMUS", "gumus", "AG", "SILVER"]
 
 # ======================================
-# 🆕 TÜRKÇE İSİM HARITALAMASI
+# 🆕 TÜRKÇE İSİM HARITALAMASI (DÜZELTİLDİ!)
 # ======================================
 
 TURKISH_NAMES = {
@@ -76,13 +76,13 @@ TURKISH_NAMES = {
     "HUF": "Macar Forinti",
     "BAM": "Bosna Markı",
     
-    # Altınlar
+    # Altınlar (🔥 DÜZELTİLDİ: Düzgün büyük/küçük harf)
     "GRA": "Gram Altın",
     "C22": "Çeyrek Altın",
     "YAR": "Yarım Altın",
     "TAM": "Tam Altın",
     "CUM": "Cumhuriyet Altını",
-    "ATA": "Ata Altın",
+    "ATA": "Atatürk Altını",
     
     # Gümüş
     "AG": "Gümüş",
@@ -128,22 +128,24 @@ def clean_money_string(value: Any) -> float:
         return 0.0
 
 def create_item(code: str, raw_item: dict, item_type: str) -> dict:
-    """Standart veri objesi - Türkçe isimlerle"""
+    """
+    Standart veri objesi - Türkçe isimlerle
+    
+    🔥 DÜZELTİLDİ: TURKISH_NAMES dictionary'si HER ZAMAN kullanılır!
+    API'den gelen büyük harfli isimler yerine düzgün Türkçe isimler
+    """
     buying = clean_money_string(raw_item.get("Buying"))
     selling = clean_money_string(raw_item.get("Selling"))
     change = clean_money_string(raw_item.get("Change"))
     if selling == 0: selling = buying
     if buying == 0: buying = selling
     
-    # 🔥 Türkçe isim al (varsa map'ten, yoksa API'den)
-    turkish_name = TURKISH_NAMES.get(code)
-    if not turkish_name:
-        # API'den gelen isim varsa onu kullan
-        turkish_name = raw_item.get("Name", code)
+    # 🔥 TÜRKÇE İSİM - HER ZAMAN DICTIONARY'DEN AL
+    turkish_name = TURKISH_NAMES.get(code, code)
     
     return {
         "code": code, 
-        "name": turkish_name,
+        "name": turkish_name,  # ✅ Artık her zaman "Gram Altın", "Çeyrek Altın" vs.
         "buying": round(buying, 4), 
         "selling": round(selling, 4),
         "rate": round(selling, 4), 
