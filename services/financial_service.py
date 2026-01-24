@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V4.3 🚀
+Financial Service - PRODUCTION READY V4.4 🚀
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -10,6 +10,8 @@ Financial Service - PRODUCTION READY V4.3 🚀
 ✅ NAME FIX: Tüm varlıklar Türkçe isimlerle gösteriliyor
 ✅ BANNER FIX: Takvim mesajları öncelikli
 ✅ AKILLI LOGLAMA: Piyasa kapalı spam önleme
+✅ CIRCUIT BREAKER: 3 hata = 60 saniye bekle, otomatik kurtarma
+✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
 """
 
 import requests
@@ -25,6 +27,234 @@ from utils.event_manager import get_todays_banner
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# ======================================
+# 🛡️ CIRCUIT BREAKER SYSTEM
+# ======================================
+
+class CircuitBreaker:
+    """
+    API hatalarını yöneten sigorta sistemi.
+    
+    STATES:
+    - CLOSED: Normal çalışma (API çağrıları yapılır)
+    - OPEN: Devre açık (API çağrıları yapılmaz, 60 saniye bekle)
+    - HALF_OPEN: Test modu (1 deneme yapılır, başarılıysa CLOSED)
+    
+    RULES:
+    - 3 kere üst üste hata → OPEN (60 saniye bekle)
+    - OPEN süresi dolunca → HALF_OPEN (1 deneme)
+    - HALF_OPEN'da başarı → CLOSED (normal moda dön)
+    - HALF_OPEN'da hata → tekrar OPEN
+    """
+    
+    def __init__(self):
+        self.state = "CLOSED"  # CLOSED | OPEN | HALF_OPEN
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self.last_open_time = 0
+        
+        # Config'den oku
+        self.failure_threshold = Config.CIRCUIT_BREAKER_FAILURE_THRESHOLD
+        self.timeout = Config.CIRCUIT_BREAKER_TIMEOUT
+        
+        # Cache'den mevcut durumu yükle
+        self._load_state()
+    
+    def _load_state(self):
+        """Redis/RAM'den mevcut durumu yükle"""
+        try:
+            state_data = get_cache(Config.CACHE_KEYS['circuit_breaker_state'])
+            if state_data:
+                self.state = state_data.get('state', 'CLOSED')
+                self.failure_count = state_data.get('failure_count', 0)
+                self.last_failure_time = state_data.get('last_failure_time', 0)
+                self.last_open_time = state_data.get('last_open_time', 0)
+                logger.info(f"🔄 [CIRCUIT] Durum yüklendi: {self.state} (Hatalar: {self.failure_count})")
+        except Exception as e:
+            logger.warning(f"⚠️ [CIRCUIT] Durum yükleme hatası: {e}")
+    
+    def _save_state(self):
+        """Mevcut durumu Redis/RAM'e kaydet"""
+        try:
+            state_data = {
+                'state': self.state,
+                'failure_count': self.failure_count,
+                'last_failure_time': self.last_failure_time,
+                'last_open_time': self.last_open_time
+            }
+            set_cache(Config.CACHE_KEYS['circuit_breaker_state'], state_data, ttl=0)
+        except Exception as e:
+            logger.warning(f"⚠️ [CIRCUIT] Durum kaydetme hatası: {e}")
+    
+    def can_attempt(self) -> bool:
+        """
+        API çağrısı yapılabilir mi?
+        
+        Returns:
+            True: Çağrı yap
+            False: Bekle, çağrı yapma
+        """
+        current_time = time.time()
+        
+        # CLOSED durumu → Her zaman çağrı yapabilir
+        if self.state == "CLOSED":
+            return True
+        
+        # OPEN durumu → Timeout doldu mu?
+        if self.state == "OPEN":
+            if current_time - self.last_open_time >= self.timeout:
+                # Timeout doldu, HALF_OPEN'a geç
+                self.state = "HALF_OPEN"
+                self._save_state()
+                logger.info("🔄 [CIRCUIT] OPEN → HALF_OPEN (Test denemesi)")
+                return True
+            else:
+                # Henüz timeout dolmadı
+                remaining = int(self.timeout - (current_time - self.last_open_time))
+                logger.debug(f"⏳ [CIRCUIT] OPEN durumda, {remaining} saniye bekle")
+                return False
+        
+        # HALF_OPEN durumu → 1 deneme yapılabilir
+        if self.state == "HALF_OPEN":
+            return True
+        
+        return False
+    
+    def record_success(self):
+        """
+        Başarılı API çağrısı kaydı
+        
+        - HALF_OPEN → CLOSED (Kurtarıldı!)
+        - CLOSED → failure_count sıfırla
+        """
+        previous_state = self.state
+        
+        if self.state == "HALF_OPEN":
+            # Test başarılı, normal moda dön
+            self.state = "CLOSED"
+            self.failure_count = 0
+            self._save_state()
+            logger.info("✅ [CIRCUIT] HALF_OPEN → CLOSED (Sistem kurtarıldı!)")
+            
+            # Telegram bildirimi gönder
+            self._send_recovery_notification()
+        
+        elif self.state == "CLOSED":
+            # Normal durumda başarı → failure_count sıfırla
+            if self.failure_count > 0:
+                logger.info(f"✅ [CIRCUIT] Başarılı çağrı, hata sayacı sıfırlandı (önceki: {self.failure_count})")
+                self.failure_count = 0
+                self._save_state()
+    
+    def record_failure(self):
+        """
+        Başarısız API çağrısı kaydı
+        
+        - failure_count artır
+        - Threshold aşıldı mı? → OPEN
+        - HALF_OPEN'da hata → tekrar OPEN
+        """
+        current_time = time.time()
+        self.failure_count += 1
+        self.last_failure_time = current_time
+        
+        previous_state = self.state
+        
+        if self.state == "HALF_OPEN":
+            # Test başarısız, tekrar OPEN
+            self.state = "OPEN"
+            self.last_open_time = current_time
+            self._save_state()
+            logger.warning(f"❌ [CIRCUIT] HALF_OPEN → OPEN (Test başarısız, {self.timeout}s bekle)")
+        
+        elif self.state == "CLOSED":
+            # Normal durumda hata sayacı
+            if self.failure_count >= self.failure_threshold:
+                # Threshold aşıldı, OPEN'a geç
+                self.state = "OPEN"
+                self.last_open_time = current_time
+                self._save_state()
+                logger.error(
+                    f"🔴 [CIRCUIT] CLOSED → OPEN "
+                    f"({self.failure_count} hata, {self.timeout}s beklenecek)"
+                )
+                
+                # Telegram bildirimi gönder
+                self._send_open_notification()
+            else:
+                # Henüz threshold'a ulaşılmadı
+                remaining = self.failure_threshold - self.failure_count
+                logger.warning(
+                    f"⚠️ [CIRCUIT] Hata kaydedildi "
+                    f"({self.failure_count}/{self.failure_threshold}, {remaining} hata kaldı)"
+                )
+                self._save_state()
+    
+    def _send_open_notification(self):
+        """Circuit OPEN olduğunda Telegram bildirimi gönder"""
+        try:
+            from utils.telegram_monitor import telegram_monitor
+            if telegram_monitor:
+                tz = pytz.timezone('Europe/Istanbul')
+                now_str = datetime.now(tz).strftime("%H:%M:%S")
+                
+                msg = (
+                    f"🔴 *CIRCUIT BREAKER AÇILDI!*\n\n"
+                    f"V5 API {self.failure_count} kere üst üste hata verdi.\n"
+                    f"⏳ Sistem {self.timeout} saniye bekleyecek.\n\n"
+                    f"🕐 Zaman: {now_str}\n"
+                    f"🔄 Otomatik kurtarma denenecek."
+                )
+                telegram_monitor.send_message(msg, level='critical')
+                logger.info("📤 [CIRCUIT] Telegram bildirimi gönderildi (OPEN)")
+        except Exception as e:
+            logger.warning(f"⚠️ [CIRCUIT] Telegram bildirimi hatası: {e}")
+    
+    def _send_recovery_notification(self):
+        """Circuit CLOSED olduğunda Telegram bildirimi gönder"""
+        try:
+            from utils.telegram_monitor import telegram_monitor
+            if telegram_monitor:
+                tz = pytz.timezone('Europe/Istanbul')
+                now_str = datetime.now(tz).strftime("%H:%M:%S")
+                
+                msg = (
+                    f"✅ *CIRCUIT BREAKER KAPANDI!*\n\n"
+                    f"V5 API tekrar çalışıyor.\n"
+                    f"Sistem normale döndü.\n\n"
+                    f"🕐 Zaman: {now_str}\n"
+                    f"🚀 Veri akışı devam ediyor."
+                )
+                telegram_monitor.send_message(msg, level='report')
+                logger.info("📤 [CIRCUIT] Telegram bildirimi gönderildi (RECOVERY)")
+        except Exception as e:
+            logger.warning(f"⚠️ [CIRCUIT] Telegram bildirimi hatası: {e}")
+    
+    def get_status(self) -> dict:
+        """
+        Circuit Breaker durumunu döner
+        
+        Returns:
+            {
+                'state': 'CLOSED' | 'OPEN' | 'HALF_OPEN',
+                'failure_count': int,
+                'last_failure_time': float,
+                'last_open_time': float,
+                'timeout': int
+            }
+        """
+        return {
+            'state': self.state,
+            'failure_count': self.failure_count,
+            'last_failure_time': self.last_failure_time,
+            'last_open_time': self.last_open_time,
+            'timeout': self.timeout,
+            'can_attempt': self.can_attempt()
+        }
+
+# Global Circuit Breaker instance
+circuit_breaker = CircuitBreaker()
 
 # ======================================
 # 📱 MOBİL UYGULAMANIN KODLARI
@@ -47,7 +277,7 @@ MOBILE_GOLDS = {
 MOBILE_SILVER_CODES = ["GUMUS", "gumus", "AG", "SILVER"]
 
 # ======================================
-# 🆕 TÜRKÇE İSİM HARITALAMASI (DÜZELTİLDİ!)
+# 🆕 TÜRKÇE İSİM HARITALAMASI
 # ======================================
 
 TURKISH_NAMES = {
@@ -76,7 +306,7 @@ TURKISH_NAMES = {
     "HUF": "Macar Forinti",
     "BAM": "Bosna Markı",
     
-    # Altınlar (🔥 DÜZELTİLDİ: Düzgün büyük/küçük harf)
+    # Altınlar
     "GRA": "Gram Altın",
     "C22": "Çeyrek Altın",
     "YAR": "Yarım Altın",
@@ -95,7 +325,7 @@ TURKISH_NAMES = {
 # ======================================
 
 class Metrics:
-    stats = {'v5': 0, 'backup': 0, 'errors': 0}
+    stats = {'v5': 0, 'backup': 0, 'errors': 0, 'circuit_breaker_trips': 0}
     
     @classmethod
     def inc(cls, key):
@@ -103,7 +333,10 @@ class Metrics:
 
     @classmethod
     def get(cls):
-        return cls.stats.copy()
+        # Circuit breaker durumunu ekle
+        stats_copy = cls.stats.copy()
+        stats_copy['circuit_breaker'] = circuit_breaker.get_status()
+        return stats_copy
 
 # ======================================
 # YARDIMCI FONKSİYONLAR
@@ -128,24 +361,18 @@ def clean_money_string(value: Any) -> float:
         return 0.0
 
 def create_item(code: str, raw_item: dict, item_type: str) -> dict:
-    """
-    Standart veri objesi - Türkçe isimlerle
-    
-    🔥 DÜZELTİLDİ: TURKISH_NAMES dictionary'si HER ZAMAN kullanılır!
-    API'den gelen büyük harfli isimler yerine düzgün Türkçe isimler
-    """
+    """Standart veri objesi - Türkçe isimlerle"""
     buying = clean_money_string(raw_item.get("Buying"))
     selling = clean_money_string(raw_item.get("Selling"))
     change = clean_money_string(raw_item.get("Change"))
     if selling == 0: selling = buying
     if buying == 0: buying = selling
     
-    # 🔥 TÜRKÇE İSİM - HER ZAMAN DICTIONARY'DEN AL
     turkish_name = TURKISH_NAMES.get(code, code)
     
     return {
         "code": code, 
-        "name": turkish_name,  # ✅ Artık her zaman "Gram Altın", "Çeyrek Altın" vs.
+        "name": turkish_name,
         "buying": round(buying, 4), 
         "selling": round(selling, 4),
         "rate": round(selling, 4), 
@@ -154,25 +381,53 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     }
 
 # ======================================
-# V5 FETCH
+# V5 FETCH (CIRCUIT BREAKER İLE)
 # ======================================
 
 def fetch_from_v5() -> Optional[dict]:
-    """V5 API'den veri çek"""
+    """
+    V5 API'den veri çek (Circuit Breaker korumalı)
+    
+    Returns:
+        dict: Başarılıysa veri
+        None: Hata varsa veya circuit açıksa
+    """
+    # Circuit Breaker kontrolü
+    if not circuit_breaker.can_attempt():
+        logger.warning("🔴 [V5] Circuit Breaker OPEN - API çağrısı yapılamıyor")
+        Metrics.inc('circuit_breaker_trips')
+        return None
+    
     try:
         resp = requests.get(
             Config.API_V5_URL,
             timeout=Config.API_V5_TIMEOUT,
             headers={"User-Agent": "KuraBak/Mobile"}
         )
+        
         if resp.status_code == 200:
+            # Başarılı çağrı
+            circuit_breaker.record_success()
             logger.info("✅ [V5] Veri başarıyla çekildi")
             return resp.json()
         else:
+            # HTTP hatası
+            circuit_breaker.record_failure()
             logger.warning(f"⚠️ [V5] HTTP {resp.status_code}")
+            return None
+            
+    except requests.Timeout:
+        circuit_breaker.record_failure()
+        logger.warning("⚠️ [V5] Timeout hatası")
+        return None
+    except requests.ConnectionError:
+        circuit_breaker.record_failure()
+        logger.warning("⚠️ [V5] Bağlantı hatası")
+        return None
     except Exception as e:
-        logger.warning(f"⚠️ V5 Fetch Error: {str(e)[:50]}")
-    return None
+        circuit_breaker.record_failure()
+        logger.warning(f"⚠️ [V5] Fetch Error: {str(e)[:50]}")
+        return None
 
 # ======================================
 # PARSER
@@ -219,37 +474,21 @@ def process_data_mobile_optimized(data: dict):
     return currencies, golds, silvers
 
 def calculate_summary(all_items: List[dict]) -> dict:
-    """
-    🔥 Tüm varlıklardan (Döviz + Altın + Gümüş) özet hesapla
-    
-    KURALLAR:
-    - Tüm piyasa yükseliyorsa (en düşük bile pozitif) → loser yok
-    - Tüm piyasa düşüyorsa (en yüksek bile negatif) → winner yok
-    - Normal durumda → ikisi de var
-    
-    Args:
-        all_items: Tüm varlıkların listesi (currencies + golds + silvers)
-        
-    Returns:
-        dict: {"winner": {...}, "loser": {...}} veya sadece biri veya hiçbiri
-    """
+    """Tüm varlıklardan özet hesapla"""
     if not all_items or len(all_items) < 2:
         return {}
     
     try:
-        # Değişim yüzdesine göre sırala
         sorted_items = sorted(all_items, key=lambda x: x.get('change_percent', 0))
         
-        loser = sorted_items[0]  # En düşük
-        winner = sorted_items[-1]  # En yüksek
+        loser = sorted_items[0]
+        winner = sorted_items[-1]
         
         result = {}
         
-        # Kaybeden kontrolü: En düşük >= 0 ise → Herkes kazanıyor, kaybeden yok
         if loser.get('change_percent', 0) < 0:
             result['loser'] = loser
         
-        # Kazanan kontrolü: En yüksek <= 0 ise → Herkes kaybediyor, kazanan yok
         if winner.get('change_percent', 0) > 0:
             result['winner'] = winner
         
@@ -268,36 +507,25 @@ def calculate_summary(all_items: List[dict]) -> dict:
         return {}
 
 # ======================================
-# BANNER (ÖNCELİK DÜZELTMESİ!)
+# BANNER
 # ======================================
 
 def determine_banner_message() -> Optional[str]:
-    """
-    🔥 Banner Öncelik Sırası (DÜZELTİLDİ):
-    1. Manuel Duyuru (Telegram /duyuru) [En yüksek öncelik]
-    2. Sistem Mute kontrolü
-    3. Takvim Otomatik Mesajı (get_todays_banner) [Otomatik banner]
-    
-    NOT: Worker'ın market_msg'si artık banner olarak kullanılmıyor!
-    """
-    # 1. Sistem susturulmuş mu?
+    """Banner öncelik sırası"""
     if get_cache("system_mute"):
         logger.info("🤫 [BANNER] Sistem susturulmuş")
         return None
     
-    # 2. Manuel banner var mı? (En yüksek öncelik)
     manual_banner = get_cache("system_banner")
     if manual_banner:
         logger.info(f"📢 [BANNER] Manuel: {manual_banner}")
         return manual_banner
     
-    # 3. Takvim otomatik mesajı
     auto_banner = get_todays_banner()
     if auto_banner:
         logger.info(f"📅 [BANNER] Otomatik: {auto_banner}")
         return auto_banner
     
-    # 4. Hiçbiri yok
     return None
 
 # ======================================
@@ -395,11 +623,7 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 def update_financial_data():
     """
     Her 2 dakikada bir çalışır.
-    V5 API (Tek Kaynak) → Backup
-    
-    🔥 YENİ V4.3: 
-    - Summary artık currencies cache'ine gömülü (Tek kaynak prensibi)
-    - Akıllı loglama: Piyasa kapalı spam önleme
+    V5 API (Tek Kaynak + Circuit Breaker) → Backup
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -419,12 +643,11 @@ def update_financial_data():
                 set_cache(key, data, ttl=0)
         return True
     
-    # 2. Hafta sonu kilidi (🔥 AKILLI LOGLAMA)
+    # 2. Hafta sonu kilidi (Akıllı loglama)
     if now.weekday() == 5 or (now.weekday() == 6 and now.hour < 23):
-        # 🔥 YENİ: Akıllı loglama - İlk kez kapalıysa INFO, sonrası DEBUG
         if not get_cache("market_closed_logged"):
             logger.info(f"🔒 [WORKER] Piyasa Kapalı - Hafta sonu modu başladı")
-            set_cache("market_closed_logged", "true", ttl=43200)  # 12 saat
+            set_cache("market_closed_logged", "true", ttl=43200)
         else:
             logger.debug(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')})")
         
@@ -438,12 +661,11 @@ def update_financial_data():
                 set_cache(key, data, ttl=0)
         return True
     
-    # 🔥 YENİ: Piyasa açıldığında log at ve flag temizle
     if get_cache("market_closed_logged"):
         logger.info("🔓 [WORKER] Piyasa açıldı - Normal mod başladı")
         delete_cache("market_closed_logged")
     
-    # 3. Veri çek (V5 ONLY)
+    # 3. Veri çek (V5 + Circuit Breaker)
     logger.info("🔄 [WORKER] Piyasa açık, V5'ten veri çekiliyor...")
     
     telegram_monitor = None
@@ -455,7 +677,7 @@ def update_financial_data():
     
     was_system_down = get_cache("system_was_down") or False
     
-    # V5 API'den veri çek
+    # V5 API'den veri çek (Circuit Breaker korumalı)
     data_raw = fetch_from_v5()
     source = "V5"
     
@@ -517,11 +739,14 @@ def update_financial_data():
                     old_price = yesterday_prices[code]
                     if old_price > 0:
                         change_percent = ((current_price - old_price) / old_price) * 100
+                
+                # 🔥 YENİ TREND THRESHOLD: %5
                 trend = "NORMAL"
-                if change_percent >= 2.0:
+                if change_percent >= Config.TREND_HIGH_THRESHOLD:
                     trend = "HIGH_UP"
-                elif change_percent <= -2.0:
+                elif change_percent <= -Config.TREND_HIGH_THRESHOLD:
                     trend = "HIGH_DOWN"
+                
                 item['change_percent'] = round(change_percent, 2)
                 item['trend'] = trend
                 if current_price > 0:
@@ -537,7 +762,7 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
         
-        # 🔥 Tüm varlıkları birleştir ve summary hesapla
+        # Tüm varlıkları birleştir ve summary hesapla
         all_items = currencies + golds + silvers
         summary = calculate_summary(all_items)
         
@@ -556,11 +781,11 @@ def update_financial_data():
             "banner": banner_message
         }
         
-        # 🔥 SUMMARY ARTIK CURRENCIES İÇİNDE (Tek Kaynak Prensibi)
+        # SUMMARY CURRENCIES İÇİNDE
         set_cache(Config.CACHE_KEYS['currencies_all'], {
             **base_meta, 
             "data": currencies,
-            "summary": summary  # 🎯 İşte senkronizasyon!
+            "summary": summary
         }, ttl=0)
         
         set_cache(Config.CACHE_KEYS['golds_all'], {**base_meta, "data": golds}, ttl=0)
@@ -589,10 +814,14 @@ def update_financial_data():
             loser_code = summary.get('loser', {}).get('code', 'YOK')
             summary_info = f" | Winner: {winner_code}, Loser: {loser_code}"
         
+        # Circuit Breaker durumu
+        cb_status = circuit_breaker.get_status()
+        cb_info = f" | CB: {cb_status['state']}"
+        
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies)} Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
-            f"({banner_info}){summary_info}"
+            f"({banner_info}){summary_info}{cb_info}"
         )
         return True
         
@@ -606,4 +835,9 @@ def sync_financial_data() -> bool:
     return update_financial_data()
 
 def get_service_metrics():
+    """Metrikler + Circuit Breaker durumu"""
     return Metrics.get()
+
+def get_circuit_breaker_status():
+    """Circuit Breaker durumunu döner"""
+    return circuit_breaker.get_status()</parameter>
