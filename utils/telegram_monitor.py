@@ -1,5 +1,5 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.2 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.4 🤖
 =======================================================
 ✅ TEST SİSTEMİ: /test, /test mobil, /test detay
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
@@ -7,7 +7,10 @@ Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.2 🤖
 ✅ TÜRKÇE KARAKTER FIX: 'ı', 'ş', 'ğ', 'ü', 'ö', 'ç' otomatik düzeltme
 ✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller
 ✅ 🔒 ADMİN GÜVENLİĞİ: Sadece yetkili Telegram ID komut gönderebilir
-✅ V5 ONLY: Tek kaynak sistemi (TradingView kaldırıldı)
+✅ V5 ONLY: Tek kaynak sistemi
+✅ GÜNLÜK RAPOR ZENGİNLEŞTİRME: CPU, RAM, Disk, Circuit Breaker, Aktif kullanıcı
+✅ ÖZEL OLAY LİSTESİ: Circuit breaker, cleanup, trend detayları
+✅ /circuit KOMUTU: Circuit Breaker durumu sorgulama
 """
 
 import os
@@ -25,13 +28,14 @@ ALLOWED_ADMIN_IDS = [7101853980]
 
 class TelegramMonitor:
     """
-    Gelişmiş Telegram Bot:
-    1. RAPOR MODU: Sessiz bildirimler, günlük raporlar
+    Gelişmiş Telegram Bot V4.4:
+    1. RAPOR MODU: Sessiz bildirimler, zengin günlük raporlar
     2. KOMUT MODU: Komutları dinler ve cevaplar
     3. TEST SİSTEMİ: Otomatik sistem sağlık kontrolü
     4. TAKVİM SİSTEMİ: Etkinlik bildirimleri
     5. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
     6. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
+    7. ZENGİN RAPORLAMA: CPU, RAM, Disk, Circuit Breaker, özel olaylar
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -93,37 +97,137 @@ class TelegramMonitor:
         return False
 
     def send_daily_report(self, metrics: Dict[str, Any]):
-        """🌙 GÜN SONU MODERN RAPORU"""
-        now = datetime.now()
-        date_str = now.strftime("%d.%m.%Y")
+        """
+        🌙 GÜN SONU ZENGİN RAPORU V4.4
         
-        total = metrics.get('v5', 0) + metrics.get('backup', 0)
-        success_rate = 100
-        if total > 0:
-            success_rate = ((total - metrics.get('errors', 0)) / total) * 100
+        YENİ ÖZELLİKLER:
+        - CPU, RAM, Disk kullanımı
+        - Aktif kullanıcı sayısı
+        - Circuit Breaker durumu
+        - Cleanup bilgisi
+        - Özel olaylar listesi
+        """
+        try:
+            now = datetime.now()
+            date_str = now.strftime("%d.%m.%Y")
+            
+            # API Metrikleri
+            total = metrics.get('v5', 0) + metrics.get('backup', 0)
+            success_rate = 100
+            if total > 0:
+                success_rate = ((total - metrics.get('errors', 0)) / total) * 100
 
-        status_icon = "🟢" if success_rate > 95 else "🟡" if success_rate > 80 else "🔴"
-        
-        report = (
-            f"🌙 *GÜN SONU RAPORU* | {date_str}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            status_icon = "🟢" if success_rate > 95 else "🟡" if success_rate > 80 else "🔴"
             
-            f"📊 *GENEL DURUM*\n"
-            f"• Durum: {status_icon} *{'Mükemmel' if success_rate > 95 else 'Stabil'}*\n"
-            f"• Başarı Oranı: *%{success_rate:.1f}*\n"
-            f"• Toplam İşlem: *{total}*\n\n"
+            # Sistem Metrikleri
+            cpu = psutil.cpu_percent(interval=1)
+            ram = psutil.virtual_memory().percent
+            disk = psutil.disk_usage('/').percent
             
-            f"🔌 *KAYNAK KULLANIMI*\n"
-            f"• 🚀 V5 API: `{metrics.get('v5', 0)}`\n"
-            f"• 📦 Backup: `{metrics.get('backup', 0)}`\n\n"
+            cpu_icon = "🟢" if cpu < 70 else "🟡" if cpu < 85 else "🔴"
+            ram_icon = "🟢" if ram < 75 else "🟡" if ram < 90 else "🔴"
+            disk_icon = "🟢" if disk < 80 else "🟡" if disk < 90 else "🔴"
             
-            f"🛡️ *GÜVENLİK & HATALAR*\n"
-            f"• Hatalar: `{metrics.get('errors', 0)}`\n\n"
+            # Aktif Kullanıcılar
+            try:
+                from utils.cache import get_cache_keys
+                online_keys = get_cache_keys("online_user:*")
+                active_users = len(online_keys)
+            except:
+                active_users = 0
             
-            f"_KuraBak Backend v4.2 • {now.strftime('%H:%M')}_"
-        )
-        
-        self.send_message(report, level='report')
+            # Circuit Breaker Durumu
+            cb_status = metrics.get('circuit_breaker', {})
+            cb_state = cb_status.get('state', 'UNKNOWN')
+            cb_failures = cb_status.get('failure_count', 0)
+            
+            cb_icon = "🟢" if cb_state == "CLOSED" else "🟡" if cb_state == "HALF_OPEN" else "🔴"
+            cb_text = f"{cb_icon} {cb_state}"
+            if cb_failures > 0:
+                cb_text += f" ({cb_failures} hata)"
+            
+            # Özel Olaylar
+            special_events = []
+            
+            # Circuit Breaker olayları
+            if cb_state == "OPEN":
+                special_events.append("🔴 Circuit Breaker açıldı (API hatası)")
+            elif cb_state == "HALF_OPEN":
+                special_events.append("🟡 Circuit Breaker test modunda")
+            
+            # Circuit breaker trip sayısı
+            cb_trips = metrics.get('circuit_breaker_trips', 0)
+            if cb_trips > 0:
+                special_events.append(f"⚡ Circuit Breaker {cb_trips} kez tetiklendi")
+            
+            # Cleanup bilgisi
+            try:
+                from utils.cache import get_cache, get_disk_backup_stats
+                from config import Config
+                
+                cleanup_last_run = get_cache(Config.CACHE_KEYS.get('cleanup_last_run'))
+                
+                if cleanup_last_run:
+                    cleanup_time = datetime.fromtimestamp(float(cleanup_last_run))
+                    if cleanup_time.date() == now.date():
+                        backup_stats = get_disk_backup_stats()
+                        special_events.append(
+                            f"🧹 Cleanup çalıştı: {backup_stats.get('total_files', 0)} dosya, "
+                            f"{backup_stats.get('total_size_mb', 0)} MB"
+                        )
+            except:
+                pass
+            
+            # Rapor Oluştur
+            report_lines = [
+                f"🌙 *GÜN SONU RAPORU* | {date_str}",
+                f"━━━━━━━━━━━━━━━━━━━━\n",
+                
+                f"📊 *GENEL DURUM*",
+                f"• Durum: {status_icon} *{'Mükemmel' if success_rate > 95 else 'Stabil'}*",
+                f"• Başarı Oranı: *%{success_rate:.1f}*",
+                f"• Toplam İşlem: *{total}*\n",
+                
+                f"💻 *SİSTEM KAYNAKLARI*",
+                f"• {cpu_icon} CPU: *%{cpu:.1f}*",
+                f"• {ram_icon} RAM: *%{ram:.1f}*",
+                f"• {disk_icon} Disk: *%{disk:.1f}*\n",
+                
+                f"🔌 *API & KAYNAK*",
+                f"• 🚀 V5 API: `{metrics.get('v5', 0)}`",
+                f"• 📦 Backup: `{metrics.get('backup', 0)}`",
+                f"• 🛡️ Circuit Breaker: {cb_text}\n",
+                
+                f"👥 *KULLANICILAR*",
+                f"• Aktif Kullanıcı: *{active_users}*",
+                f"  _(Son 5 dakika)_\n",
+                
+                f"🛡️ *GÜVENLİK & HATALAR*",
+                f"• Hatalar: `{metrics.get('errors', 0)}`"
+            ]
+            
+            # Özel Olaylar Ekle
+            if special_events:
+                report_lines.append(f"\n🔔 *ÖZEL OLAYLAR*")
+                for event in special_events:
+                    report_lines.append(f"• {event}")
+            
+            # Footer
+            report_lines.append(f"\n_KuraBak Backend v4.4 • {now.strftime('%H:%M')}_")
+            
+            report = "\n".join(report_lines)
+            
+            self.send_message(report, level='report')
+            
+        except Exception as e:
+            logger.error(f"❌ Günlük rapor hatası: {e}")
+            # Basit fallback rapor
+            self.send_message(
+                f"🌙 *GÜN SONU RAPORU*\n\n"
+                f"⚠️ Detaylı rapor oluşturulamadı\n"
+                f"Hata: {str(e)[:100]}",
+                level='report'
+            )
 
     def send_calendar_notification(self, event_name: str, event_date: str):
         """📅 TAKVİM ETKİNLİK BİLDİRİMİ"""
@@ -132,7 +236,7 @@ class TelegramMonitor:
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📌 *Etkinlik:* {event_name}\n"
             f"🗓️ *Tarih:* {event_date}\n\n"
-            f"ℹ️ Banner otomatik olarak aktif edilecek (09:00)."
+            f"ℹ️ Banner otomatik olarak aktif edilecek."
         )
         self.send_message(msg, level='report')
 
@@ -146,7 +250,10 @@ class TelegramMonitor:
             f"💾 *Backup:* 15 dakikalık otomatik\n"
             f"🤖 *Self-Healing:* Aktif\n"
             f"🗓️ *Takvim:* Aktif\n"
-            f"🧪 *Test:* /test komutu aktif\n\n"
+            f"🧪 *Test:* /test komutu aktif\n"
+            f"🛡️ *Circuit Breaker:* Aktif (3 hata = 60s)\n"
+            f"🔔 *Push Notification:* Her gün 12:00\n"
+            f"🧹 *Cleanup:* Her gün 03:00\n\n"
             f"✅ Tüm sistemler hazır!"
         )
         self.send_message(msg, level='report')
@@ -229,6 +336,8 @@ class TelegramMonitor:
                         self._handle_bakim(text)
                     elif text.startswith('/test'):
                         self._handle_test(text)
+                    elif text == '/circuit':
+                        self._handle_circuit()
                     elif text.startswith('/'):
                         self._send_help()
                 
@@ -257,9 +366,64 @@ class TelegramMonitor:
             "`/durum` - Sistem sağlık raporu\n"
             "`/online` - Aktif kullanıcı\n"
             "`/temizle` - Cache temizliği\n"
-            "`/analiz` - Sistem analizi\n\n"
+            "`/analiz` - Sistem analizi\n"
+            "`/circuit` - Circuit Breaker durumu\n\n"
             "🔒 _Bu komutlar sadece yetkili admin tarafından kullanılabilir._"
         )
+
+    def _handle_circuit(self):
+        """🛡️ Circuit Breaker Durumu"""
+        try:
+            from services.financial_service import get_circuit_breaker_status
+            
+            status = get_circuit_breaker_status()
+            
+            state = status.get('state', 'UNKNOWN')
+            failures = status.get('failure_count', 0)
+            can_attempt = status.get('can_attempt', False)
+            timeout = status.get('timeout', 0)
+            
+            # Icon ve durum
+            if state == "CLOSED":
+                icon = "🟢"
+                status_text = "Normal Çalışıyor"
+                detail = "API çağrıları yapılıyor"
+            elif state == "OPEN":
+                icon = "🔴"
+                status_text = "Devre Açık"
+                last_open = status.get('last_open_time', 0)
+                if last_open:
+                    elapsed = int(time.time() - last_open)
+                    remaining = max(0, timeout - elapsed)
+                    detail = f"{remaining} saniye sonra test edilecek"
+                else:
+                    detail = f"{timeout} saniye bekleniyor"
+            elif state == "HALF_OPEN":
+                icon = "🟡"
+                status_text = "Test Modu"
+                detail = "1 deneme yapılıyor..."
+            else:
+                icon = "⚪"
+                status_text = "Bilinmiyor"
+                detail = ""
+            
+            report = (
+                f"{icon} *CIRCUIT BREAKER DURUMU*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📊 *Durum:* {status_text}\n"
+                f"🔢 *State:* `{state}`\n"
+                f"❌ *Hata Sayısı:* {failures}\n"
+                f"✅ *API Çağrısı:* {'Yapılabilir' if can_attempt else 'Yapılamaz'}\n"
+                f"⏱️ *Timeout:* {timeout} saniye\n"
+            )
+            
+            if detail:
+                report += f"\nℹ️ {detail}"
+            
+            self._send_raw(report)
+            
+        except Exception as e:
+            self._send_raw(f"❌ Circuit breaker sorgu hatası: {str(e)}")
 
     def _handle_test(self, text):
         """🧪 TEST SİSTEMİ"""
@@ -328,6 +492,20 @@ class TelegramMonitor:
             results.append(f"{cpu_status} CPU: %{cpu:.1f}")
             results.append(f"{ram_status} RAM: %{ram:.1f}")
             
+            # Circuit Breaker ekle
+            try:
+                from services.financial_service import get_circuit_breaker_status
+                cb_status = get_circuit_breaker_status()
+                state = cb_status.get('state', 'UNKNOWN')
+                if state == "CLOSED":
+                    results.append("✅ Circuit Breaker: CLOSED")
+                elif state == "OPEN":
+                    results.append("❌ Circuit Breaker: OPEN")
+                else:
+                    results.append(f"🟡 Circuit Breaker: {state}")
+            except:
+                pass
+            
             total = len(results)
             passed = sum(1 for r in results if r.startswith("✅"))
             
@@ -382,7 +560,6 @@ class TelegramMonitor:
             if silvers:
                 silver_data = silvers.get('data', [])
                 if len(silver_data) >= 1:
-                    # İsim kontrolü
                     silver_name = silver_data[0].get('name', '')
                     if silver_name == "Gümüş":
                         results.append("✅ Gümüş: 1/1 (İsim: Gümüş)")
@@ -451,7 +628,6 @@ class TelegramMonitor:
                 results.append(f"     Kaynak: {currencies.get('source', 'Unknown')}")
                 results.append(f"     Güncelleme: {currencies.get('last_update', 'Unknown')}")
                 
-                # Summary kontrolü
                 summary = currencies.get('summary', {})
                 if summary:
                     winner = summary.get('winner', {}).get('name', 'YOK')
@@ -648,7 +824,10 @@ class TelegramMonitor:
                 "⏱️ *Kontrol Sıklığı:* 1 dakika\n"
                 "🎯 *CPU Eşik:* %80\n"
                 "💾 *RAM Eşik:* %85\n"
-                "🗓️ *Takvim:* Her gün 08:00\n\n"
+                "🗓️ *Takvim:* Her gün 08:00\n"
+                "🛡️ *Circuit Breaker:* 3 hata = 60s\n"
+                "🔔 *Push Notification:* Her gün 12:00\n"
+                "🧹 *Cleanup:* Her gün 03:00\n\n"
                 "_Sistem otomatik olarak yüksek yük durumlarını tespit edip düzeltiyor._"
             )
             
