@@ -1,5 +1,5 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.4 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.5 🤖
 =======================================================
 ✅ TEST SİSTEMİ: /test, /test mobil, /test detay
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
@@ -11,6 +11,7 @@ Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.4 🤖
 ✅ GÜNLÜK RAPOR ZENGİNLEŞTİRME: CPU, RAM, Disk, Circuit Breaker, Aktif kullanıcı
 ✅ ÖZEL OLAY LİSTESİ: Circuit breaker, cleanup, trend detayları
 ✅ /circuit KOMUTU: Circuit Breaker durumu sorgulama
+✅ GÜVENLİ CACHE TEMİZLİĞİ: Redis bağlantısı korunur (V4.5)
 """
 
 import os
@@ -28,7 +29,7 @@ ALLOWED_ADMIN_IDS = [7101853980]
 
 class TelegramMonitor:
     """
-    Gelişmiş Telegram Bot V4.4:
+    Gelişmiş Telegram Bot V4.5:
     1. RAPOR MODU: Sessiz bildirimler, zengin günlük raporlar
     2. KOMUT MODU: Komutları dinler ve cevaplar
     3. TEST SİSTEMİ: Otomatik sistem sağlık kontrolü
@@ -36,6 +37,7 @@ class TelegramMonitor:
     5. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
     6. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
     7. ZENGİN RAPORLAMA: CPU, RAM, Disk, Circuit Breaker, özel olaylar
+    8. 🔐 GÜVENLİ CACHE: Redis bağlantısını koruyarak temizlik (V4.5)
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -98,7 +100,7 @@ class TelegramMonitor:
 
     def send_daily_report(self, metrics: Dict[str, Any]):
         """
-        🌙 GÜN SONU ZENGİN RAPORU V4.4
+        🌙 GÜN SONU ZENGİN RAPORU V4.5
         
         YENİ ÖZELLİKLER:
         - CPU, RAM, Disk kullanımı
@@ -106,6 +108,7 @@ class TelegramMonitor:
         - Circuit Breaker durumu
         - Cleanup bilgisi
         - Özel olaylar listesi
+        - Güvenli cache sistemi bildirimi
         """
         try:
             now = datetime.now()
@@ -213,7 +216,7 @@ class TelegramMonitor:
                     report_lines.append(f"• {event}")
             
             # Footer
-            report_lines.append(f"\n_KuraBak Backend v4.4 • {now.strftime('%H:%M')}_")
+            report_lines.append(f"\n_KuraBak Backend v4.5 • {now.strftime('%H:%M')}_")
             
             report = "\n".join(report_lines)
             
@@ -253,7 +256,8 @@ class TelegramMonitor:
             f"🧪 *Test:* /test komutu aktif\n"
             f"🛡️ *Circuit Breaker:* Aktif (3 hata = 60s)\n"
             f"🔔 *Push Notification:* Her gün 12:00\n"
-            f"🧹 *Cleanup:* Her gün 03:00\n\n"
+            f"🧹 *Cleanup:* Her gün 03:00\n"
+            f"🔐 *Güvenli Cache:* Aktif (V4.5)\n\n"
             f"✅ Tüm sistemler hazır!"
         )
         self.send_message(msg, level='report')
@@ -365,7 +369,7 @@ class TelegramMonitor:
             "📊 *RAPOR:*\n"
             "`/durum` - Sistem sağlık raporu\n"
             "`/online` - Aktif kullanıcı\n"
-            "`/temizle` - Cache temizliği\n"
+            "`/temizle` - Güvenli cache temizliği 🔐\n"
             "`/analiz` - Sistem analizi\n"
             "`/circuit` - Circuit Breaker durumu\n\n"
             "🔒 _Bu komutlar sadece yetkili admin tarafından kullanılabilir._"
@@ -759,7 +763,8 @@ class TelegramMonitor:
                 f"• Bakım: {maintenance_status}\n\n"
                 
                 f"🔒 *GÜVENLİK*\n"
-                f"• Admin Filter: `Aktif`\n\n"
+                f"• Admin Filter: `Aktif`\n"
+                f"• Güvenli Cache: `V4.5`\n\n"
                 
                 f"_Rapor Zamanı: {datetime.now().strftime('%H:%M:%S')}_"
             )
@@ -789,29 +794,112 @@ class TelegramMonitor:
             self._send_raw(f"❌ Online sayım hatası: {str(e)}")
 
     def _handle_temizle(self):
-        """Redis Cache Temizliği"""
+        """
+        🔥 GÜVENLİ Cache Temizliği (V4.5)
+        
+        ÖNCEKİ SORUN: flush_all_cache() Redis connection'ı koparıyordu
+        YENİ ÇÖZÜM: Sadece KuraBak key'lerini sil, connection'ı koru
+        """
         try:
-            from utils.cache import flush_all_cache
+            from utils.cache import get_redis_client, delete_cache
+            from config import Config
             
             self._send_raw(
-                "⚠️ *CACHE TEMİZLİĞİ*\n\n"
-                "Tüm Redis verileri silinecek!\n"
+                "⚠️ *GÜVENLİ CACHE TEMİZLİĞİ*\n\n"
+                "Sadece KuraBak cache'leri silinecek\n"
+                "(Redis bağlantısı korunacak)\n"
                 "İşlem başlatılıyor..."
             )
             
-            success = flush_all_cache()
+            deleted_count = 0
+            failed_keys = []
             
-            if success:
-                self._send_raw(
-                    "✅ *TEMİZLİK TAMAMLANDI*\n\n"
-                    "🧹 Redis tamamen temizlendi!\n"
-                    "🔄 Worker 2 dakika içinde yeni veri çekecek."
-                )
+            # Redis client'ı al
+            redis_client = get_redis_client()
+            
+            if redis_client:
+                try:
+                    # Sadece KuraBak pattern'ine uyan key'leri bul
+                    pattern = "kurabak:*"
+                    keys = redis_client.keys(pattern)
+                    
+                    if keys:
+                        # Tek tek sil (güvenli)
+                        for key in keys:
+                            try:
+                                redis_client.delete(key)
+                                deleted_count += 1
+                            except Exception as e:
+                                failed_keys.append(key.decode() if isinstance(key, bytes) else key)
+                                logger.error(f"Key silme hatası ({key}): {e}")
+                        
+                        # Başarı mesajı
+                        if deleted_count > 0:
+                            success_msg = (
+                                f"✅ *GÜVENLİ TEMİZLİK TAMAMLANDI*\n\n"
+                                f"🧹 *Silinen Key:* {deleted_count} adet\n"
+                                f"🔗 *Redis Bağlantısı:* Korundu ✅\n"
+                                f"🔄 Worker 2 dakika içinde yeni veri çekecek.\n"
+                            )
+                            
+                            if failed_keys:
+                                success_msg += f"\n⚠️ Silinemedi: {len(failed_keys)} key"
+                            
+                            self._send_raw(success_msg)
+                        else:
+                            self._send_raw(
+                                "ℹ️ *SİLİNECEK KEY YOK*\n\n"
+                                "Cache zaten boş veya key bulunamadı."
+                            )
+                    else:
+                        self._send_raw(
+                            "ℹ️ *SİLİNECEK KEY YOK*\n\n"
+                            "Cache zaten boş."
+                        )
+                        
+                except Exception as redis_error:
+                    logger.error(f"Redis key silme hatası: {redis_error}")
+                    self._send_raw(
+                        f"⚠️ *REDIS HATASI*\n\n"
+                        f"Key silme sırasında sorun oluştu:\n"
+                        f"`{str(redis_error)[:100]}`"
+                    )
             else:
-                self._send_raw("❌ Temizlik sırasında hata oluştu!")
+                # Redis yok, RAM/Disk cache'ini sil
+                logger.warning("Redis yok, alternatif temizlik yapılıyor...")
+                
+                # Config'den bilinen key'leri sil
+                try:
+                    known_keys = [
+                        Config.CACHE_KEYS.get('currencies_all'),
+                        Config.CACHE_KEYS.get('golds_all'),
+                        Config.CACHE_KEYS.get('silvers_all'),
+                        Config.CACHE_KEYS.get('yesterday_prices'),
+                        Config.CACHE_KEYS.get('last_worker_run'),
+                        'system_banner',
+                    ]
+                    
+                    for key in known_keys:
+                        if key:
+                            delete_cache(key)
+                            deleted_count += 1
+                    
+                    self._send_raw(
+                        f"✅ *RAM CACHE TEMİZLENDİ*\n\n"
+                        f"🧹 Silindi: {deleted_count} key\n"
+                        f"⚠️ Redis bağlantısı yok (RAM modu)\n"
+                        f"🔄 Worker 2 dakika içinde yeni veri çekecek."
+                    )
+                except Exception as ram_error:
+                    logger.error(f"RAM cache temizleme hatası: {ram_error}")
+                    self._send_raw(f"❌ RAM cache temizlik hatası: {str(ram_error)}")
                 
         except Exception as e:
-            self._send_raw(f"❌ Temizlik hatası: {str(e)}")
+            logger.error(f"Temizlik hatası: {e}")
+            self._send_raw(
+                f"❌ *TEMİZLİK HATASI*\n\n"
+                f"Beklenmeyen hata:\n`{str(e)[:150]}`"
+            )
 
     def _handle_analiz(self):
         """Sistem Analizi"""
@@ -827,7 +915,8 @@ class TelegramMonitor:
                 "🗓️ *Takvim:* Her gün 08:00\n"
                 "🛡️ *Circuit Breaker:* 3 hata = 60s\n"
                 "🔔 *Push Notification:* Her gün 12:00\n"
-                "🧹 *Cleanup:* Her gün 03:00\n\n"
+                "🧹 *Cleanup:* Her gün 03:00\n"
+                "🔐 *Güvenli Cache:* V4.5\n\n"
                 "_Sistem otomatik olarak yüksek yük durumlarını tespit edip düzeltiyor._"
             )
             
@@ -1004,8 +1093,19 @@ class TelegramMonitor:
                     logger.warning(f"💾 RAM yüksek ({ram}%), otomatik temizlik yapılıyor...")
                     
                     try:
-                        from utils.cache import flush_all_cache
-                        flush_all_cache()
+                        # 🔥 V4.5: Güvenli temizlik yap
+                        from utils.cache import get_redis_client
+                        
+                        redis_client = get_redis_client()
+                        if redis_client:
+                            pattern = "kurabak:*"
+                            keys = redis_client.keys(pattern)
+                            if keys:
+                                for key in keys:
+                                    try:
+                                        redis_client.delete(key)
+                                    except:
+                                        pass
                         
                         new_ram = psutil.virtual_memory().percent
                         
