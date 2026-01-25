@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V4.4 🚀
+KuraBak Backend - ENTRY POINT V4.5 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -11,6 +11,7 @@ KuraBak Backend - ENTRY POINT V4.4 🚀
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
 ✅ SUMMARY SYNC FIX: Sterlin sorunu çözüldü
 ✅ SCHEDULER STATUS FIX: Scheduler durumu artık doğru gösteriliyor
+✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü (V4.5)
 """
 import os
 import logging
@@ -157,10 +158,24 @@ def background_initialization():
         except:
             pass
 
-# Uygulama başlatıldığında arka plan thread'ini ateşle
-if os.environ.get("WERKZEUG_RUN_MAIN") != "true":  # Sadece ana proseste
+# ======================================
+# 🔥 PRODUCTION FIX: Render için thread başlatma
+# ======================================
+
+# Render üzerinde mi çalışıyoruz?
+is_render = os.environ.get("RENDER") is not None
+
+if is_render:
+    # Render'da → Her zaman başlat
+    logger.info("🚀 [Render] Production modda thread başlatılıyor...")
     init_thread = threading.Thread(target=background_initialization, daemon=True)
     init_thread.start()
+else:
+    # Local development → Sadece main process'te başlat
+    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        logger.info("💻 [Local] Development modda thread başlatılıyor...")
+        init_thread = threading.Thread(target=background_initialization, daemon=True)
+        init_thread.start()
 
 # ======================================
 # TEMEL ENDPOINTLER
@@ -190,7 +205,8 @@ def index():
             "Self-Healing Mechanism",
             "Instant Supervisor Check on Startup",
             "Summary Sync Fix (Embedded in Currencies)",
-            "Scheduler Status Fix (Real-Time State Check)"
+            "Scheduler Status Fix (Real-Time State Check)",
+            "Render Thread Fix (Production Ready)"
         ],
         "components": {
             "worker": "Her 2 dakikada veri çeker ve değişim hesaplar",
