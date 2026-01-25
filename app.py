@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V4.2 🚀
+KuraBak Backend - ENTRY POINT V4.4 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -10,6 +10,7 @@ KuraBak Backend - ENTRY POINT V4.2 🚀
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
 ✅ SUMMARY SYNC FIX: Sterlin sorunu çözüldü
+✅ SCHEDULER STATUS FIX: Scheduler durumu artık doğru gösteriliyor
 """
 import os
 import logging
@@ -188,7 +189,8 @@ def index():
             "Trend Analysis (Volatility Alert 🔥)",
             "Self-Healing Mechanism",
             "Instant Supervisor Check on Startup",
-            "Summary Sync Fix (Embedded in Currencies)"
+            "Summary Sync Fix (Embedded in Currencies)",
+            "Scheduler Status Fix (Real-Time State Check)"
         ],
         "components": {
             "worker": "Her 2 dakikada veri çeker ve değişim hesaplar",
@@ -214,12 +216,31 @@ def system_status():
     """
     Detaylı Sistem Durumu
     Şef, Worker, Snapshot ve Kaynak durumlarını gösterir
+    
+    🔥 V4.4 FIX: Scheduler durumu artık doğru gösteriliyor!
     """
     try:
-        from services.maintenance_service import get_scheduler_status
+        from services.maintenance_service import scheduler, get_scheduler_status
         from services.financial_service import get_service_metrics
         from utils.cache import get_cache
         
+        # 🔥 FIX: Scheduler durumunu DOĞRU kontrol et
+        scheduler_running = False
+        active_job_list = []
+        
+        if scheduler is not None:
+            try:
+                # APScheduler state kontrolü (1 = STATE_RUNNING)
+                from apscheduler.schedulers import STATE_RUNNING
+                scheduler_running = (scheduler.state == STATE_RUNNING)
+                
+                # Aktif job'ları al
+                if scheduler_running:
+                    active_job_list = [job.id for job in scheduler.get_jobs()]
+            except Exception as sched_err:
+                logger.warning(f"⚠️ Scheduler kontrol hatası: {sched_err}")
+        
+        # Eski fonksiyondan sadece metrics'i al
         scheduler_status = get_scheduler_status()
         metrics = get_service_metrics()
         
@@ -249,8 +270,8 @@ def system_status():
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "scheduler": {
-                "running": scheduler_status.get("running", False),
-                "active_jobs": scheduler_status.get("jobs", [])
+                "running": scheduler_running,  # 🔥 FIX: Artık gerçek durum
+                "active_jobs": active_job_list   # 🔥 FIX: Gerçek job listesi
             },
             "components": {
                 "worker": {
@@ -261,7 +282,7 @@ def system_status():
                     "status": snapshot_status
                 },
                 "controller": {
-                    "status": "🟢 Aktif" if scheduler_status.get("running") else "🔴 Durdu"
+                    "status": "🟢 Aktif" if scheduler_running else "🔴 Durdu"
                 },
                 "firebase": {
                     "status": firebase_status
