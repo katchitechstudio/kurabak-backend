@@ -1,5 +1,5 @@
 """
-Redis Cache Utility - PRODUCTION READY V4.5 🚀
+Redis Cache Utility - PRODUCTION READY V4.6 🚀
 =======================================================
 ✅ CONNECTION POOL: 50 bağlantı sınırını patlatmaz (max=20)
 ✅ INFINITE TTL SUPPORT: ttl=0 gönderilirse veri ASLA silinmez
@@ -11,6 +11,7 @@ Redis Cache Utility - PRODUCTION READY V4.5 🚀
 ✅ get_redis_client() EXPORT: FCM notification desteği
 ✅ CLEANUP SYSTEM: 7 günden eski backup'ları otomatik sil
 ✅ TIMEOUT FIX: Render Redis için yeterli bağlantı süresi (V4.5)
+✅ EAGER CONNECTION: Startup'ta hemen bağlan (V4.6)
 """
 
 import os
@@ -224,6 +225,7 @@ class RedisClient:
     Hata korumalı, Connection Pool ile yönetilen Redis istemcisi.
     🔥 YENİ: max_connections=20 ile 50 sınırını aşmaz!
     🔥 V4.5: Timeout'lar Render için optimize edildi!
+    🔥 V4.6: EAGER CONNECTION - Startup'ta hemen bağlan!
     """
     def __init__(self):
         self._client = None
@@ -234,6 +236,14 @@ class RedisClient:
         
         # Redis URL kontrolü (Env'den gelir)
         self.redis_url = os.environ.get("REDIS_URL")
+        
+        # ✅ V4.6: EAGER CONNECTION - Hemen bağlan!
+        if self.redis_url:
+            logger.info(f"🔍 [INIT] Redis URL bulundu, bağlantı kuruluyor...")
+            logger.info(f"   URL: {self.redis_url[:50]}...")
+            self._client = self._connect()
+        else:
+            logger.warning("⚠️ [INIT] REDIS_URL yok, RAM + Disk kullanılacak")
 
     def _connect(self):
         """Redis'e Connection Pool ile bağlanır"""
@@ -245,6 +255,8 @@ class RedisClient:
 
         try:
             import redis
+            
+            logger.info(f"🔍 [CONNECT] redis modülü import edildi (v{redis.__version__})")
             
             # 🔥 CONNECTION POOL (Hayati Önem!) - V4.5 TIMEOUT FIX
             self._pool = redis.ConnectionPool.from_url(
@@ -262,8 +274,12 @@ class RedisClient:
                 }
             )
             
+            logger.info("🔍 [CONNECT] Connection pool oluşturuldu")
+            
             # Pool'dan client oluştur
             client = redis.Redis(connection_pool=self._pool)
+            
+            logger.info("🔍 [CONNECT] Redis client oluşturuldu, ping atılıyor...")
             
             # Test et (10 saniye timeout ile)
             client.ping()
@@ -281,16 +297,23 @@ class RedisClient:
             if not self._connection_error_logged:
                 logger.error(f"❌ Redis bağlantı hatası: {e}")
                 logger.error(f"   Redis URL: {self.redis_url[:30]}...")  # İlk 30 karakter
+                logger.error(f"   Hata tipi: {type(e).__name__}")
                 self._connection_error_logged = True
             return None
 
     def get_client(self):
-        """Lazy connection: İlk ihtiyaç duyulduğunda bağlanır"""
+        """
+        Redis client'ı döndür
+        
+        V4.6: Artık lazy değil! __init__'te zaten bağlanmış durumda.
+        """
         if self._client:
             return self._client
             
+        # Fallback: Eğer bir şekilde None kaldıysa tekrar dene
         with self._lock:
             if not self._client:
+                logger.warning("⚠️ [GET_CLIENT] Client None, tekrar bağlanılıyor...")
                 self._client = self._connect()
             return self._client
 
