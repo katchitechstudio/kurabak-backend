@@ -1,5 +1,5 @@
 """
-Redis Cache Utility - PRODUCTION READY V4.4 🚀
+Redis Cache Utility - PRODUCTION READY V4.5 🚀
 =======================================================
 ✅ CONNECTION POOL: 50 bağlantı sınırını patlatmaz (max=20)
 ✅ INFINITE TTL SUPPORT: ttl=0 gönderilirse veri ASLA silinmez
@@ -10,6 +10,7 @@ Redis Cache Utility - PRODUCTION READY V4.4 🚀
 ✅ AUTO-RECOVERY: Redis çökse bile disk'ten veriyi yükler
 ✅ get_redis_client() EXPORT: FCM notification desteği
 ✅ CLEANUP SYSTEM: 7 günden eski backup'ları otomatik sil
+✅ TIMEOUT FIX: Render Redis için yeterli bağlantı süresi (V4.5)
 """
 
 import os
@@ -222,6 +223,7 @@ class RedisClient:
     """
     Hata korumalı, Connection Pool ile yönetilen Redis istemcisi.
     🔥 YENİ: max_connections=20 ile 50 sınırını aşmaz!
+    🔥 V4.5: Timeout'lar Render için optimize edildi!
     """
     def __init__(self):
         self._client = None
@@ -244,20 +246,29 @@ class RedisClient:
         try:
             import redis
             
-            # 🔥 CONNECTION POOL (Hayati Önem!)
+            # 🔥 CONNECTION POOL (Hayati Önem!) - V4.5 TIMEOUT FIX
             self._pool = redis.ConnectionPool.from_url(
                 self.redis_url,
                 max_connections=20,  # 🚨 SİHİRLİ AYAR
                 decode_responses=True,
-                socket_connect_timeout=3,
-                socket_timeout=3
+                socket_connect_timeout=10,  # ✅ 3→10 saniye (Render için)
+                socket_timeout=10,  # ✅ 3→10 saniye  
+                retry_on_timeout=True,  # ✅ Timeout'ta tekrar dene
+                socket_keepalive=True,  # ✅ Bağlantıyı canlı tut
+                socket_keepalive_options={
+                    6: 1,   # TCP_KEEPIDLE = 60 saniye
+                    5: 10,  # TCP_KEEPINTVL = 10 saniye
+                    4: 3    # TCP_KEEPCNT = 3 deneme
+                }
             )
             
             # Pool'dan client oluştur
             client = redis.Redis(connection_pool=self._pool)
-            client.ping()  # Test et
             
-            logger.info("✅ Redis Connection Pool başarılı. (Max: 20 bağlantı)")
+            # Test et (10 saniye timeout ile)
+            client.ping()
+            
+            logger.info("✅ Redis Connection Pool başarılı. (Max: 20 bağlantı, Timeout: 10s)")
             self._enabled = True
             return client
             
@@ -269,6 +280,7 @@ class RedisClient:
         except Exception as e:
             if not self._connection_error_logged:
                 logger.error(f"❌ Redis bağlantı hatası: {e}")
+                logger.error(f"   Redis URL: {self.redis_url[:30]}...")  # İlk 30 karakter
                 self._connection_error_logged = True
             return None
 
