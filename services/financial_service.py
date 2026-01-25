@@ -840,4 +840,4 @@ def get_service_metrics():
 
 def get_circuit_breaker_status():
     """Circuit Breaker durumunu döner"""
-    return circuit_breaker.get_status()</parameter>
+    return circuit_breaker.get_status()
