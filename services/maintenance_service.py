@@ -1,15 +1,16 @@
 """
-Maintenance Service - PRODUCTION READY V4.4 🚧
+Maintenance Service - PRODUCTION READY V4.5 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
 ✅ API V5: Tek kaynak sistemi
 ✅ BANNER SİSTEMİ: Uygulama tarafına özel mesaj gönderme
-✅ SCHEDULER: Worker + Snapshot + Şef + Takvim + Push Notification
+✅ SCHEDULER: Worker + Snapshot + Şef + Takvim + Push Notification + ALARM
 ✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ THREAD-SAFE: Güvenli veri erişimi
 ✅ SMART RECOVERY: Sistem çökerse otomatik kurtarma
 ✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
 ✅ CLEANUP SYSTEM: Her gün eski backup'ları temizle
+✅ ALARM SYSTEM: Her 5-15 dakikada alarm kontrolü
 """
 
 import logging
@@ -382,6 +383,42 @@ def cleanup_old_backups():
         logger.error(f"❌ [CLEANUP] Hata: {e}")
 
 
+def alarm_check_job():
+    """
+    🔔 ALARM KONTROLCÜ
+    Her 5-15 dakikada bir alarmları kontrol eder ve tetiklenenlere bildirim gönderir.
+    """
+    try:
+        logger.info("🔔 [ALARM] Periyodik alarm kontrolü başlıyor...")
+        
+        from services.alarm_service import check_all_alarms
+        
+        # Tüm alarmları kontrol et
+        result = check_all_alarms()
+        
+        total = result.get('total_alarms', 0)
+        checked = result.get('checked', 0)
+        triggered = result.get('triggered', 0)
+        failed = result.get('failed', 0)
+        duration_ms = result.get('duration_ms', 0)
+        
+        if total == 0:
+            logger.info("ℹ️ [ALARM] Kontrol edilecek alarm yok")
+        else:
+            logger.info(
+                f"✅ [ALARM] Kontrol tamamlandı: "
+                f"{checked}/{total} kontrol edildi, "
+                f"{triggered} tetiklendi, "
+                f"{failed} hata ({duration_ms:.2f}ms)"
+            )
+        
+        # Son kontrol zamanını kaydet
+        set_cache(Config.CACHE_KEYS['alarm_last_check'], str(time.time()), ttl=0)
+        
+    except Exception as e:
+        logger.error(f"❌ [ALARM] Kontrol hatası: {e}")
+
+
 # ======================================
 # SCHEDULER YÖNETİMİ
 # ======================================
@@ -471,6 +508,16 @@ def start_scheduler():
         replace_existing=True
     )
     
+    # 🔔 ALARM: Her 5-15 dakikada bir (Config'den okunuyor)
+    alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)  # Default: 10 dakika
+    scheduler.add_job(
+        alarm_check_job,
+        trigger=IntervalTrigger(minutes=alarm_interval_minutes),
+        id='alarm_check',
+        name='Alarm Check (Fiyat Alarmları)',
+        replace_existing=True
+    )
+    
     # Başlat
     scheduler.start()
     logger.info("✅ Scheduler başlatıldı!")
@@ -481,6 +528,7 @@ def start_scheduler():
     logger.info("   📊 Rapor: Her gün 09:00")
     logger.info("   🔔 Push: Her gün 12:00")
     logger.info("   🧹 Cleanup: Her gün 03:00")
+    logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
 
 
 def stop_scheduler():
@@ -517,14 +565,16 @@ def get_scheduler_status() -> Dict[str, Any]:
         
         last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
         last_cleanup_run = get_cache(Config.CACHE_KEYS['cleanup_last_run'])
+        last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
         
         status = {
             'running': scheduler.running,
             'jobs': jobs,
             'last_worker_run': last_worker_run,
             'last_cleanup_run': last_cleanup_run,
+            'last_alarm_check': last_alarm_check,
             'worker_interval': Config.UPDATE_INTERVAL,
-            'alarm_interval': Config.ALARM_CHECK_INTERVAL,
+            'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active']
         }
