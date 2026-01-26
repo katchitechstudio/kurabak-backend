@@ -20,6 +20,7 @@ import json
 
 from config import Config
 from utils.cache import get_cache, set_cache, get_redis_client
+from services.alarm_service import save_fcm_token_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,13 @@ def create_alarm():
         
         # Alarm anahtarı oluştur
         alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type)
+        
+        # Token hash'i hesapla
+        import hashlib
+        token_hash = hashlib.sha256(fcm_token.encode()).hexdigest()[:16]
+        
+        # Token mapping'i kaydet (alarm servis tarafından kullanılacak)
+        save_fcm_token_mapping(fcm_token, token_hash)
         
         # Duplicate kontrolü
         existing_alarm = redis_client.get(alarm_key)
@@ -494,6 +502,11 @@ def sync_alarms():
         
         fcm_token = data['fcm_token'].strip()
         alarms = data['alarms']
+        
+        # Token hash'i hesapla ve mapping'i kaydet
+        import hashlib
+        token_hash = hashlib.sha256(fcm_token.encode()).hexdigest()[:16]
+        save_fcm_token_mapping(fcm_token, token_hash)
         
         if not isinstance(alarms, list):
             return jsonify({
