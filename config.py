@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V4.4 🧠
+Configuration - PRODUCTION READY V4.5 🧠
 ===================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -7,6 +7,7 @@ Configuration - PRODUCTION READY V4.4 🧠
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ BAKIM & SELF-HEALING ALARM SİSTEMİ
 ✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
+✅ FİYAT ALARM SİSTEMİ: Redis tabanlı kullanıcı alarmları
 ✅ SUMMARY SYNC FIX: Özet currencies içinde (Sterlin sorunu çözüldü!)
 ✅ AKILLI LOGLAMA: Piyasa kapalı spam önleme
 ✅ GELİŞMİŞ TRACKING: Header bazlı kullanıcı takibi
@@ -22,7 +23,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "4.4.0"  # 🔥 Trend + Circuit Breaker + Push + Temizlik
+    APP_VERSION = "4.5.0"  # 🔔 Fiyat Alarm Sistemi Eklendi
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -96,9 +97,6 @@ class Config:
     # RAM Eşiği (Varsayılan %)
     RAM_THRESHOLD = 85  # %85
     
-    # Alarm kontrol sıklığı (Saniye) - HIZLI MÜDAHALE için 1 dakika!
-    ALARM_CHECK_INTERVAL = 60  # 1 dakika (60 saniye)
-    
     # Müdahale sonrası bekleme süresi (Saniye)
     ALARM_COOLDOWN = 300  # 5 dakika
     
@@ -107,6 +105,13 @@ class Config:
     
     # CPU yüksek kalma süresi (Saniye)
     CPU_HIGH_DURATION = 300  # 5 dakika
+    
+    # ======================================
+    # 🔔 FİYAT ALARM SİSTEMİ (Redis-based)
+    # ======================================
+    # Fiyat alarmları kontrol sıklığı (Dakika)
+    # 5-15 dakika arası önerilir (10 dakika optimal)
+    ALARM_CHECK_INTERVAL = 10  # 10 dakika
     
     # ======================================
     # 🗓️ TAKVİM BİLDİRİMLERİ
@@ -163,11 +168,14 @@ class Config:
         'fcm_tokens': 'firebase:fcm_tokens',
         'fcm_last_notification': 'firebase:last_notification',
         
-        # 🔥 YENİ: Akıllı Loglama & Tracking
+        # 🔥 Fiyat Alarm Sistemi (Yeni!)
+        'alarm_last_check': 'alarm:price:last_check',
+        
+        # 🔥 Akıllı Loglama & Tracking
         'market_closed_logged': 'market:closed:logged',
         'api_request_stats': 'api:request:stats',
         
-        # 🔥 YENİ: Circuit Breaker & Temizlik
+        # 🔥 Circuit Breaker & Temizlik
         'circuit_breaker_state': 'circuit:breaker:state',
         'circuit_breaker_failures': 'circuit:breaker:failures',
         'circuit_breaker_last_open': 'circuit:breaker:last_open',
