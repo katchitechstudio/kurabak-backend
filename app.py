@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V4.5 🚀
+KuraBak Backend - ENTRY POINT V4.6 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -7,11 +7,12 @@ KuraBak Backend - ENTRY POINT V4.5 🚀
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
 ✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
+✅ ALARM SİSTEMİ: Redis tabanlı fiyat alarmları
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
 ✅ SUMMARY SYNC FIX: Sterlin sorunu çözüldü
 ✅ SCHEDULER STATUS FIX: Scheduler durumu artık doğru gösteriliyor
-✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü (V4.5)
+✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü
 """
 import os
 import logging
@@ -25,6 +26,7 @@ from config import Config
 
 # Route'lar
 from routes.general_routes import api_bp
+from routes.alarm_routes import alarm_bp
 
 # Servisler
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
@@ -93,8 +95,9 @@ app.config.from_object(Config)
 # CORS (Çapraz Platform İzinleri)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# Blueprint'i Kaydet (API Rotaları)
+# Blueprint'leri Kaydet (API Rotaları)
 app.register_blueprint(api_bp)
+app.register_blueprint(alarm_bp)  # 🔔 ALARM ROUTES
 
 # ======================================
 # ASENKRON BAŞLATICI (CRITICAL)
@@ -108,7 +111,7 @@ def background_initialization():
     BAŞLATMA SIRASI:
     1. Firebase Admin SDK (Push Notifications)
     2. Telegram Monitor (Sessiz Mod + Komut Sistemi)
-    3. Scheduler (Worker + Snapshot + Şef + Takvim)
+    3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm)
     4. İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
     logger.info("⏳ [Arka Plan] Sistem servisleri başlatılıyor...")
@@ -130,6 +133,7 @@ def background_initialization():
     # - Gece 00:00'da Snapshot (Fotoğrafçı)
     # - Her 10dk'da Şef kontrolü (Controller)
     # - Her gün 08:00'da Takvim kontrolü
+    # - Her 5-15dk'da Alarm kontrolü (Yeni!)
     start_scheduler()
     
     # 4. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
@@ -149,6 +153,7 @@ def background_initialization():
     logger.info("   📸 Fotoğrafçı (Snapshot): Gece 00:00'da çalışacak")
     logger.info("   👮 Şef (Controller): 10 dakikada bir denetliyor")
     logger.info("   🗓️ Takvim: Her gün 08:00'da kontrol ediliyor")
+    logger.info("   🔔 Alarm: Her 5-15 dakikada kontrol ediliyor")
     logger.info("   🔥 Firebase: Push notification sistemi hazır")
     
     # Telegram'a başlangıç mesajı gönder
@@ -196,9 +201,10 @@ def index():
             "FCM Device Registration",
             "Calendar Event Notifications",
             "Firebase Push Notifications (Android)",
+            "Price Alarm System (Redis-based)",
             "15-Min Backup System",
             "No-503 Cache Architecture",
-            "Worker + Snapshot + Controller System",
+            "Worker + Snapshot + Controller + Alarm System",
             "Smart Change Calculation (Snapshot Based)",
             "Weekend Lock (Market Closed Detection)",
             "Trend Analysis (Volatility Alert 🔥)",
@@ -213,6 +219,7 @@ def index():
             "snapshot": "Gece 00:00'da referans fiyatları kaydeder",
             "controller": "Her 10 dakikada sistemi denetler ve onarır",
             "calendar": "Her gün 08:00'da etkinlikleri kontrol eder",
+            "alarm": "Her 5-15 dakikada fiyat alarmlarını kontrol eder",
             "firebase": "Push notification sistemi (Android)",
             "backup": "15 dakikada bir otomatik yedekleme"
         },
@@ -231,13 +238,14 @@ def health():
 def system_status():
     """
     Detaylı Sistem Durumu
-    Şef, Worker, Snapshot ve Kaynak durumlarını gösterir
+    Şef, Worker, Snapshot, Alarm ve Kaynak durumlarını gösterir
     
-    🔥 V4.4 FIX: Scheduler durumu artık doğru gösteriliyor!
+    🔥 V4.6: Alarm sistemi bilgisi eklendi
     """
     try:
         from services.maintenance_service import scheduler, get_scheduler_status
         from services.financial_service import get_service_metrics
+        from services.alarm_service import get_alarm_stats
         from utils.cache import get_cache
         
         # 🔥 FIX: Scheduler durumunu DOĞRU kontrol et
@@ -259,6 +267,7 @@ def system_status():
         # Eski fonksiyondan sadece metrics'i al
         scheduler_status = get_scheduler_status()
         metrics = get_service_metrics()
+        alarm_stats = get_alarm_stats()
         
         # Son worker çalışma zamanı
         last_worker_run = get_cache("kurabak:last_worker_run")
@@ -276,6 +285,18 @@ def system_status():
         snapshot_exists = bool(get_cache("kurabak:yesterday_prices"))
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
         
+        # Alarm durumu
+        last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
+        alarm_status = "🟢 Aktif"
+        if last_alarm_check:
+            time_diff = time.time() - float(last_alarm_check)
+            if time_diff > 1800:  # 30 dakikadan fazla
+                alarm_status = "🔴 Uyuyor"
+            elif time_diff > 900:  # 15 dakikadan fazla
+                alarm_status = "🟡 Yavaş"
+        else:
+            alarm_status = "⚪ Henüz Çalışmadı"
+        
         # Aktif kaynak
         data_source = "V5 API"
         
@@ -286,8 +307,8 @@ def system_status():
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "scheduler": {
-                "running": scheduler_running,  # 🔥 FIX: Artık gerçek durum
-                "active_jobs": active_job_list   # 🔥 FIX: Gerçek job listesi
+                "running": scheduler_running,
+                "active_jobs": active_job_list
             },
             "components": {
                 "worker": {
@@ -299,6 +320,13 @@ def system_status():
                 },
                 "controller": {
                     "status": "🟢 Aktif" if scheduler_running else "🔴 Durdu"
+                },
+                "alarm": {
+                    "status": alarm_status,
+                    "last_check": last_alarm_check,
+                    "total_alarms": alarm_stats.get('total_alarms', 0),
+                    "unique_users": alarm_stats.get('unique_users', 0),
+                    "alarm_types": alarm_stats.get('alarm_types', {})
                 },
                 "firebase": {
                     "status": firebase_status
