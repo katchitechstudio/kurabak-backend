@@ -1,5 +1,5 @@
 """
-Alarm Service - PRODUCTION READY V1.0 🚀
+Alarm Service - PRODUCTION READY V1.1 🚀
 ==========================================================
 ✅ PERIODIC CHECK: Her 5-15 dakikada alarmları kontrol eder
 ✅ FCM NOTIFICATION: Hedef tuttuğunda bildirim gönderir
@@ -8,6 +8,7 @@ Alarm Service - PRODUCTION READY V1.0 🚀
 ✅ BATCH PROCESSING: Tüm alarmları verimli şekilde işler
 ✅ ERROR HANDLING: Hata durumunda sistem durmasın
 ✅ LOGGING: Detaylı log sistemi
+✅ KEY FILTERING: Geçersiz key'leri otomatik filtreler
 """
 
 import logging
@@ -287,12 +288,22 @@ def check_all_alarms() -> Dict:
         # Tüm alarmları al
         all_alarm_keys = redis_client.keys("alarm:*")
         
-        # fcm_token_map key'lerini filtrele
-        alarm_keys = [
-            key for key in all_alarm_keys 
-            if not (isinstance(key, bytes) and key.startswith(b"fcm_token_map:"))
-            and not (isinstance(key, str) and key.startswith("fcm_token_map:"))
-        ]
+        # Geçersiz key'leri filtrele
+        alarm_keys = []
+        for key in all_alarm_keys:
+            # Bytes'tan string'e çevir
+            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+            
+            # Bu key'leri atla
+            if key_str.startswith("fcm_token_map:"):
+                continue
+            if key_str == "alarm:price:last_check":
+                continue
+            
+            # Geçerli alarm key formatı: alarm:HASH:CODE:TYPE (4 parça)
+            parts = key_str.split(':')
+            if len(parts) == 4:
+                alarm_keys.append(key)
         
         total_alarms = len(alarm_keys)
         
@@ -472,12 +483,19 @@ def get_alarm_stats() -> Dict:
         # Tüm alarmları al
         all_alarm_keys = redis_client.keys("alarm:*")
         
-        # fcm_token_map key'lerini filtrele
-        alarm_keys = [
-            key for key in all_alarm_keys 
-            if not (isinstance(key, bytes) and key.startswith(b"fcm_token_map:"))
-            and not (isinstance(key, str) and key.startswith("fcm_token_map:"))
-        ]
+        # Geçersiz key'leri filtrele
+        alarm_keys = []
+        for key in all_alarm_keys:
+            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+            
+            if key_str.startswith("fcm_token_map:"):
+                continue
+            if key_str == "alarm:price:last_check":
+                continue
+            
+            parts = key_str.split(':')
+            if len(parts) == 4:
+                alarm_keys.append(key)
         
         total_alarms = len(alarm_keys)
         
