@@ -39,6 +39,15 @@ def get_current_price(currency_code: str) -> Optional[float]:
         None: Fiyat bulunamazsa
     """
     try:
+        # Prefix'leri temizle (FOREX_USD → USD, SILVER_AG → AG)
+        original_code = currency_code
+        if currency_code.startswith("FOREX_"):
+            currency_code = currency_code.replace("FOREX_", "")
+        elif currency_code.startswith("SILVER_"):
+            currency_code = currency_code.replace("SILVER_", "")
+        elif currency_code.startswith("GOLD_"):
+            currency_code = currency_code.replace("GOLD_", "")
+        
         # Önce currencies'e bak
         currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
         
@@ -63,6 +72,7 @@ def get_current_price(currency_code: str) -> Optional[float]:
                 if item.get('code') == currency_code:
                     return item.get('selling', 0)
         
+        logger.debug(f"🔍 [ALARM] Fiyat aranıyor: {original_code} → {currency_code}")
         return None
         
     except Exception as e:
