@@ -33,7 +33,7 @@ from routes.alarm_routes import alarm_bp
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
 
 # Utilities
-from utils.telegram_monitor import init_telegram_monitor, telegram_instance
+from utils.telegram_monitor import init_telegram_monitor
 from utils.notification_service import register_fcm_token, send_test_notification
 
 # ======================================
@@ -240,6 +240,9 @@ def system_status():
             alarm_status = "⚪ Henüz Çalışmadı"
         
         firebase_status = "🟢 Aktif" if firebase_admin._apps else "🔴 Devre Dışı"
+        
+        # Runtime import
+        from utils.telegram_monitor import telegram_instance
         telegram_status = "🟢 Aktif" if telegram_instance else "🔴 Devre Dışı"
         
         return jsonify({
@@ -308,7 +311,9 @@ def send_feedback():
         if len(message) > 250:
             return jsonify({"success": False, "error": "Mesaj çok uzun (max 250 karakter)"}), 400
 
-        # Telegram'a Gönder (Global Instance)
+        # Telegram'a Gönder (Runtime Import - Global Instance)
+        from utils.telegram_monitor import telegram_instance
+        
         if telegram_instance:
             telegram_msg = f"📩 **YENİ GERİ BİLDİRİM**\n\n{message}"
             telegram_instance._send_raw(telegram_msg)
