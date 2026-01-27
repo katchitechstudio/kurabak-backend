@@ -1,8 +1,8 @@
 """
-KuraBak Backend - ENTRY POINT V4.6 🚀
+KuraBak Backend - ENTRY POINT V4.7 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
-✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
+✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları (FIX)
 ✅ CİHAZ KAYIT SİSTEMİ: FCM Token yönetimi
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
@@ -13,6 +13,7 @@ KuraBak Backend - ENTRY POINT V4.6 🚀
 ✅ SUMMARY SYNC FIX: Sterlin sorunu çözüldü
 ✅ SCHEDULER STATUS FIX: Scheduler durumu artık doğru gösteriliyor
 ✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü
+✅ TELEGRAM INSTANCE FIX: Global instance kullanımı
 """
 import os
 import logging
@@ -32,7 +33,7 @@ from routes.alarm_routes import alarm_bp
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
 
 # Utilities
-from utils.telegram_monitor import init_telegram_monitor, TelegramMonitor
+from utils.telegram_monitor import init_telegram_monitor, telegram_instance
 from utils.notification_service import register_fcm_token, send_test_notification
 
 # ======================================
@@ -128,19 +129,10 @@ def background_initialization():
     telegram = init_telegram_monitor()
     
     # 3. Scheduler'ı (Zamanlayıcı) Başlat
-    # Bu aynı zamanda şunları tetikler:
-    # - İlk veri çekme (Worker)
-    # - Gece 00:00'da Snapshot (Fotoğrafçı)
-    # - Her 10dk'da Şef kontrolü (Controller)
-    # - Her gün 08:00'da Takvim kontrolü
-    # - Her 5-15dk'da Alarm kontrolü (Yeni!)
     start_scheduler()
     
     # 4. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
     logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
-    logger.info("   📸 Snapshot yoksa hemen alınacak")
-    logger.info("   👷 İşçi uyuyorsa uyandırılacak")
-    logger.info("   🧪 Zehirli veri varsa temizlenecek")
     
     try:
         supervisor_check()
@@ -149,12 +141,6 @@ def background_initialization():
         logger.error(f"⚠️ [İlk Kontrol] Şef hatası: {e}")
     
     logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
-    logger.info("   👷 İşçi (Worker): 2 dakikada bir çalışıyor")
-    logger.info("   📸 Fotoğrafçı (Snapshot): Gece 00:00'da çalışacak")
-    logger.info("   👮 Şef (Controller): 10 dakikada bir denetliyor")
-    logger.info("   🗓️ Takvim: Her gün 08:00'da kontrol ediliyor")
-    logger.info("   🔔 Alarm: Her 5-15 dakikada kontrol ediliyor")
-    logger.info("   🔥 Firebase: Push notification sistemi hazır")
     
     # Telegram'a başlangıç mesajı gönder
     if telegram:
@@ -191,42 +177,10 @@ def index():
     """Health Check & Info"""
     return jsonify({
         "app": Config.APP_NAME,
-        "version": Config.APP_VERSION,
+        "version": "V4.7",
         "status": "active",
         "environment": Config.ENVIRONMENT,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "features": [
-            "V5 API (Single Reliable Source)",
-            "User Feedback System (Telegram Integration)",
-            "FCM Device Registration",
-            "Calendar Event Notifications",
-            "Firebase Push Notifications (Android)",
-            "Price Alarm System (Redis-based)",
-            "15-Min Backup System",
-            "No-503 Cache Architecture",
-            "Worker + Snapshot + Controller + Alarm System",
-            "Smart Change Calculation (Snapshot Based)",
-            "Weekend Lock (Market Closed Detection)",
-            "Trend Analysis (Volatility Alert 🔥)",
-            "Self-Healing Mechanism",
-            "Instant Supervisor Check on Startup",
-            "Summary Sync Fix (Embedded in Currencies)",
-            "Scheduler Status Fix (Real-Time State Check)",
-            "Render Thread Fix (Production Ready)"
-        ],
-        "components": {
-            "worker": "Her 2 dakikada veri çeker ve değişim hesaplar",
-            "snapshot": "Gece 00:00'da referans fiyatları kaydeder",
-            "controller": "Her 10 dakikada sistemi denetler ve onarır",
-            "calendar": "Her gün 08:00'da etkinlikleri kontrol eder",
-            "alarm": "Her 5-15 dakikada fiyat alarmlarını kontrol eder",
-            "firebase": "Push notification sistemi (Android)",
-            "backup": "15 dakikada bir otomatik yedekleme"
-        },
-        "data_source": {
-            "primary": "V5 API",
-            "backup": "15-minute rolling backup"
-        }
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }), 200
 
 @app.route('/health', methods=['GET'])
@@ -236,72 +190,57 @@ def health():
 
 @app.route('/api/system/status', methods=['GET'])
 def system_status():
-    """
-    Detaylı Sistem Durumu
-    Şef, Worker, Snapshot, Alarm ve Kaynak durumlarını gösterir
-    
-    🔥 V4.6: Alarm sistemi bilgisi eklendi
-    """
+    """Detaylı Sistem Durumu"""
     try:
         from services.maintenance_service import scheduler, get_scheduler_status
         from services.financial_service import get_service_metrics
         from services.alarm_service import get_alarm_stats
         from utils.cache import get_cache
         
-        # 🔥 FIX: Scheduler durumunu DOĞRU kontrol et
         scheduler_running = False
         active_job_list = []
         
         if scheduler is not None:
             try:
-                # APScheduler state kontrolü (1 = STATE_RUNNING)
                 from apscheduler.schedulers import STATE_RUNNING
                 scheduler_running = (scheduler.state == STATE_RUNNING)
                 
-                # Aktif job'ları al
                 if scheduler_running:
                     active_job_list = [job.id for job in scheduler.get_jobs()]
             except Exception as sched_err:
                 logger.warning(f"⚠️ Scheduler kontrol hatası: {sched_err}")
         
-        # Eski fonksiyondan sadece metrics'i al
         scheduler_status = get_scheduler_status()
         metrics = get_service_metrics()
         alarm_stats = get_alarm_stats()
         
-        # Son worker çalışma zamanı
         last_worker_run = get_cache("kurabak:last_worker_run")
         worker_status = "🟢 Aktif"
         if last_worker_run:
             time_diff = time.time() - float(last_worker_run)
-            if time_diff > 600:  # 10 dakikadan fazla
+            if time_diff > 600:
                 worker_status = "🔴 Uyuyor"
-            elif time_diff > 300:  # 5 dakikadan fazla
+            elif time_diff > 300:
                 worker_status = "🟡 Yavaş"
         else:
             worker_status = "⚪ Henüz Çalışmadı"
         
-        # Snapshot durumu
         snapshot_exists = bool(get_cache("kurabak:yesterday_prices"))
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
         
-        # Alarm durumu
         last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
         alarm_status = "🟢 Aktif"
         if last_alarm_check:
             time_diff = time.time() - float(last_alarm_check)
-            if time_diff > 1800:  # 30 dakikadan fazla
+            if time_diff > 1800:
                 alarm_status = "🔴 Uyuyor"
-            elif time_diff > 900:  # 15 dakikadan fazla
+            elif time_diff > 900:
                 alarm_status = "🟡 Yavaş"
         else:
             alarm_status = "⚪ Henüz Çalışmadı"
         
-        # Aktif kaynak
-        data_source = "V5 API"
-        
-        # Firebase durumu
         firebase_status = "🟢 Aktif" if firebase_admin._apps else "🔴 Devre Dışı"
+        telegram_status = "🟢 Aktif" if telegram_instance else "🔴 Devre Dışı"
         
         return jsonify({
             "success": True,
@@ -330,13 +269,11 @@ def system_status():
                 },
                 "firebase": {
                     "status": firebase_status
+                },
+                "telegram": {
+                    "status": telegram_status
                 }
             },
-            "data_source": {
-                "active": data_source,
-                "backup": "15-minute rolling backup"
-            },
-            "circuit_breaker": scheduler_status.get("circuit_breaker", {}),
             "metrics": metrics
         }), 200
         
@@ -357,6 +294,8 @@ def send_feedback():
     Kullanıcı geri bildirimlerini Telegram'a iletir
     Günde 1 mesaj sınırı Android tarafında kontrol edilir
     Maksimum 250 karakter sınırı
+    
+    🔥 V4.7 FIX: Global telegram_instance kullanımı
     """
     try:
         data = request.json
@@ -369,12 +308,14 @@ def send_feedback():
         if len(message) > 250:
             return jsonify({"success": False, "error": "Mesaj çok uzun (max 250 karakter)"}), 400
 
-        # Telegram'a Gönder (Anonim)
-        monitor = TelegramMonitor()
-        telegram_msg = f"📩 **YENİ GERİ BİLDİRİM**\n\n{message}"
-        monitor._send_raw(telegram_msg)
+        # Telegram'a Gönder (Global Instance)
+        if telegram_instance:
+            telegram_msg = f"📩 **YENİ GERİ BİLDİRİM**\n\n{message}"
+            telegram_instance._send_raw(telegram_msg)
+            logger.info(f"✅ [Feedback] Anonim mesaj iletildi ({len(message)} karakter)")
+        else:
+            logger.warning("⚠️ [Feedback] Telegram devre dışı, mesaj kaydedildi ama gönderilemedi")
         
-        logger.info(f"✅ [Feedback] Anonim mesaj iletildi ({len(message)} karakter)")
         return jsonify({"success": True, "message": "Mesajınız iletildi"}), 200
 
     except Exception as e:
@@ -383,9 +324,7 @@ def send_feedback():
 
 @app.route('/api/device/register', methods=['POST'])
 def register_device():
-    """
-    FCM Token kaydı (Push Notification için)
-    """
+    """FCM Token kaydı (Push Notification için)"""
     try:
         data = request.json
         token = data.get('token')
@@ -407,9 +346,7 @@ def register_device():
 
 @app.route('/api/device/test-push', methods=['GET'])
 def trigger_test_push():
-    """
-    Manuel Push Notification testi
-    """
+    """Manuel Push Notification testi"""
     try:
         result = send_test_notification()
         return jsonify(result), 200
@@ -447,6 +384,6 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"🌍 Local Sunucu Başlatılıyor: http://localhost:{port}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    logger.info(f"🚀 KuraBak Backend v{Config.APP_VERSION}")
+    logger.info(f"🚀 KuraBak Backend V4.7")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
