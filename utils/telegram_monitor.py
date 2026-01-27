@@ -1137,10 +1137,11 @@ class TelegramMonitor:
 
 
 telegram_monitor: Optional[TelegramMonitor] = None
+telegram_instance: Optional[TelegramMonitor] = None  # 🔥 app.py için global export
 
 def init_telegram_monitor():
     """Botu başlatır"""
-    global telegram_monitor
+    global telegram_monitor, telegram_instance
     
     if telegram_monitor:
         return telegram_monitor
@@ -1150,12 +1151,14 @@ def init_telegram_monitor():
 
     if token and chat_id:
         telegram_monitor = TelegramMonitor(token, chat_id)
+        telegram_instance = telegram_monitor  # 🔥 Global instance'ı set et
         telegram_monitor.start_command_listener()
         telegram_monitor.start_self_healing()
-        logger.info("✅ Telegram Monitor (Komut + Self-Healing + Test Sistemi) başlatıldı.")
+        logger.info("✅ Telegram Monitor başlatıldı.")
         return telegram_monitor
     else:
-        logger.warning("⚠️ Telegram Monitor başlatılamadı: Token veya Chat ID eksik!")
+        logger.warning("⚠️ Telegram Monitor başlatılamadı!")
+        telegram_instance = None  # 🔥 Başarısız olursa None
         return None
 
 def get_telegram_monitor() -> Optional[TelegramMonitor]:
