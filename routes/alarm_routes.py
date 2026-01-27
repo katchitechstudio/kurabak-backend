@@ -1,5 +1,5 @@
 """
-Alarm Routes - PRODUCTION READY V1.0 🚀
+Alarm Routes - PRODUCTION READY V1.1 🚀
 ==========================================================
 ✅ REDIS BASED: Hafif ve hızlı alarm storage
 ✅ FCM TOKEN BASED: Kullanıcı başına izole alarmlar
@@ -8,6 +8,7 @@ Alarm Routes - PRODUCTION READY V1.0 🚀
 ✅ DUPLICATE CHECK: Aynı döviz ve tip için tek alarm
 ✅ RATE LIMITING: Spam koruması
 ✅ VALIDATION: Fiyat ve format kontrolü
+✅ USER-FRIENDLY ERRORS: Türkçe ve anlaşılır hata mesajları
 """
 
 from flask import Blueprint, jsonify, request
@@ -239,9 +240,10 @@ def create_alarm():
         # Duplicate kontrolü
         existing_alarm = redis_client.get(alarm_key)
         if existing_alarm:
+            alarm_type_tr = "yükseliş" if alarm_type == "HIGH" else "düşüş"
             return jsonify({
                 "success": False,
-                "message": f"{currency_code} için {alarm_type} alarmı zaten var"
+                "message": f"Bu varlık için zaten bir {alarm_type_tr} alarmınız var"
             }), 409  # Conflict
         
         # Alarm verisini hazırla
