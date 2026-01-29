@@ -1,5 +1,5 @@
 """
-Event Manager - AKILLI TAKVİM SİSTEMİ V4.4 🗓️
+Event Manager - AKILLI TAKVİM SİSTEMİ V4.5 🗓️🤖
 ======================================
 ✅ BAYRAMLAR: Otomatik algılama (holidays kütüphanesi)
 ✅ TCMB & RAPORLAR: JSON dosyasından okuma
@@ -9,6 +9,7 @@ Event Manager - AKILLI TAKVİM SİSTEMİ V4.4 🗓️
 ✅ PRIORITY SYSTEM: Event önceliklendirme (90-40 arası)
 ✅ VALID_UNTIL: Zaman bazlı banner kontrolü
 ✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
+✅ 🤖 GEMINI AI: Event geçince otomatik sonuç çekme
 """
 
 import json
@@ -18,6 +19,66 @@ from datetime import datetime, date, time as dt_time
 from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
+
+# ======================================
+# 🤖 GEMINI AI ENTEGRASYONU
+# ======================================
+
+def get_gemini_result(event_query: str, cache_key: str) -> Optional[str]:
+    """
+    Gemini AI'dan event sonucunu çeker.
+    
+    Args:
+        event_query: Gemini'ye sorulacak soru
+        cache_key: Redis cache anahtarı
+        
+    Returns:
+        str: AI sonucu (örn: "TCMB faizi %47.5'te sabit tuttu")
+        None: Hata durumunda
+    """
+    try:
+        # Cache kontrolü
+        from utils.cache import get_cache, set_cache
+        cached_result = get_cache(cache_key)
+        if cached_result:
+            logger.info(f"🤖 [GEMINI] Cache'den alındı: {cache_key}")
+            return cached_result
+        
+        # Gemini API
+        import google.generativeai as genai
+        
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            logger.warning("⚠️ GEMINI_API_KEY bulunamadı!")
+            return None
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        {event_query}
+        
+        Lütfen sadece sonucu tek cümlede özetle. Açıklama yapma.
+        Örnek formatlar:
+        - "TCMB faizi %47.5'te sabit tuttu"
+        - "Enflasyon %64.77'ye yükseldi"
+        - "TCMB politika faizini 200 baz puan düşürdü"
+        
+        Sadece özet sonucu yaz, başka bir şey ekleme.
+        """
+        
+        response = model.generate_content(prompt)
+        result = response.text.strip()
+        
+        # Cache'e kaydet (24 saat)
+        set_cache(cache_key, result, expire=86400)
+        
+        logger.info(f"🤖 [GEMINI] Yeni sonuç alındı: {result}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Gemini API hatası: {e}")
+        return None
 
 # ======================================
 # BAYRAM SİSTEMİ (OTOMATIK)
@@ -46,13 +107,14 @@ def load_events_json():
     """
     events.json dosyasını okur.
     
-    YENİ FORMAT:
+    YENİ FORMAT (V4.5):
     {
       "2026-01-22": {
         "message": "⚠️ Bugün TCMB faiz kararı günü",
         "type": "macro",
         "priority": 90,
-        "valid_until": "15:00"
+        "valid_until": "15:00",
+        "query_after": "TCMB faiz kararı Ocak 2026 sonucu nedir?"
       }
     }
     
@@ -151,6 +213,8 @@ def get_todays_events() -> List[Dict[str, any]]:
     """
     Bugünün tüm etkinliklerini priority sırasına göre döndürür.
     
+    🤖 YENİ: Event süresi geçmişse Gemini'den sonuç çeker!
+    
     Returns:
         List[Dict]: [
             {
@@ -172,8 +236,36 @@ def get_todays_events() -> List[Dict[str, any]]:
     if today_str in json_events:
         event_data = json_events[today_str]
         
-        # valid_until kontrolü
-        if is_valid_at_time(event_data['valid_until'], current_time):
+        # Saat kontrolü: valid_until geçti mi?
+        time_expired = not is_valid_at_time(event_data['valid_until'], current_time)
+        
+        if time_expired and 'query_after' in event_data:
+            # 🤖 GEMINI MODU: Event geçmiş, AI'dan sonuç çek
+            cache_key = f"gemini_result:{today_str}"
+            ai_result = get_gemini_result(event_data['query_after'], cache_key)
+            
+            if ai_result:
+                # AI sonucunu göster
+                events.append({
+                    "type": "ai_result",
+                    "message": f"🔴 {ai_result}",
+                    "priority": event_data['priority'] + 5,  # AI sonucu +5 priority
+                    "valid_until": "23:59",
+                    "date": today_str
+                })
+            else:
+                # AI başarısız, fallback mesaj
+                fallback_msg = event_data['message'].replace("⚠️ Bugün", "✅").replace("günü", "açıklandı")
+                events.append({
+                    "type": event_data['type'],
+                    "message": fallback_msg,
+                    "priority": event_data['priority'],
+                    "valid_until": "23:59",
+                    "date": today_str
+                })
+        
+        elif not time_expired:
+            # Henüz event zamanı geçmedi, normal mesajı göster
             events.append({
                 "type": event_data['type'],
                 "message": event_data['message'],
@@ -221,9 +313,10 @@ def get_todays_banner() -> Optional[str]:
     ÖNCELİK SIRASI:
     1. Manuel Duyuru (Redis'ten - bu fonksiyon bilmez)
     2. Makro Eventler (TCMB Faiz: 90, Enflasyon: 85-90)
-    3. Bayramlar (40)
-    4. Piyasa Kapalı (Hafta sonu - 30)
-    5. Hiçbiri yoksa -> None
+    3. 🤖 AI Sonuçları (Priority +5 boost)
+    4. Bayramlar (40)
+    5. Piyasa Kapalı (Hafta sonu - 30)
+    6. Hiçbiri yoksa -> None
     
     Returns:
         str: Banner mesajı
@@ -306,7 +399,7 @@ def test_event_manager():
     Terminal'den test etmek için:
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 Event Manager V4.4 Test Ediliyor...\n")
+    print("🧪 Event Manager V4.5 🤖 Test Ediliyor...\n")
     
     # Bugünün banner'ı
     banner = get_todays_banner()
@@ -340,10 +433,10 @@ def test_event_manager():
         print("\n📊 2026 FİNANS TAKVİMİ:")
         for evt_date, evt_data in sorted(json_events.items()):
             if isinstance(evt_data, dict):
-                print(
-                    f"  • {evt_date}: {evt_data['message']} "
-                    f"(P:{evt_data['priority']}, Until:{evt_data['valid_until']})"
-                )
+                msg = f"  • {evt_date}: {evt_data['message']} (P:{evt_data['priority']}, Until:{evt_data['valid_until']})"
+                if 'query_after' in evt_data:
+                    msg += " 🤖 [AI]"
+                print(msg)
             else:
                 print(f"  • {evt_date}: {evt_data}")
 
