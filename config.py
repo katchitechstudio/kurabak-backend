@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V4.5 🧠
+Configuration - PRODUCTION READY V5.0 🧠📰
 ===================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -16,6 +16,7 @@ Configuration - PRODUCTION READY V4.5 🧠
 ✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
 ✅ TEMİZLİK MEKANİZMASI: 7 günlük otomatik temizlik
 ✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
+✅ 📰 GÜNLÜK HABER SİSTEMİ: Sabah + Akşam vardiyası (GNews + NewsData + Gemini)
 """
 import os
 
@@ -24,7 +25,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "4.5.0"  # 🔔 Fiyat Alarm Sistemi Eklendi
+    APP_VERSION = "5.0.0"  # 📰 Günlük Haber Sistemi Eklendi
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -126,6 +127,21 @@ class Config:
     CALENDAR_BANNER_MINUTE = 0
     
     # ======================================
+    # 📰 GÜNLÜK HABER SİSTEMİ (YENİ!)
+    # ======================================
+    # Haber vardiyası saatleri
+    NEWS_MORNING_SHIFT_HOUR = 0   # Gece 00:00 - Sabah vardiyası hazırlanır
+    NEWS_MORNING_SHIFT_MINUTE = 0
+    
+    NEWS_EVENING_SHIFT_HOUR = 12   # Öğlen 12:00 - Akşam vardiyası hazırlanır
+    NEWS_EVENING_SHIFT_MINUTE = 0
+    
+    # Haber kaynakları ayarları
+    NEWS_MAX_RESULTS_PER_SOURCE = 10  # Her API'den max 10 haber
+    NEWS_GEMINI_TIMEOUT = 30  # Gemini timeout (saniye)
+    NEWS_BATCH_SIZE = 20  # Tek seferde max 20 haber özetle
+    
+    # ======================================
     # HAFTA SONU KİLİDİ
     # ======================================
     # Pazar gecesi kaçta piyasalar açılır? (Asya piyasaları)
@@ -169,7 +185,7 @@ class Config:
         'fcm_tokens': 'firebase:fcm_tokens',
         'fcm_last_notification': 'firebase:last_notification',
         
-        # 🔥 Fiyat Alarm Sistemi (Yeni!)
+        # 🔥 Fiyat Alarm Sistemi
         'alarm_last_check': 'alarm:price:last_check',
         
         # 🔥 Akıllı Loglama & Tracking
@@ -180,7 +196,12 @@ class Config:
         'circuit_breaker_state': 'circuit:breaker:state',
         'circuit_breaker_failures': 'circuit:breaker:failures',
         'circuit_breaker_last_open': 'circuit:breaker:last_open',
-        'cleanup_last_run': 'cleanup:last_run'
+        'cleanup_last_run': 'cleanup:last_run',
+        
+        # 📰 GÜNLÜK HABER SİSTEMİ (YENİ!)
+        'news_morning_shift': 'news:morning_shift',      # Sabah vardiyası (00:00-12:00)
+        'news_evening_shift': 'news:evening_shift',      # Akşam vardiyası (12:00-00:00)
+        'news_last_update': 'news:last_update',          # Son güncelleme zamanı
     }
     
     # ======================================
