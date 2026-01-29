@@ -1,15 +1,16 @@
 """
-Event Manager - AKILLI TAKVİM SİSTEMİ V4.5 🗓️🤖
+Event Manager - AKILLI TAKVİM SİSTEMİ V5.0 🗓️🤖📰
 ======================================
 ✅ BAYRAMLAR: Otomatik algılama (holidays kütüphanesi)
 ✅ TCMB & RAPORLAR: JSON dosyasından okuma
 ✅ PİYASA DURUMU: Hafta sonu/Tatil kontrolü
-✅ ÖNCELİK SİSTEMİ: Manuel > TCMB > Bayram > Piyasa
+✅ ÖNCELİK SİSTEMİ: Manuel > TCMB > Haber > Bayram > Piyasa
 ✅ TAKVİM BİLDİRİMLERİ: Etkinlik günü Telegram'a mesaj gönder
 ✅ PRIORITY SYSTEM: Event önceliklendirme (90-40 arası)
 ✅ VALID_UNTIL: Zaman bazlı banner kontrolü
 ✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
 ✅ 🤖 GEMINI AI: Event geçince otomatik sonuç çekme
+✅ 📰 GÜNLÜK HABERLER: Sabah + Akşam vardiyası entegrasyonu (Priority: 75)
 """
 
 import json
@@ -214,11 +215,12 @@ def get_todays_events() -> List[Dict[str, any]]:
     Bugünün tüm etkinliklerini priority sırasına göre döndürür.
     
     🤖 YENİ: Event süresi geçmişse Gemini'den sonuç çeker!
+    📰 YENİ: Günlük haber sistemi entegrasyonu (Priority: 75)
     
     Returns:
         List[Dict]: [
             {
-                "type": "macro" | "bayram" | "inflation",
+                "type": "macro" | "bayram" | "inflation" | "news",
                 "message": "...",
                 "priority": 90,
                 "valid_until": "15:00",
@@ -297,6 +299,23 @@ def get_todays_events() -> List[Dict[str, any]]:
                 "date": today_str
             })
     
+    # 4. 📰 GÜNLÜK HABERLER (Priority: 75) - YENİ!
+    try:
+        from utils.news_manager import get_current_news_banner
+        
+        news_banner = get_current_news_banner()
+        if news_banner:
+            events.append({
+                "type": "news",
+                "message": news_banner,
+                "priority": 75,
+                "valid_until": "23:59",
+                "date": today_str
+            })
+            logger.debug(f"📰 [EVENT] Haber banner'ı eklendi: {news_banner[:50]}...")
+    except Exception as e:
+        logger.warning(f"⚠️ [EVENT] Haber banner'ı eklenemedi (önemsiz): {e}")
+    
     # Priority'ye göre sırala (Yüksekten düşüğe)
     events.sort(key=lambda x: x['priority'], reverse=True)
     
@@ -313,10 +332,11 @@ def get_todays_banner() -> Optional[str]:
     ÖNCELİK SIRASI:
     1. Manuel Duyuru (Redis'ten - bu fonksiyon bilmez)
     2. Makro Eventler (TCMB Faiz: 90, Enflasyon: 85-90)
-    3. 🤖 AI Sonuçları (Priority +5 boost)
-    4. Bayramlar (40)
-    5. Piyasa Kapalı (Hafta sonu - 30)
-    6. Hiçbiri yoksa -> None
+    3. 🤖 AI Sonuçları (Priority +5 boost = 95)
+    4. 📰 Günlük Haberler (Priority: 75) ← YENİ!
+    5. Bayramlar (40)
+    6. Piyasa Kapalı (Hafta sonu - 30)
+    7. Hiçbiri yoksa -> None
     
     Returns:
         str: Banner mesajı
@@ -399,7 +419,7 @@ def test_event_manager():
     Terminal'den test etmek için:
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 Event Manager V4.5 🤖 Test Ediliyor...\n")
+    print("🧪 Event Manager V5.0 🤖📰 Test Ediliyor...\n")
     
     # Bugünün banner'ı
     banner = get_todays_banner()
