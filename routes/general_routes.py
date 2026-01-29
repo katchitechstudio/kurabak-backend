@@ -1,5 +1,5 @@
 """
-General Routes - PRODUCTION READY V4.4 🚀
+General Routes - PRODUCTION READY V4.5 🚀
 ==========================================================
 ✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
@@ -10,7 +10,6 @@ General Routes - PRODUCTION READY V4.4 🚀
 ✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
 ✅ FCM ENDPOINTS: Firebase token kayıt/silme
-✅ SUMMARY SYNC FIX: Özet her zaman currencies'den hesaplanır
 ✅ EVENT MANAGER BANNER: Otomatik takvim bazlı banner 🤖
 """
 
@@ -165,35 +164,6 @@ def check_user_agent():
     return True  # Şimdilik tüm isteklere izin ver
 
 
-def calculate_summary_from_currencies(currencies_list):
-    """
-    🔥 YENİ FONKSİYON: Currencies listesinden özet hesapla
-    
-    Bu sayede summary her zaman güncel currencies verisiyle senkron olur.
-    Sterlin'in kişilik bölünmesi sorunu çözülür!
-    
-    Args:
-        currencies_list: Döviz listesi
-        
-    Returns:
-        dict: {"loser": {...}, "winner": {...}}
-    """
-    if not currencies_list or len(currencies_list) < 2:
-        return {}
-    
-    try:
-        # En düşük ve en yüksek değişimi bul
-        sorted_curr = sorted(currencies_list, key=lambda x: x.get('change_percent', 0))
-        
-        return {
-            "loser": sorted_curr[0],
-            "winner": sorted_curr[-1]
-        }
-    except Exception as e:
-        logger.error(f"❌ Summary hesaplama hatası: {e}")
-        return {}
-
-
 def get_smart_banner():
     """
     🤖 AKILLI BANNER SİSTEMİ (Sıralama Önemli!)
@@ -345,75 +315,6 @@ def get_all_silvers():
     except Exception as e:
         logger.error(f"Silver All Error: {e}")
         return create_response([], 500, "Sunucu hatası")
-
-
-@api_bp.route('/currency/summary', methods=['GET'])
-@limiter.limit("60 per minute")
-def get_summary():
-    """
-    Piyasa Özeti (Kazanan/Kaybeden)
-    🛡️ Rate limit: 60/dakika
-    📢 Banner Desteği Eklendi!
-    🔥 SUMMARY SYNC FIX: Artık currencies cache'inin içinden alınır!
-    🤖 Akıllı Banner: Event Manager entegrasyonu
-    """
-    check_user_agent()
-    track_online_user()
-    
-    try:
-        # 🔥 YENİ YÖNTEM: Summary artık currencies içinde gömülü
-        currencies_result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
-        
-        # Veri yoksa bile boş dön, hata dönme
-        if not currencies_result:
-            market_data = {}
-            status = 'OPEN'
-            market_msg = None
-        else:
-            # 🎯 Summary'yi direkt cache'den al (Worker tarafında hesaplanmış)
-            market_data = currencies_result.get('summary', {})
-            
-            # Eğer yoksa (eski cache formatı), o zaman hesapla (fallback)
-            if not market_data:
-                logger.warning("⚠️ Eski cache formatı tespit edildi, fallback hesaplama yapılıyor")
-                currencies_list = currencies_result.get('data', [])
-                if currencies_list:
-                    market_data = calculate_summary_from_currencies(currencies_list)
-            
-            # Durum bilgilerini al
-            status = currencies_result.get('status', 'OPEN')
-            market_msg = currencies_result.get('market_msg')
-
-        # 🤖 AKILLI BANNER SISTEMI
-        banner_msg = get_smart_banner()
-        
-        # Eğer banner yoksa market durumuyla ilgili msg göster
-        if not banner_msg:
-            if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
-                banner_msg = market_msg or "🚧 Sistem bakımda."
-            elif status == 'CLOSED' and not banner_msg:
-                banner_msg = market_msg or "🌙 Piyasalar kapalı."
-
-        # Meta verisine banner'ı paketle
-        meta_data = {
-            'status': status,
-            'banner': banner_msg,
-            'sync_source': 'embedded_in_currencies',  # Debug için: Worker'da hesaplandı
-            'items_count': len(market_data)
-        }
-
-        logger.debug(f"✅ [Summary] Currencies'den alındı: {len(market_data)} item")
-        
-        return create_response(
-            market_data,
-            200,
-            "Piyasa özeti getirildi",
-            meta_data
-        )
-        
-    except Exception as e:
-        logger.error(f"Summary Error: {e}")
-        return create_response({}, 500, "Sunucu hatası")
 
 
 @api_bp.route('/currency/regional', methods=['GET'])
