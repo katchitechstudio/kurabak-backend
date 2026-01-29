@@ -6,12 +6,12 @@ Financial Service - PRODUCTION READY V4.4 🚀
 ✅ MOBİL OPTİMİZE: 23 Döviz + 6 Altın + 1 Gümüş
 ✅ WORKER + SNAPSHOT + BANNER + BAKIM MODU
 ✅ SELF-HEALING: Otomatik sistem kurtarma
-✅ SUMMARY SYNC FIX: Özet currencies içinde (Sterlin sorunu çözüldü!)
 ✅ NAME FIX: Tüm varlıklar Türkçe isimlerle gösteriliyor
 ✅ BANNER FIX: Takvim mesajları öncelikli
 ✅ AKILLI LOGLAMA: Piyasa kapalı spam önleme
 ✅ CIRCUIT BREAKER: 3 hata = 60 saniye bekle, otomatik kurtarma
 ✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
+✅ SUMMARY KALDIRMA: Günün özeti artık gönderilmiyor
 """
 
 import requests
@@ -473,39 +473,6 @@ def process_data_mobile_optimized(data: dict):
     
     return currencies, golds, silvers
 
-def calculate_summary(all_items: List[dict]) -> dict:
-    """Tüm varlıklardan özet hesapla"""
-    if not all_items or len(all_items) < 2:
-        return {}
-    
-    try:
-        sorted_items = sorted(all_items, key=lambda x: x.get('change_percent', 0))
-        
-        loser = sorted_items[0]
-        winner = sorted_items[-1]
-        
-        result = {}
-        
-        if loser.get('change_percent', 0) < 0:
-            result['loser'] = loser
-        
-        if winner.get('change_percent', 0) > 0:
-            result['winner'] = winner
-        
-        logger.debug(
-            f"📊 [Summary] "
-            f"Winner: {result.get('winner', {}).get('code', 'YOK')} "
-            f"({result.get('winner', {}).get('change_percent', 0):+.2f}%) | "
-            f"Loser: {result.get('loser', {}).get('code', 'YOK')} "
-            f"({result.get('loser', {}).get('change_percent', 0):+.2f}%)"
-        )
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"❌ Summary hesaplama hatası: {e}")
-        return {}
-
 # ======================================
 # BANNER
 # ======================================
@@ -622,7 +589,7 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 
 def update_financial_data():
     """
-    Her 2 dakikada bir çalışır.
+    Her 1 dakikada bir çalışır.
     V5 API (Tek Kaynak + Circuit Breaker) → Backup
     """
     tz = pytz.timezone('Europe/Istanbul')
@@ -762,10 +729,6 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
         
-        # Tüm varlıkları birleştir ve summary hesapla
-        all_items = currencies + golds + silvers
-        summary = calculate_summary(all_items)
-        
         Metrics.inc('v5')
         
         update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -781,11 +744,10 @@ def update_financial_data():
             "banner": banner_message
         }
         
-        # SUMMARY CURRENCIES İÇİNDE
+        # Cache'e kaydet (Summary olmadan)
         set_cache(Config.CACHE_KEYS['currencies_all'], {
             **base_meta, 
-            "data": currencies,
-            "summary": summary
+            "data": currencies
         }, ttl=0)
         
         set_cache(Config.CACHE_KEYS['golds_all'], {**base_meta, "data": golds}, ttl=0)
@@ -798,7 +760,7 @@ def update_financial_data():
         if current_time - float(last_backup_time) > 900:
             logger.info("📦 15 Dakikalık Backup...")
             backup_payload = {
-                "currencies": {**base_meta, "data": currencies, "summary": summary},
+                "currencies": {**base_meta, "data": currencies},
                 "golds": {**base_meta, "data": golds},
                 "silvers": {**base_meta, "data": silvers}
             }
@@ -807,13 +769,6 @@ def update_financial_data():
         
         banner_info = f"Banner: {banner_message[:30]}..." if banner_message else "Banner: Yok"
         
-        # Summary bilgisini loglara ekle
-        summary_info = ""
-        if summary:
-            winner_code = summary.get('winner', {}).get('code', 'YOK')
-            loser_code = summary.get('loser', {}).get('code', 'YOK')
-            summary_info = f" | Winner: {winner_code}, Loser: {loser_code}"
-        
         # Circuit Breaker durumu
         cb_status = circuit_breaker.get_status()
         cb_info = f" | CB: {cb_status['state']}"
@@ -821,7 +776,7 @@ def update_financial_data():
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies)} Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
-            f"({banner_info}){summary_info}{cb_info}"
+            f"({banner_info}){cb_info}"
         )
         return True
         
