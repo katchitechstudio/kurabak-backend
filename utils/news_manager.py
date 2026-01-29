@@ -212,9 +212,9 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
             logger.warning("⚠️ [GEMİNİ] Özetlenecek haber yok!")
             return [], None
         
-        # Gemini 2.0'ı yapılandır
+        # Gemini 3.0'ı yapılandır
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         # Haberleri numaralandır
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
@@ -343,7 +343,7 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
     if start_hour == 0 and datetime.now().hour >= 12:
         current_time += timedelta(days=1)
     
-    logger.info(f"📅 [PLAN] {news_count} haber, {start_hour}:00 - {end_hour}:00 arası dağıtılıyor")
+    logger.info(f"📅 [PLAN] {news_count} haber, {start_hour}:00 - {end_hour if end_hour < 24 else '23:59'} arası dağıtılıyor")
     logger.info(f"   Her haber ~{duration_per_news} dakika ekranda kalacak")
     
     for i, news in enumerate(news_list):
@@ -351,7 +351,11 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
         
         # Son haberde bitiş saatini tam end_hour'a getir
         if i == news_count - 1:
-            end_time = current_time.replace(hour=end_hour, minute=0)
+            # end_hour=24 ise 23:59 kullan (Python'da saat 0-23 arası)
+            if end_hour == 24:
+                end_time = current_time.replace(hour=23, minute=59, second=59)
+            else:
+                end_time = current_time.replace(hour=end_hour, minute=0)
         else:
             end_time = current_time + timedelta(minutes=duration_per_news)
         
