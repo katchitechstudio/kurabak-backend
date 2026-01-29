@@ -1,165 +1,179 @@
-def summarize_news_batch(news_list: List[str]) -> tuple[List[str], Optional[str]]:
+"""
+Event Manager - AKILLI TAKVİM SİSTEMİ V6.0 🗓️📰🏦
+======================================
+✅ BAYRAMLAR: Gemini otomatik tespit (her vardiya hazırlığında)
+✅ HABERLER: GNews + NewsData + Gemini özet
+✅ ÖNCELİK SİSTEMİ: Bayram (15:00'a kadar) > Haberler
+✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
+✅ BASIT VE ETKİLİ: Gereksiz karmaşıklık yok
+"""
+
+import logging
+from datetime import datetime, date
+from typing import Optional, List, Dict
+
+logger = logging.getLogger(__name__)
+
+# ======================================
+# 🆕 BUGÜNÜN ETKİNLİKLERİNİ GETIR
+# ======================================
+
+def get_todays_events() -> List[Dict[str, any]]:
     """
-    GEMİNİ ile toplu haber özetleme + BAYRAM KONTROLÜ
+    Bugünün tüm etkinliklerini priority sırasına göre döndürür.
+    
+    🏦 BAYRAM: Gemini'den alınır (news_manager tarafından Redis'e kaydedilir)
+    📰 HABERLER: GNews + NewsData + Gemini özet
     
     Returns:
-        tuple: (özetler, bayram_mesajı)
-        Örnek: (["Dolar yükseldi", ...], "🏦 Ramazan Bayramı")
+        List[Dict]: [
+            {
+                "type": "bayram" | "news",
+                "message": "...",
+                "priority": 40 | 75,
+                "date": "2026-01-29"
+            }
+        ]
     """
+    today_str = date.today().strftime("%Y-%m-%d")
+    current_time = datetime.now()
+    events = []
+    
+    # 1. 🏦 BAYRAM KONTROLÜ (Gemini'den - Redis cache)
     try:
-        if not GEMINI_API_KEY:
-            logger.warning("⚠️ GEMINI_API_KEY bulunamadı!")
-            return [' '.join(news.split()[:10]) for news in news_list], None
+        from utils.cache import get_cache
+        from config import Config
         
-        if not news_list:
-            return [], None
+        bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
+        bayram_msg = get_cache(bayram_key)
         
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Haberleri numaralandır
-        numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
-        
-        # Bugünün tarihi
-        today = datetime.now().strftime('%d %B %Y, %A')  # "29 Ocak 2026, Çarşamba"
-        
-        # TEK PROMPT: Bayram + Özetler
-        prompt = f"""
-Bugün {today} tarihinde Türkiye'de resmi tatil veya önemli bayram var mı?
-
-Kontrol et:
-- Resmi tatiller (Ramazan, Kurban Bayramı, 23 Nisan, 19 Mayıs, 30 Ağustos, 29 Ekim, 1 Ocak)
-- Arefe günleri (yarım gün tatil)
-
-VARSA:
-"BAYRAM: [tam isim]" yaz
-Örnek: "BAYRAM: Ramazan Bayramı 1. Gün"
-Örnek: "BAYRAM: Kurban Bayramı Arefe"
-
-YOKSA:
-"BAYRAM: YOK" yaz
-
-SONRA aşağıdaki {len(news_list)} ekonomi haberini özetle (her biri max 10 kelime):
-
-{numbered_news}
-
-FORMAT:
-BAYRAM: [VAR/YOK]
-1. [10 kelimelik özet]
-2. [10 kelimelik özet]
-...
-
-Başka açıklama yapma!
-"""
-        
-        logger.info(f"🤖 [GEMİNİ] {len(news_list)} haber özetleniyor + bayram kontrolü...")
-        
-        response = model.generate_content(prompt)
-        result = response.text.strip()
-        
-        # Satırlara böl
-        lines = result.split('\n')
-        
-        # İlk satır: BAYRAM kontrolü
-        bayram_msg = None
-        first_line = lines[0].strip()
-        
-        if first_line.startswith("BAYRAM:"):
-            bayram_text = first_line.replace("BAYRAM:", "").strip()
-            if bayram_text != "YOK" and bayram_text.upper() != "YOK":
-                bayram_msg = f"🏦 Resmî tatil: {bayram_text}"
-                logger.info(f"🏦 [GEMİNİ] Bayram tespit edildi: {bayram_text}")
-            lines = lines[1:]  # Bayram satırını çıkar
-        
-        # Kalan satırlar: Özetler
-        summaries = []
-        for line in lines:
-            clean_line = line.strip()
-            if clean_line:
-                # Numarayı kaldır
-                if '. ' in clean_line:
-                    clean_line = clean_line.split('. ', 1)[1]
-                
-                if clean_line:
-                    summaries.append(clean_line)
-        
-        logger.info(f"✅ [GEMİNİ] {len(summaries)} özet + bayram kontrolü tamamlandı")
-        
-        # Eksik özetleri tamamla
-        while len(summaries) < len(news_list):
-            idx = len(summaries)
-            summaries.append(' '.join(news_list[idx].split()[:10]))
-        
-        return summaries[:len(news_list)], bayram_msg
-        
+        # Bayram varsa VE saat 15:00'dan önceyse göster
+        if bayram_msg and current_time.hour < 15:
+            events.append({
+                "type": "bayram",
+                "message": bayram_msg,
+                "priority": 40,
+                "valid_until": "15:00",
+                "date": today_str
+            })
+            logger.info(f"🏦 [BAYRAM] {bayram_msg} - 15:00'a kadar gösterilecek")
+        elif bayram_msg and current_time.hour >= 15:
+            logger.info(f"🏦 [BAYRAM] Süresi doldu (15:00+), haberler devrede")
+            
     except Exception as e:
-        logger.error(f"❌ [GEMİNİ] Özet hatası: {e}")
-        return [' '.join(news.split()[:10]) for news in news_list], None
-
-
-def prepare_morning_shift() -> bool:
-    """SABAH VARDİYASI + BAYRAM KONTROLÜ"""
+        logger.warning(f"⚠️ [BAYRAM] Kontrol hatası (önemsiz): {e}")
+    
+    # 2. 📰 GÜNLÜK HABERLER (Priority: 75)
     try:
-        logger.info("🌅 [SABAH VARDİYASI] Hazırlık başlıyor...")
+        from utils.news_manager import get_current_news_banner
         
-        news_list = fetch_all_news()
-        if not news_list:
-            return False
-        
-        # Gemini: Özetler + Bayram kontrolü
-        summaries, bayram_msg = summarize_news_batch(news_list)
-        
-        # Bayram varsa Redis'e kaydet
-        if bayram_msg:
-            from utils.cache import set_cache
-            from config import Config
-            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            set_cache(bayram_key, bayram_msg, ttl=43200)  # 12 saat
-            logger.info(f"🏦 [BAYRAM] Redis'e kaydedildi: {bayram_msg}")
-        
-        # Sabah için planla
-        schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
-        
-        cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-        set_cache(cache_key, schedule, ttl=43200)
-        
-        logger.info(f"✅ [SABAH VARDİYASI] {len(schedule)} haber hazırlandı!")
-        return True
-        
+        news_banner = get_current_news_banner()
+        if news_banner:
+            events.append({
+                "type": "news",
+                "message": news_banner,
+                "priority": 75,
+                "valid_until": "23:59",
+                "date": today_str
+            })
+            logger.debug(f"📰 [HABER] Banner eklendi")
     except Exception as e:
-        logger.error(f"❌ [SABAH VARDİYASI] Hata: {e}")
-        return False
+        logger.warning(f"⚠️ [HABER] Banner eklenemedi (önemsiz): {e}")
+    
+    # Priority'ye göre sırala (Yüksekten düşüğe)
+    events.sort(key=lambda x: x['priority'], reverse=True)
+    
+    return events
 
+# ======================================
+# ANA FONKSİYON: BUGÜNÜN BANNER'I
+# ======================================
 
-def prepare_evening_shift() -> bool:
-    """AKŞAM VARDİYASI + BAYRAM KONTROLÜ"""
-    try:
-        logger.info("🌆 [AKŞAM VARDİYASI] Hazırlık başlıyor...")
-        
-        news_list = fetch_all_news()
-        if not news_list:
-            return False
-        
-        # Gemini: Özetler + Bayram kontrolü
-        summaries, bayram_msg = summarize_news_batch(news_list)
-        
-        # Bayram varsa Redis'e kaydet
-        if bayram_msg:
-            from utils.cache import set_cache
-            from config import Config
-            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            set_cache(bayram_key, bayram_msg, ttl=43200)
-            logger.info(f"🏦 [BAYRAM] Redis'e kaydedildi: {bayram_msg}")
-        
-        # Akşam için planla
-        schedule = plan_shift_schedule(summaries, start_hour=12, end_hour=24)
-        
-        cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-        set_cache(cache_key, schedule, ttl=43200)
-        
-        logger.info(f"✅ [AKŞAM VARDİYASI] {len(schedule)} haber hazırlandı!")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ [AKŞAM VARDİYASI] Hata: {e}")
-        return False
+def get_todays_banner() -> Optional[str]:
+    """
+    🔥 TEK BANNER KURALI: Sadece en yüksek priority'li banner gösterilir!
+    
+    ÖNCELİK SIRASI:
+    1. Manuel Duyuru (Redis'ten - bu fonksiyon bilmez)
+    2. 🏦 Bayram (Priority: 40, sadece 00:00-15:00 arası)
+    3. 📰 Günlük Haberler (Priority: 75)
+    4. Piyasa Kapalı (Hafta sonu - Priority: 30)
+    5. Hiçbiri yoksa -> None
+    
+    Returns:
+        str: Banner mesajı
+        None: Banner yok
+    """
+    today = date.today()
+    current_time = datetime.now()
+    weekday = today.weekday()  # 0=Pzt, 4=Cuma, 5=Cmt, 6=Paz
+    
+    # --- 1. BUGÜNÜN ETKİNLİKLERİNİ AL (Priority sıralı) ---
+    events = get_todays_events()
+    
+    if events:
+        # En yüksek priority'li event (Liste zaten sıralı)
+        top_event = events[0]
+        logger.info(
+            f"📅 [BANNER] {top_event['type']} (Priority: {top_event['priority']}): "
+            f"{top_event['message'][:60]}..."
+        )
+        return top_event['message']
+    
+    # --- 2. PİYASA KAPALI MI? (Hafta Sonu - Priority: 30) ---
+    # Cumartesi (5) - Pazar (6) tüm gün kapalı
+    if weekday == 5 or weekday == 6:
+        return "Piyasalar kapalı, iyi hafta sonları! 🌙"
+    
+    # Cuma akşam 18:00 sonrası
+    if weekday == 4 and current_time.hour >= 18:
+        return "Piyasalar kapandı, iyi hafta sonları! 🌙"
+    
+    # --- 3. HİÇBİR ŞEY YOK ---
+    return None
+
+# ======================================
+# TEST FONKSİYONU
+# ======================================
+
+def test_event_manager():
+    """
+    Terminal'den test etmek için:
+    python -c "from utils.event_manager import test_event_manager; test_event_manager()"
+    """
+    print("🧪 Event Manager V6.0 📰🏦 Test Ediliyor...\n")
+    
+    # Bugünün banner'ı
+    banner = get_todays_banner()
+    if banner:
+        print(f"✅ BUGÜNÜN BANNER'I:\n{banner}\n")
+    else:
+        print("ℹ️ Bugün özel bir mesaj yok.\n")
+    
+    # Bugünün etkinlikleri
+    events = get_todays_events()
+    if events:
+        print("📅 BUGÜNÜN ETKİNLİKLERİ (Priority sıralı):")
+        for evt in events:
+            print(
+                f"  • [{evt['type']}] Priority: {evt['priority']} | "
+                f"{evt['message']}"
+            )
+        print()
+    else:
+        print("ℹ️ Bugün etkinlik yok\n")
+    
+    # Bayram kontrolü
+    from utils.cache import get_cache
+    from config import Config
+    
+    bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
+    bayram_msg = get_cache(bayram_key)
+    
+    if bayram_msg:
+        print(f"🏦 BAYRAM CACHE'İ:\n{bayram_msg}\n")
+    else:
+        print("ℹ️ Bayram cache'i boş (Gemini henüz kontrol etmedi)\n")
+
+if __name__ == "__main__":
+    test_event_manager()
