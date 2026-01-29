@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V5.0 🧠📰
+Configuration - PRODUCTION READY V5.1 🧠📰🏦
 ===================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -16,7 +16,7 @@ Configuration - PRODUCTION READY V5.0 🧠📰
 ✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
 ✅ TEMİZLİK MEKANİZMASI: 7 günlük otomatik temizlik
 ✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
-✅ 📰 GÜNLÜK HABER SİSTEMİ: Sabah + Akşam vardiyası (GNews + NewsData + Gemini)
+✅ 📰 GÜNLÜK HABER SİSTEMİ V2.0: Sabah + Akşam vardiyası + Gemini 2.0 + Bayram kontrolü
 """
 import os
 
@@ -25,7 +25,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "5.0.0"  # 📰 Günlük Haber Sistemi Eklendi
+    APP_VERSION = "5.1.0"  # 📰🏦 Günlük Haber + Bayram Sistemi V2.0
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -56,7 +56,7 @@ class Config:
     # ZAMANLAYICI & PERFORMANS
     # ======================================
     # 👷 İşçi (Worker) - Veri güncelleme sıklığı (Saniye)
-    UPDATE_INTERVAL = 60  # 1 Dakika ⚡ (değiştirildi: 120 → 60)
+    UPDATE_INTERVAL = 60  # 1 Dakika ⚡
     
     # 📸 Fotoğrafçı (Snapshot) - Gece kaçta çalışacak?
     SNAPSHOT_HOUR = 0    # Saat 00
@@ -127,7 +127,7 @@ class Config:
     CALENDAR_BANNER_MINUTE = 0
     
     # ======================================
-    # 📰 GÜNLÜK HABER SİSTEMİ (YENİ!)
+    # 📰 GÜNLÜK HABER SİSTEMİ V2.0 (GÜNCELLENDİ!)
     # ======================================
     # Haber vardiyası saatleri
     NEWS_MORNING_SHIFT_HOUR = 0   # Gece 00:00 - Sabah vardiyası hazırlanır
@@ -198,17 +198,18 @@ class Config:
         'circuit_breaker_last_open': 'circuit:breaker:last_open',
         'cleanup_last_run': 'cleanup:last_run',
         
-        # 📰 GÜNLÜK HABER SİSTEMİ (YENİ!)
+        # 📰 GÜNLÜK HABER SİSTEMİ V2.0 (GÜNCELLENDİ!)
         'news_morning_shift': 'news:morning_shift',      # Sabah vardiyası (00:00-12:00)
         'news_evening_shift': 'news:evening_shift',      # Akşam vardiyası (12:00-00:00)
         'news_last_update': 'news:last_update',          # Son güncelleme zamanı
+        'daily_bayram': 'daily:bayram',                  # 🏦 BAYRAM CACHE (YENİ!)
     }
     
     # ======================================
     # TREND ANALİZİ (ALEV ROZETİ 🔥)
     # ======================================
     # Kaç yüzde değişimde "Sert Hareket" sayılsın?
-    TREND_HIGH_THRESHOLD = 5.0    # %5 ve üzeri -> HIGH_UP / HIGH_DOWN ✅ DEĞİŞTİ!
+    TREND_HIGH_THRESHOLD = 5.0    # %5 ve üzeri -> HIGH_UP / HIGH_DOWN
     TREND_MEDIUM_THRESHOLD = 1.0  # %1-5 arası -> MEDIUM
     
     # ======================================
