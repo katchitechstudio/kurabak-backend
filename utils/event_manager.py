@@ -1,16 +1,10 @@
 """
-Event Manager - AKILLI TAKVİM SİSTEMİ V5.0 🗓️🤖📰
+Event Manager - AKILLI TAKVİM SİSTEMİ V6.0 🗓️🤖📰
 ======================================
-✅ BAYRAMLAR: Otomatik algılama (holidays kütüphanesi)
-✅ TCMB & RAPORLAR: JSON dosyasından okuma
-✅ PİYASA DURUMU: Hafta sonu/Tatil kontrolü
-✅ ÖNCELİK SİSTEMİ: Manuel > TCMB > Haber > Bayram > Piyasa
-✅ TAKVİM BİLDİRİMLERİ: Etkinlik günü Telegram'a mesaj gönder
-✅ PRIORITY SYSTEM: Event önceliklendirme (90-40 arası)
-✅ VALID_UNTIL: Zaman bazlı banner kontrolü
-✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
-✅ 🤖 GEMINI AI: Event geçince otomatik sonuç çekme
-✅ 📰 GÜNLÜK HABERLER: Sabah + Akşam vardiyası entegrasyonu (Priority: 75)
+✅ BAYRAMLAR: Otomatik (holidays kütüphanesi)
+✅ EKONOMİK EVENTLER: Günde 1 Gemini sorgusu (sabah 06:00)
+✅ HABERLER: GNews + NewsData (sürekli güncelleniyor)
+✅ HİBRİT SİSTEM: Sabit günler (kütüphane) + Dinamik günler (Gemini)
 """
 
 import json
@@ -22,73 +16,22 @@ from typing import Optional, List, Dict
 logger = logging.getLogger(__name__)
 
 # ======================================
-# 🤖 GEMINI AI ENTEGRASYONU
-# ======================================
-
-def get_gemini_result(event_query: str, cache_key: str) -> Optional[str]:
-    """
-    Gemini AI'dan event sonucunu çeker.
-    
-    Args:
-        event_query: Gemini'ye sorulacak soru
-        cache_key: Redis cache anahtarı
-        
-    Returns:
-        str: AI sonucu (örn: "TCMB faizi %47.5'te sabit tuttu")
-        None: Hata durumunda
-    """
-    try:
-        # Cache kontrolü
-        from utils.cache import get_cache, set_cache
-        cached_result = get_cache(cache_key)
-        if cached_result:
-            logger.info(f"🤖 [GEMINI] Cache'den alındı: {cache_key}")
-            return cached_result
-        
-        # Gemini API
-        import google.generativeai as genai
-        
-        api_key = os.getenv('GEMINI_API_KEY')
-        if not api_key:
-            logger.warning("⚠️ GEMINI_API_KEY bulunamadı!")
-            return None
-        
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = f"""
-        {event_query}
-        
-        Lütfen sadece sonucu tek cümlede özetle. Açıklama yapma.
-        Örnek formatlar:
-        - "TCMB faizi %47.5'te sabit tuttu"
-        - "Enflasyon %64.77'ye yükseldi"
-        - "TCMB politika faizini 200 baz puan düşürdü"
-        
-        Sadece özet sonucu yaz, başka bir şey ekleme.
-        """
-        
-        response = model.generate_content(prompt)
-        result = response.text.strip()
-        
-        # Cache'e kaydet (24 saat)
-        set_cache(cache_key, result, expire=86400)
-        
-        logger.info(f"🤖 [GEMINI] Yeni sonuç alındı: {result}")
-        return result
-        
-    except Exception as e:
-        logger.error(f"❌ Gemini API hatası: {e}")
-        return None
-
-# ======================================
 # BAYRAM SİSTEMİ (OTOMATIK)
 # ======================================
 
 def get_holidays():
     """
     Türkiye bayramlarını döndürür.
-    holidays kütüphanesi yoksa boş dict döner (Sistem patlamaz)
+    
+    Otomatik gelenler:
+    - Yılbaşı (1 Ocak)
+    - Ramazan Bayramı (3 gün)
+    - Kurban Bayramı (4 gün)
+    - 23 Nisan
+    - 19 Mayıs
+    - 15 Temmuz (Demokrasi Bayramı)
+    - 30 Ağustos
+    - 29 Ekim
     """
     try:
         import holidays
@@ -101,110 +44,94 @@ def get_holidays():
         return {}
 
 # ======================================
-# EVENTS.JSON OKUYUCU
+# 🤖 GÜNLÜK EKONOMİK EVENT KONTROLÜ
 # ======================================
 
-def load_events_json():
+def get_todays_important_events() -> Optional[str]:
     """
-    events.json dosyasını okur.
+    🤖 GÜNLÜK AKILLI KONTROL (Sabah 06:00'da 1 kez çalışır)
     
-    YENİ FORMAT (V4.5):
-    {
-      "2026-01-22": {
-        "message": "⚠️ Bugün TCMB faiz kararı günü",
-        "type": "macro",
-        "priority": 90,
-        "valid_until": "15:00",
-        "query_after": "TCMB faiz kararı Ocak 2026 sonucu nedir?"
-      }
-    }
+    Gemini'ye sorar:
+    "Bugün Türkiye'de önemli ekonomik açıklama var mı?"
     
-    ESKİ FORMAT (String) de desteklenir (geriye uyumluluk)
-    """
-    try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        json_path = os.path.join(current_dir, "events.json")
-        
-        if not os.path.exists(json_path):
-            logger.warning(f"⚠️ events.json bulunamadı: {json_path}")
-            return {}
-        
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            
-            # Format dönüşümü: Eski string formatı yeni object formatına çevir
-            normalized = {}
-            for event_date, event_data in data.items():
-                if isinstance(event_data, str):
-                    # ESKİ FORMAT (geriye uyumluluk)
-                    normalized[event_date] = {
-                        "message": event_data,
-                        "type": "legacy",
-                        "priority": 80,
-                        "valid_until": "23:59"
-                    }
-                else:
-                    # YENİ FORMAT
-                    normalized[event_date] = event_data
-            
-            return normalized
-            
-    except Exception as e:
-        logger.error(f"❌ events.json okuma hatası: {e}")
-        return {}
-
-# ======================================
-# ENFLASYON TARİHİ KONTROLÜ
-# ======================================
-
-def is_inflation_day(date_obj: date) -> bool:
-    """
-    TÜİK Enflasyon verisi her ayın 3'ünde açıklanır.
-    Eğer 3'ü hafta sonuna denk gelirse ilk iş günü açıklanır.
-    """
-    if date_obj.day == 3 and date_obj.weekday() < 5:
-        return True
-    
-    if date_obj.day == 4 and date_obj.weekday() == 0:
-        prev_day = date_obj.replace(day=3)
-        if prev_day.weekday() == 6:
-            return True
-    
-    if date_obj.day == 5 and date_obj.weekday() == 0:
-        prev_day = date_obj.replace(day=3)
-        if prev_day.weekday() == 5:
-            return True
-    
-    return False
-
-# ======================================
-# VALID_UNTIL KONTROLÜ
-# ======================================
-
-def is_valid_at_time(valid_until: str, current_time: datetime) -> bool:
-    """
-    Banner'ın hala gösterilip gösterilmeyeceğini kontrol eder.
-    
-    Args:
-        valid_until: "15:00" formatında saat
-        current_time: Şu anki zaman
-        
     Returns:
-        True: Banner gösterilmeli
-        False: Banner süresi doldu
+        str: Varsa event mesajı
+        None: Yoksa None
     """
     try:
-        # valid_until formatı: "HH:MM"
-        hour, minute = map(int, valid_until.split(':'))
-        valid_time = dt_time(hour, minute)
-        current_time_only = current_time.time()
+        from utils.cache import get_cache, set_cache
+        import google.generativeai as genai
         
-        # Şu anki saat valid_until'den önce mi?
-        return current_time_only < valid_time
+        today_str = date.today().strftime("%Y-%m-%d")
+        cache_key = f"daily_event:{today_str}"
+        
+        # Cache kontrolü (Günde 1 kez soruyor)
+        cached_event = get_cache(cache_key)
+        if cached_event is not None:
+            if cached_event == "YOK":
+                return None
+            logger.info(f"🤖 [EVENT] Cache'den alındı: {cached_event}")
+            return cached_event
+        
+        # Gemini'ye sor
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            logger.warning("⚠️ GEMINI_API_KEY bulunamadı!")
+            return None
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Bugünün tarihini insan okunabilir formata çevir
+        today_obj = date.today()
+        today_readable = today_obj.strftime("%d %B %Y")  # Örn: 29 Ocak 2026
+        
+        prompt = f"""
+Bugün {today_readable} ({today_str}) tarihinde Türkiye'de önemli ekonomik açıklamalar var mı?
+
+Kontrol edilecekler:
+- TCMB faiz kararı (genelde ayın 3. perşembesi)
+- TÜİK enflasyon verisi (her ayın 3'ü)
+- TCMB finansal istikrar raporu (Mayıs/Kasım)
+- Büyüme verileri (GSYİH - Her çeyrek)
+- İşsizlik verileri (TÜİK)
+- Cari açık verileri (TCMB)
+
+EĞER VARSA:
+- Tek cümlede yaz, max 60 karakter
+- Emoji kullan (⚠️ TCMB, 📈 TÜİK, 📊 veri)
+- Saat belirt (örn: "14:00'te")
+- Örnek: "⚠️ TCMB faiz kararı saat 14:00'te açıklanacak"
+- Örnek: "📈 Enflasyon verisi saat 10:00'da açıklanacak"
+
+EĞER YOKSA:
+- Sadece "YOK" yaz
+
+Başka açıklama ekleme, sadece sonucu yaz.
+
+Cevap:
+"""
+        
+        logger.info(f"🤖 [EVENT] Gemini'ye günlük event sorusu gönderiliyor...")
+        
+        response = model.generate_content(prompt)
+        result = response.text.strip()
+        
+        # "YOK" kontrolü
+        if result.upper() == "YOK" or "YOK" in result.upper():
+            logger.info(f"ℹ️ [EVENT] Bugün özel ekonomik event yok")
+            set_cache(cache_key, "YOK", ttl=86400)  # 24 saat
+            return None
+        
+        # Cache'e kaydet (24 saat)
+        set_cache(cache_key, result, ttl=86400)
+        
+        logger.info(f"✅ [EVENT] Bugün event var: {result}")
+        return result
         
     except Exception as e:
-        logger.warning(f"⚠️ valid_until parse hatası ({valid_until}): {e}")
-        return True  # Hata durumunda göster (güvenli taraf)
+        logger.error(f"❌ [EVENT] Günlük event kontrolü hatası: {e}")
+        return None
 
 # ======================================
 # 🆕 BUGÜNÜN ETKİNLİKLERİNİ GETIR
@@ -214,92 +141,46 @@ def get_todays_events() -> List[Dict[str, any]]:
     """
     Bugünün tüm etkinliklerini priority sırasına göre döndürür.
     
-    🤖 YENİ: Event süresi geçmişse Gemini'den sonuç çeker!
-    📰 YENİ: Günlük haber sistemi entegrasyonu (Priority: 75)
+    🤖 HİBRİT SİSTEM:
+    - Bayramlar: holidays kütüphanesi (otomatik)
+    - Ekonomik eventler: Gemini (günde 1 sorgu)
+    - Haberler: GNews + NewsData (sürekli güncelleniyor)
     
     Returns:
-        List[Dict]: [
-            {
-                "type": "macro" | "bayram" | "inflation" | "news",
-                "message": "...",
-                "priority": 90,
-                "valid_until": "15:00",
-                "date": "2026-01-22"
-            }
-        ]
+        List[Dict]: Etkinlik listesi
     """
     today = date.today()
     today_str = today.strftime("%Y-%m-%d")
     current_time = datetime.now()
     events = []
     
-    # 1. JSON'daki Özel Olaylar (TCMB, Raporlar)
-    json_events = load_events_json()
-    if today_str in json_events:
-        event_data = json_events[today_str]
-        
-        # Saat kontrolü: valid_until geçti mi?
-        time_expired = not is_valid_at_time(event_data['valid_until'], current_time)
-        
-        if time_expired and 'query_after' in event_data:
-            # 🤖 GEMINI MODU: Event geçmiş, AI'dan sonuç çek
-            cache_key = f"gemini_result:{today_str}"
-            ai_result = get_gemini_result(event_data['query_after'], cache_key)
-            
-            if ai_result:
-                # AI sonucunu göster
-                events.append({
-                    "type": "ai_result",
-                    "message": f"🔴 {ai_result}",
-                    "priority": event_data['priority'] + 5,  # AI sonucu +5 priority
-                    "valid_until": "23:59",
-                    "date": today_str
-                })
-            else:
-                # AI başarısız, fallback mesaj
-                fallback_msg = event_data['message'].replace("⚠️ Bugün", "✅").replace("günü", "açıklandı")
-                events.append({
-                    "type": event_data['type'],
-                    "message": fallback_msg,
-                    "priority": event_data['priority'],
-                    "valid_until": "23:59",
-                    "date": today_str
-                })
-        
-        elif not time_expired:
-            # Henüz event zamanı geçmedi, normal mesajı göster
-            events.append({
-                "type": event_data['type'],
-                "message": event_data['message'],
-                "priority": event_data['priority'],
-                "valid_until": event_data['valid_until'],
-                "date": today_str
-            })
-    
-    # 2. Bayramlar (Priority: 40)
-    tr_holidays = get_holidays()
-    if tr_holidays and today in tr_holidays:
-        holiday_name = tr_holidays.get(today)
+    # 1. 🤖 GÜNLÜK AKILLI EVENT KONTROLÜ (Priority: 85)
+    smart_event = get_todays_important_events()
+    if smart_event:
         events.append({
-            "type": "bayram",
-            "message": f"🏦 Resmî tatil: {holiday_name}",
-            "priority": 40,
+            "type": "smart_event",
+            "message": smart_event,
+            "priority": 85,  # Haberlerden yüksek
             "valid_until": "23:59",
             "date": today_str
         })
     
-    # 3. Enflasyon Günü (Priority: 85)
-    if is_inflation_day(today):
-        if current_time.hour < 11:  # 11:00'a kadar göster
+    # 2. 🏦 Bayramlar (Priority: 40) → ÖĞLENE KADAR (12:00)
+    tr_holidays = get_holidays()
+    if tr_holidays and today in tr_holidays:
+        holiday_name = tr_holidays.get(today)
+        
+        if current_time.hour < 12:
             events.append({
-                "type": "inflation",
-                "message": "📉 Bugün enflasyon verisi açıklanacak",
-                "priority": 85,
-                "valid_until": "11:00",
+                "type": "bayram",
+                "message": f"🏦 Resmî tatil: {holiday_name}",
+                "priority": 40,
+                "valid_until": "12:00",
                 "date": today_str
             })
+            logger.info(f"🏦 [BAYRAM] {holiday_name} - 12:00'a kadar gösterilecek")
     
-    # 4. 📰 GÜNLÜK HABERLER (Priority: 75) - YENİ!
+    # 3. 📰 GÜNLÜK HABERLER (Priority: 75)
     try:
         from utils.news_manager import get_current_news_banner
         
@@ -312,9 +193,8 @@ def get_todays_events() -> List[Dict[str, any]]:
                 "valid_until": "23:59",
                 "date": today_str
             })
-            logger.debug(f"📰 [EVENT] Haber banner'ı eklendi: {news_banner[:50]}...")
     except Exception as e:
-        logger.warning(f"⚠️ [EVENT] Haber banner'ı eklenemedi (önemsiz): {e}")
+        logger.warning(f"⚠️ [EVENT] Haber banner'ı eklenemedi: {e}")
     
     # Priority'ye göre sırala (Yüksekten düşüğe)
     events.sort(key=lambda x: x['priority'], reverse=True)
@@ -331,12 +211,11 @@ def get_todays_banner() -> Optional[str]:
     
     ÖNCELİK SIRASI:
     1. Manuel Duyuru (Redis'ten - bu fonksiyon bilmez)
-    2. Makro Eventler (TCMB Faiz: 90, Enflasyon: 85-90)
-    3. 🤖 AI Sonuçları (Priority +5 boost = 95)
-    4. 📰 Günlük Haberler (Priority: 75) ← YENİ!
-    5. Bayramlar (40)
-    6. Piyasa Kapalı (Hafta sonu - 30)
-    7. Hiçbiri yoksa -> None
+    2. 🤖 Günlük Akıllı Event (Gemini sorgusu - Priority: 85)
+    3. 📰 Günlük Haberler (Priority: 75)
+    4. 🏦 Bayramlar (Priority: 40, sadece 00:00-12:00 arası)
+    5. Piyasa Kapalı (Hafta sonu - Priority: 30)
+    6. Hiçbiri yoksa -> None
     
     Returns:
         str: Banner mesajı
@@ -371,46 +250,6 @@ def get_todays_banner() -> Optional[str]:
     return None
 
 # ======================================
-# 🆕 TAKVİM KONTROLÜ (SCHEDULER İÇİN)
-# ======================================
-
-def check_and_notify_events():
-    """
-    Bu fonksiyon Scheduler tarafından her gün sabah 08:00'da çağrılır.
-    Bugünün etkinliklerini kontrol eder ve Telegram'a bildirim gönderir.
-    """
-    from utils.cache import get_cache, set_cache
-    from config import Config
-    
-    try:
-        events = get_todays_events()
-        
-        if not events:
-            logger.info("📅 [TAKVİM] Bugün özel bir etkinlik yok.")
-            return
-        
-        # Telegram bildirimi gönder
-        from utils.telegram_monitor import get_telegram_monitor
-        telegram = get_telegram_monitor()
-        
-        if telegram:
-            # Sadece en yüksek priority'li eventi bildir
-            top_event = events[0]
-            
-            telegram.send_calendar_notification(
-                event_name=top_event['message'],
-                event_date=top_event['date']
-            )
-            
-            logger.info(
-                f"📅 [TAKVİM] Bildirim gönderildi: {top_event['message']} "
-                f"(Priority: {top_event['priority']})"
-            )
-        
-    except Exception as e:
-        logger.error(f"❌ Takvim kontrolü hatası: {e}")
-
-# ======================================
 # TEST FONKSİYONU
 # ======================================
 
@@ -419,7 +258,7 @@ def test_event_manager():
     Terminal'den test etmek için:
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 Event Manager V5.0 🤖📰 Test Ediliyor...\n")
+    print("🧪 Event Manager V6.0 🤖📰🏦 Test Ediliyor...\n")
     
     # Bugünün banner'ı
     banner = get_todays_banner()
@@ -428,14 +267,14 @@ def test_event_manager():
     else:
         print("ℹ️ Bugün özel bir mesaj yok.\n")
     
-    # Bugünün etkinlikleri (Priority sıralı)
+    # Bugünün etkinlikleri
     events = get_todays_events()
     if events:
         print("📅 BUGÜNÜN ETKİNLİKLERİ (Priority sıralı):")
         for evt in events:
             print(
                 f"  • [{evt['type']}] Priority: {evt['priority']} | "
-                f"Valid: {evt['valid_until']} | {evt['message']}"
+                f"{evt['message']}"
             )
         print()
     
@@ -446,19 +285,15 @@ def test_event_manager():
         for hol_date, hol_name in sorted(tr_holidays.items()):
             if hol_date.year == 2026:
                 print(f"  • {hol_date.strftime('%d.%m.%Y')}: {hol_name}")
+        print()
     
-    # JSON olayları
-    json_events = load_events_json()
-    if json_events:
-        print("\n📊 2026 FİNANS TAKVİMİ:")
-        for evt_date, evt_data in sorted(json_events.items()):
-            if isinstance(evt_data, dict):
-                msg = f"  • {evt_date}: {evt_data['message']} (P:{evt_data['priority']}, Until:{evt_data['valid_until']})"
-                if 'query_after' in evt_data:
-                    msg += " 🤖 [AI]"
-                print(msg)
-            else:
-                print(f"  • {evt_date}: {evt_data}")
+    # Günlük event kontrolü
+    print("🤖 GÜNLÜK EVENT KONTROLÜ:")
+    smart_event = get_todays_important_events()
+    if smart_event:
+        print(f"  ✅ Bugün özel event var: {smart_event}\n")
+    else:
+        print(f"  ℹ️ Bugün özel ekonomik event yok\n")
 
 if __name__ == "__main__":
     test_event_manager()
