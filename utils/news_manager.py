@@ -1,5 +1,4 @@
-"""
-News Manager - GÜNLÜK HABER SİSTEMİ V1.0 📰
+News Manager - GÜNLÜK HABER SİSTEMİ V1.1 📰🚀
 =============================================
 ✅ 2 KAYNAK: GNews + NewsData API
 ✅ TOPLU GEMİNİ: Tek çağrıda tüm haberleri özetle
@@ -8,6 +7,7 @@ News Manager - GÜNLÜK HABER SİSTEMİ V1.0 📰
 ✅ REDIS ENTEGRASYONU: Cache + Backup
 ✅ HATA TOLERANSI: Bir API çökse diğeri devreye girer
 ✅ ÖNCELIK: Priority 75 (TCMB ve Enflasyon'un altında)
+✅ 🚀 AKILLI BOOTSTRAP: İlk çalıştırmada otomatik doldurma
 """
 
 import os
@@ -340,6 +340,59 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
 
 
 # ======================================
+# 🚀 AKILLI BOOTSTRAP SİSTEMİ (YENİ!)
+# ======================================
+
+def bootstrap_news_system() -> bool:
+    """
+    🚀 İLK ÇALIŞTIRMA - AKILLI BOOTSTRAP
+    
+    Eğer vardiya verileri Redis'te yoksa, HEMEN doldurur.
+    Böylece kullanıcı 00:00 veya 12:00'ı beklemez!
+    
+    Returns:
+        bool: Bootstrap yapıldı mı?
+    """
+    try:
+        current_hour = datetime.now().hour
+        
+        # Hangi vardiya verisine ihtiyacımız var?
+        if 0 <= current_hour < 12:
+            # Sabah vardiyası lazım
+            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
+            shift_name = "SABAH"
+            prepare_func = prepare_morning_shift
+        else:
+            # Akşam vardiyası lazım
+            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
+            shift_name = "AKŞAM"
+            prepare_func = prepare_evening_shift
+        
+        # Vardiya verisi var mı kontrol et
+        existing_data = get_cache(cache_key)
+        
+        if existing_data:
+            logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası zaten hazır, bootstrap gerekmiyor")
+            return False
+        
+        # VERİ YOK! Hemen doldur
+        logger.warning(f"⚠️ [BOOTSTRAP] {shift_name} vardiyası boş! Acil doldurma başlıyor...")
+        
+        success = prepare_func()
+        
+        if success:
+            logger.info(f"🚀 [BOOTSTRAP] {shift_name} vardiyası başarıyla dolduruldu!")
+            return True
+        else:
+            logger.error(f"❌ [BOOTSTRAP] {shift_name} vardiyası doldurulamadı!")
+            return False
+        
+    except Exception as e:
+        logger.error(f"❌ [BOOTSTRAP] Hata: {e}")
+        return False
+
+
+# ======================================
 # ANA VARDİYA FONKSİYONLARI
 # ======================================
 
@@ -441,6 +494,8 @@ def get_current_news_banner() -> Optional[str]:
     """
     Şu anki saate uygun haber başlığını döndürür
     
+    🚀 YENİ: İlk çağrıda bootstrap otomatik devreye girer!
+    
     Returns:
         str: Haber başlığı veya None
     """
@@ -462,8 +517,20 @@ def get_current_news_banner() -> Optional[str]:
         schedule = get_cache(cache_key)
         
         if not schedule:
-            logger.warning(f"⚠️ [BANNER] {shift_name} vardiyası verisi yok!")
-            return None
+            logger.warning(f"⚠️ [BANNER] {shift_name} vardiyası verisi yok! Bootstrap tetikleniyor...")
+            
+            # 🚀 AKILLI BOOTSTRAP: Otomatik doldur
+            bootstrap_success = bootstrap_news_system()
+            
+            if bootstrap_success:
+                # Yeniden dene
+                schedule = get_cache(cache_key)
+                if not schedule:
+                    logger.error(f"❌ [BANNER] Bootstrap sonrası hala veri yok!")
+                    return None
+            else:
+                logger.error(f"❌ [BANNER] Bootstrap başarısız!")
+                return None
         
         # Şu anki saate uygun haberi bul
         for news_slot in schedule:
@@ -495,7 +562,7 @@ def test_news_manager():
     Terminal'den test etmek için:
     python -c "from utils.news_manager import test_news_manager; test_news_manager()"
     """
-    print("🧪 News Manager V1.0 Test Ediliyor...\n")
+    print("🧪 News Manager V1.1 🚀 Test Ediliyor...\n")
     
     # 1. Haber toplama testi
     print("1️⃣ HABER TOPLAMA TESTİ:")
@@ -530,13 +597,13 @@ def test_news_manager():
             print(f"   {slot['start']} - {slot['end']}: {slot['text']}")
         print()
     
-    # 4. Vardiya hazırlama testi
-    print("4️⃣ SABAH VARDİYASI HAZIRLIK TESTİ:")
-    success = prepare_morning_shift()
-    if success:
-        print("   ✅ Sabah vardiyası başarıyla hazırlandı\n")
+    # 4. Bootstrap testi
+    print("4️⃣ BOOTSTRAP TESTİ:")
+    bootstrap_success = bootstrap_news_system()
+    if bootstrap_success:
+        print("   ✅ Bootstrap başarıyla çalıştı\n")
     else:
-        print("   ❌ Sabah vardiyası hazırlanamadı\n")
+        print("   ℹ️ Bootstrap gerekli değildi (veri zaten var)\n")
     
     # 5. Banner testi
     print("5️⃣ BANNER GETİRME TESTİ:")
