@@ -15,6 +15,7 @@ Configuration - PRODUCTION READY V4.5 🧠
 ✅ CIRCUIT BREAKER: API hata yönetimi
 ✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
 ✅ TEMİZLİK MEKANİZMASI: 7 günlük otomatik temizlik
+✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
 """
 import os
 
@@ -54,7 +55,7 @@ class Config:
     # ZAMANLAYICI & PERFORMANS
     # ======================================
     # 👷 İşçi (Worker) - Veri güncelleme sıklığı (Saniye)
-    UPDATE_INTERVAL = 120  # 2 Dakika
+    UPDATE_INTERVAL = 60  # 1 Dakika ⚡ (değiştirildi: 120 → 60)
     
     # 📸 Fotoğrafçı (Snapshot) - Gece kaçta çalışacak?
     SNAPSHOT_HOUR = 0    # Saat 00
