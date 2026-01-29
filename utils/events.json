@@ -3,84 +3,98 @@
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Ocak 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   },
   "2026-02-12": {
     "message": "📈 Bugün enflasyon raporu açıklanacak",
     "type": "macro",
     "priority": 85,
-    "valid_until": "11:30"
+    "valid_until": "11:30",
+    "query_after": "Şubat 2026 Türkiye enflasyon oranı kaç oldu? TÜİK verisi nedir?"
   },
   "2026-03-12": {
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Mart 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   },
   "2026-04-22": {
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Nisan 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   },
   "2026-05-14": {
     "message": "📈 Bugün enflasyon raporu açıklanacak",
     "type": "macro",
     "priority": 85,
-    "valid_until": "11:30"
+    "valid_until": "11:30",
+    "query_after": "Mayıs 2026 Türkiye enflasyon oranı kaç oldu? TÜİK verisi nedir?"
   },
   "2026-05-22": {
     "message": "🛡️ Bugün finansal istikrar raporu yayınlanacak",
     "type": "macro",
     "priority": 75,
-    "valid_until": "17:00"
+    "valid_until": "17:00",
+    "query_after": "TCMB Mayıs 2026 finansal istikrar raporu ana bulguları nelerdir?"
   },
   "2026-06-11": {
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Haziran 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   },
   "2026-07-23": {
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Temmuz 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   },
   "2026-08-13": {
     "message": "📈 Bugün enflasyon raporu açıklanacak",
     "type": "macro",
     "priority": 85,
-    "valid_until": "11:30"
+    "valid_until": "11:30",
+    "query_after": "Ağustos 2026 Türkiye enflasyon oranı kaç oldu? TÜİK verisi nedir?"
   },
   "2026-09-10": {
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Eylül 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   },
   "2026-10-22": {
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Ekim 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   },
   "2026-11-12": {
     "message": "📈 Bugün enflasyon raporu açıklanacak",
     "type": "macro",
     "priority": 85,
-    "valid_until": "11:30"
+    "valid_until": "11:30",
+    "query_after": "Kasım 2026 Türkiye enflasyon oranı kaç oldu? TÜİK verisi nedir?"
   },
   "2026-11-27": {
     "message": "🛡️ Bugün finansal istikrar raporu yayınlanacak",
     "type": "macro",
     "priority": 75,
-    "valid_until": "17:00"
+    "valid_until": "17:00",
+    "query_after": "TCMB Kasım 2026 finansal istikrar raporu ana bulguları nelerdir?"
   },
   "2026-12-10": {
     "message": "⚠️ Bugün TCMB faiz kararı günü",
     "type": "macro",
     "priority": 90,
-    "valid_until": "15:00"
+    "valid_until": "15:00",
+    "query_after": "TCMB Aralık 2026 faiz kararı sonucu nedir? Faiz oranı kaç oldu?"
   }
 }
