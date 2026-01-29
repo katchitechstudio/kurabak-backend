@@ -1,16 +1,17 @@
 """
-Maintenance Service - PRODUCTION READY V4.5 🚧
+Maintenance Service - PRODUCTION READY V4.6 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
 ✅ API V5: Tek kaynak sistemi
 ✅ BANNER SİSTEMİ: Uygulama tarafına özel mesaj gönderme
-✅ SCHEDULER: Worker + Snapshot + Şef + Takvim + Push Notification + ALARM
+✅ SCHEDULER: Worker + Snapshot + Şef + Takvim + Push Notification + ALARM + HABER 📰
 ✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ THREAD-SAFE: Güvenli veri erişimi
 ✅ SMART RECOVERY: Sistem çökerse otomatik kurtarma
 ✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
 ✅ CLEANUP SYSTEM: Her gün eski backup'ları temizle
 ✅ ALARM SYSTEM: Her 5-15 dakikada alarm kontrolü
+✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:00 + 12:00) 📰
 """
 
 import logging
@@ -420,6 +421,50 @@ def alarm_check_job():
 
 
 # ======================================
+# 📰 HABER SİSTEMİ JOB'LARI (YENİ!)
+# ======================================
+
+def news_morning_shift_job():
+    """
+    🌅 SABAH VARDİYASI JOB
+    Her gece 00:00'da çalışır, sabah için haberleri hazırlar.
+    """
+    try:
+        logger.info("🌅 [SABAH VARDİYASI] Job başlatılıyor...")
+        
+        from utils.news_manager import prepare_morning_shift
+        success = prepare_morning_shift()
+        
+        if success:
+            logger.info("✅ [SABAH VARDİYASI] Başarıyla tamamlandı")
+        else:
+            logger.warning("⚠️ [SABAH VARDİYASI] Tamamlanamadı")
+            
+    except Exception as e:
+        logger.error(f"❌ [SABAH VARDİYASI] Hata: {e}")
+
+
+def news_evening_shift_job():
+    """
+    🌆 AKŞAM VARDİYASI JOB
+    Her gün 12:00'da çalışır, akşam için haberleri hazırlar.
+    """
+    try:
+        logger.info("🌆 [AKŞAM VARDİYASI] Job başlatılıyor...")
+        
+        from utils.news_manager import prepare_evening_shift
+        success = prepare_evening_shift()
+        
+        if success:
+            logger.info("✅ [AKŞAM VARDİYASI] Başarıyla tamamlandı")
+        else:
+            logger.warning("⚠️ [AKŞAM VARDİYASI] Tamamlanamadı")
+            
+    except Exception as e:
+        logger.error(f"❌ [AKŞAM VARDİYASI] Hata: {e}")
+
+
+# ======================================
 # SCHEDULER YÖNETİMİ
 # ======================================
 
@@ -518,6 +563,24 @@ def start_scheduler():
         replace_existing=True
     )
     
+    # 🌅 SABAH VARDİYASI: Her gece 00:00 (YENİ!)
+    scheduler.add_job(
+        news_morning_shift_job,
+        trigger=CronTrigger(hour=0, minute=0),
+        id='news_morning',
+        name='Haber Sabah Vardiyası',
+        replace_existing=True
+    )
+    
+    # 🌆 AKŞAM VARDİYASI: Her gün 12:00 (YENİ!)
+    scheduler.add_job(
+        news_evening_shift_job,
+        trigger=CronTrigger(hour=12, minute=0),
+        id='news_evening',
+        name='Haber Akşam Vardiyası',
+        replace_existing=True
+    )
+    
     # Başlat
     scheduler.start()
     logger.info("✅ Scheduler başlatıldı!")
@@ -529,6 +592,8 @@ def start_scheduler():
     logger.info("   🔔 Push: Her gün 12:00")
     logger.info("   🧹 Cleanup: Her gün 03:00")
     logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
+    logger.info("   🌅 Sabah Vardiyası: Her gece 00:00")
+    logger.info("   🌆 Akşam Vardiyası: Her gün 12:00")
 
 
 def stop_scheduler():
