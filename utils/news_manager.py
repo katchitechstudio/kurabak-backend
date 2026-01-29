@@ -1,618 +1,472 @@
-News Manager - GÜNLÜK HABER SİSTEMİ V1.1 📰🚀
-=============================================
-✅ 2 KAYNAK: GNews + NewsData API
-✅ TOPLU GEMİNİ: Tek çağrıda tüm haberleri özetle
-✅ VARDİYA SİSTEMİ: Sabah (00:00-12:00) + Akşam (12:00-00:00)
-✅ DİNAMİK SÜRE: Haber sayısına göre otomatik dağıtım
-✅ REDIS ENTEGRASYONU: Cache + Backup
-✅ HATA TOLERANSI: Bir API çökse diğeri devreye girer
-✅ ÖNCELIK: Priority 75 (TCMB ve Enflasyon'un altında)
-✅ 🚀 AKILLI BOOTSTRAP: İlk çalıştırmada otomatik doldurma
+"""
+Event Manager - AKILLI TAKVİM SİSTEMİ V5.1 🗓️🤖📰
+======================================
+✅ BAYRAMLAR: Otomatik algılama (holidays kütüphanesi)
+✅ TCMB & RAPORLAR: JSON dosyasından okuma
+✅ PİYASA DURUMU: Hafta sonu/Tatil kontrolü
+✅ ÖNCELİK SİSTEMİ: Manuel > TCMB > Haber > Bayram > Piyasa
+✅ TAKVİM BİLDİRİMLERİ: Etkinlik günü Telegram'a mesaj gönder
+✅ PRIORITY SYSTEM: Event önceliklendirme (90-40 arası)
+✅ VALID_UNTIL: Zaman bazlı banner kontrolü
+✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
+✅ 🤖 GEMINI AI: Event geçince otomatik sonuç çekme
+✅ 📰 GÜNLÜK HABERLER: Sabah + Akşam vardiyası entegrasyonu (Priority: 75)
+✅ 🏦 BAYRAM SAATİ: Bayramlar 12:00'a kadar gösterilir, sonra haberler devreye girer
 """
 
+import json
 import os
 import logging
-import requests
-import time
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-import google.generativeai as genai
-
-from utils.cache import get_cache, set_cache
-from config import Config
+from datetime import datetime, date, time as dt_time
+from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
 # ======================================
-# API ANAHTARLARI
+# 🤖 GEMINI AI ENTEGRASYONU
 # ======================================
 
-GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
-NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-
-# ======================================
-# HABER TOPLAMA FONKSİYONLARI
-# ======================================
-
-def fetch_gnews(max_results: int = 10) -> List[str]:
+def get_gemini_result(event_query: str, cache_key: str) -> Optional[str]:
     """
-    GNews API'den ekonomi haberleri çeker
+    Gemini AI'dan event sonucunu çeker.
     
     Args:
-        max_results: Maksimum haber sayısı
+        event_query: Gemini'ye sorulacak soru
+        cache_key: Redis cache anahtarı
         
     Returns:
-        List[str]: Haber başlıkları listesi
+        str: AI sonucu (örn: "TCMB faizi %47.5'te sabit tuttu")
+        None: Hata durumunda
     """
     try:
-        if not GNEWS_API_KEY:
-            logger.warning("⚠️ GNEWS_API_KEY bulunamadı!")
-            return []
+        # Cache kontrolü
+        from utils.cache import get_cache, set_cache
+        cached_result = get_cache(cache_key)
+        if cached_result:
+            logger.info(f"🤖 [GEMINI] Cache'den alındı: {cache_key}")
+            return cached_result
         
-        # API URL (Ekonomi, Dolar, Altın, Borsa filtreli)
-        url = (
-            f"https://gnews.io/api/v4/search"
-            f"?q=dolar OR altın OR borsa OR faiz"
-            f"&lang=tr"
-            f"&country=tr"
-            f"&sortby=publishedAt"
-            f"&apikey={GNEWS_API_KEY}"
-        )
+        # Gemini API
+        import google.generativeai as genai
         
-        logger.info("📡 [GNEWS] Haberler çekiliyor...")
-        response = requests.get(url, timeout=10)
-        data = response.json()
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            logger.warning("⚠️ GEMINI_API_KEY bulunamadı!")
+            return None
         
-        if data.get('totalArticles', 0) == 0:
-            logger.warning("⚠️ [GNEWS] Haber bulunamadı")
-            return []
-        
-        # Başlıkları al
-        articles = data.get('articles', [])[:max_results]
-        news_list = []
-        
-        for article in articles:
-            title = article.get('title', '').strip()
-            description = article.get('description', '').strip()
-            
-            # Başlık çok kısa/genel ise description'dan al
-            if len(title) < 20 and description:
-                text = description.split('.')[0]  # İlk cümle
-            else:
-                text = title
-            
-            if text and len(text) > 10:
-                news_list.append(text)
-        
-        logger.info(f"✅ [GNEWS] {len(news_list)} haber alındı")
-        return news_list
-        
-    except Exception as e:
-        logger.error(f"❌ [GNEWS] Hata: {e}")
-        return []
-
-
-def fetch_newsdata(max_results: int = 10) -> List[str]:
-    """
-    NewsData API'den ekonomi haberleri çeker
-    
-    Args:
-        max_results: Maksimum haber sayısı
-        
-    Returns:
-        List[str]: Haber başlıkları listesi
-    """
-    try:
-        if not NEWSDATA_API_KEY:
-            logger.warning("⚠️ NEWSDATA_API_KEY bulunamadı!")
-            return []
-        
-        # API URL (Business kategorisi, Türkiye, Türkçe)
-        url = (
-            f"https://newsdata.io/api/1/news"
-            f"?apikey={NEWSDATA_API_KEY}"
-            f"&country=tr"
-            f"&language=tr"
-            f"&category=business"
-            f"&q=ekonomi OR borsa OR altın OR döviz"
-        )
-        
-        logger.info("📡 [NEWSDATA] Haberler çekiliyor...")
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        if data.get('status') != 'success':
-            logger.warning(f"⚠️ [NEWSDATA] Hata: {data.get('status')}")
-            return []
-        
-        # Başlıkları al
-        results = data.get('results', [])[:max_results]
-        news_list = []
-        
-        for article in results:
-            title = article.get('title', '').strip()
-            description = article.get('description', '').strip()
-            
-            # Başlık çok kısa/genel ise description'dan al
-            if len(title) < 20 and description:
-                text = description.split('.')[0]  # İlk cümle
-            else:
-                text = title
-            
-            if text and len(text) > 10:
-                news_list.append(text)
-        
-        logger.info(f"✅ [NEWSDATA] {len(news_list)} haber alındı")
-        return news_list
-        
-    except Exception as e:
-        logger.error(f"❌ [NEWSDATA] Hata: {e}")
-        return []
-
-
-def fetch_all_news() -> List[str]:
-    """
-    Her iki API'den haberleri çeker ve birleştirir
-    
-    Returns:
-        List[str]: Tüm haber başlıkları (max 20 adet)
-    """
-    logger.info("📰 [NEWS] Tüm kaynaklardan haber toplama başlıyor...")
-    
-    # Her iki kaynaktan çek
-    gnews_list = fetch_gnews(max_results=10)
-    newsdata_list = fetch_newsdata(max_results=10)
-    
-    # Birleştir
-    all_news = gnews_list + newsdata_list
-    
-    # Tekrar edenleri temizle (benzer başlıkları kaldır)
-    unique_news = []
-    seen_keywords = set()
-    
-    for news in all_news:
-        # İlk 5 kelimeyi anahtar olarak kullan
-        keywords = ' '.join(news.split()[:5]).lower()
-        
-        if keywords not in seen_keywords:
-            unique_news.append(news)
-            seen_keywords.add(keywords)
-    
-    logger.info(f"✅ [NEWS] Toplam {len(unique_news)} benzersiz haber toplandı")
-    
-    # Maksimum 20 haber
-    return unique_news[:20]
-
-
-# ======================================
-# GEMİNİ TOPLU ÖZET FONKSİYONU
-# ======================================
-
-def summarize_news_batch(news_list: List[str]) -> List[str]:
-    """
-    GEMİNİ ile toplu haber özetleme (TEK ÇAĞRI!)
-    
-    Args:
-        news_list: Uzun haber başlıkları
-        
-    Returns:
-        List[str]: Özetlenmiş haberler (max 10 kelime)
-    """
-    try:
-        if not GEMINI_API_KEY:
-            logger.warning("⚠️ GEMINI_API_KEY bulunamadı! Haberler olduğu gibi kullanılacak.")
-            # Fallback: Haberleri kısalt (ilk 10 kelime)
-            return [' '.join(news.split()[:10]) for news in news_list]
-        
-        if not news_list:
-            logger.warning("⚠️ [GEMİNİ] Özetlenecek haber yok!")
-            return []
-        
-        # Gemini'yi yapılandır
-        genai.configure(api_key=GEMINI_API_KEY)
+        genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Haberleri numaralandır
-        numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
-        
-        # Tek prompt (TOPLU İŞLEM)
         prompt = f"""
-Aşağıdaki {len(news_list)} adet ekonomi haberini tek tek özetle.
-Her haberi SADECE 10 KELİMEDEN KISA tut.
-Emoji kullanma, açıklama yapma, sadece özet yaz.
-
-Format:
-1. [10 kelimelik özet]
-2. [10 kelimelik özet]
-...
-
-HABERLERİ:
-{numbered_news}
-
-ÖZETLER:
-"""
+        {event_query}
         
-        logger.info(f"🤖 [GEMİNİ] {len(news_list)} haber özetleniyor...")
+        Lütfen sadece sonucu tek cümlede özetle. Açıklama yapma.
+        Örnek formatlar:
+        - "TCMB faizi %47.5'te sabit tuttu"
+        - "Enflasyon %64.77'ye yükseldi"
+        - "TCMB politika faizini 200 baz puan düşürdü"
         
-        # Gemini'ye tek seferde gönder
+        Sadece özet sonucu yaz, başka bir şey ekleme.
+        """
+        
         response = model.generate_content(prompt)
         result = response.text.strip()
         
-        # Satırlara böl ve numaraları temizle
-        lines = result.split('\n')
-        summaries = []
+        # Cache'e kaydet (24 saat)
+        set_cache(cache_key, result, expire=86400)
         
-        for line in lines:
-            # Satır başındaki "1. ", "2. " gibi numaraları temizle
-            clean_line = line.strip()
-            if clean_line:
-                # Numarayı kaldır
-                if '. ' in clean_line:
-                    clean_line = clean_line.split('. ', 1)[1]
-                
-                # Boş değilse ekle
-                if clean_line:
-                    summaries.append(clean_line)
-        
-        logger.info(f"✅ [GEMİNİ] {len(summaries)} özet alındı")
-        
-        # Eğer özet sayısı orijinal haber sayısıyla eşleşmiyorsa
-        if len(summaries) != len(news_list):
-            logger.warning(f"⚠️ [GEMİNİ] Özet sayısı uyuşmuyor ({len(summaries)} vs {len(news_list)})")
-            # Eksik olanları orijinal haberlerden tamamla
-            while len(summaries) < len(news_list):
-                idx = len(summaries)
-                summaries.append(' '.join(news_list[idx].split()[:10]))
-        
-        return summaries[:len(news_list)]
+        logger.info(f"🤖 [GEMINI] Yeni sonuç alındı: {result}")
+        return result
         
     except Exception as e:
-        logger.error(f"❌ [GEMİNİ] Özet hatası: {e}")
-        # Fallback: Haberleri kısalt
-        return [' '.join(news.split()[:10]) for news in news_list]
-
+        logger.error(f"❌ Gemini API hatası: {e}")
+        return None
 
 # ======================================
-# VARDİYA PLANLAMA FONKSİYONU
+# BAYRAM SİSTEMİ (OTOMATIK)
 # ======================================
 
-def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) -> List[Dict]:
+def get_holidays():
     """
-    Haberleri belirlenen saatlere eşit olarak dağıtır
+    Türkiye bayramlarını döndürür.
+    holidays kütüphanesi yoksa boş dict döner (Sistem patlamaz)
+    """
+    try:
+        import holidays
+        return holidays.Turkey(years=range(2025, 2030))
+    except ImportError:
+        logger.warning("⚠️ 'holidays' kütüphanesi yok! Bayramlar devre dışı.")
+        return {}
+    except Exception as e:
+        logger.error(f"❌ Holidays hatası: {e}")
+        return {}
+
+# ======================================
+# EVENTS.JSON OKUYUCU
+# ======================================
+
+def load_events_json():
+    """
+    events.json dosyasını okur.
+    
+    YENİ FORMAT (V4.5):
+    {
+      "2026-01-22": {
+        "message": "⚠️ Bugün TCMB faiz kararı günü",
+        "type": "macro",
+        "priority": 90,
+        "valid_until": "15:00",
+        "query_after": "TCMB faiz kararı Ocak 2026 sonucu nedir?"
+      }
+    }
+    
+    ESKİ FORMAT (String) de desteklenir (geriye uyumluluk)
+    """
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_path = os.path.join(current_dir, "events.json")
+        
+        if not os.path.exists(json_path):
+            logger.warning(f"⚠️ events.json bulunamadı: {json_path}")
+            return {}
+        
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+            # Format dönüşümü: Eski string formatı yeni object formatına çevir
+            normalized = {}
+            for event_date, event_data in data.items():
+                if isinstance(event_data, str):
+                    # ESKİ FORMAT (geriye uyumluluk)
+                    normalized[event_date] = {
+                        "message": event_data,
+                        "type": "legacy",
+                        "priority": 80,
+                        "valid_until": "23:59"
+                    }
+                else:
+                    # YENİ FORMAT
+                    normalized[event_date] = event_data
+            
+            return normalized
+            
+    except Exception as e:
+        logger.error(f"❌ events.json okuma hatası: {e}")
+        return {}
+
+# ======================================
+# ENFLASYON TARİHİ KONTROLÜ
+# ======================================
+
+def is_inflation_day(date_obj: date) -> bool:
+    """
+    TÜİK Enflasyon verisi her ayın 3'ünde açıklanır.
+    Eğer 3'ü hafta sonuna denk gelirse ilk iş günü açıklanır.
+    """
+    if date_obj.day == 3 and date_obj.weekday() < 5:
+        return True
+    
+    if date_obj.day == 4 and date_obj.weekday() == 0:
+        prev_day = date_obj.replace(day=3)
+        if prev_day.weekday() == 6:
+            return True
+    
+    if date_obj.day == 5 and date_obj.weekday() == 0:
+        prev_day = date_obj.replace(day=3)
+        if prev_day.weekday() == 5:
+            return True
+    
+    return False
+
+# ======================================
+# VALID_UNTIL KONTROLÜ
+# ======================================
+
+def is_valid_at_time(valid_until: str, current_time: datetime) -> bool:
+    """
+    Banner'ın hala gösterilip gösterilmeyeceğini kontrol eder.
     
     Args:
-        news_list: Haber listesi
-        start_hour: Başlangıç saati (örn: 0)
-        end_hour: Bitiş saati (örn: 12)
+        valid_until: "15:00" formatında saat
+        current_time: Şu anki zaman
         
+    Returns:
+        True: Banner gösterilmeli
+        False: Banner süresi doldu
+    """
+    try:
+        # valid_until formatı: "HH:MM"
+        hour, minute = map(int, valid_until.split(':'))
+        valid_time = dt_time(hour, minute)
+        current_time_only = current_time.time()
+        
+        # Şu anki saat valid_until'den önce mi?
+        return current_time_only < valid_time
+        
+    except Exception as e:
+        logger.warning(f"⚠️ valid_until parse hatası ({valid_until}): {e}")
+        return True  # Hata durumunda göster (güvenli taraf)
+
+# ======================================
+# 🆕 BUGÜNÜN ETKİNLİKLERİNİ GETIR
+# ======================================
+
+def get_todays_events() -> List[Dict[str, any]]:
+    """
+    Bugünün tüm etkinliklerini priority sırasına göre döndürür.
+    
+    🤖 YENİ: Event süresi geçmişse Gemini'den sonuç çeker!
+    📰 YENİ: Günlük haber sistemi entegrasyonu (Priority: 75)
+    🏦 YENİ: Bayramlar 12:00'a kadar gösterilir, sonra haberler devreye girer
+    
     Returns:
         List[Dict]: [
             {
-                "start": "00:00",
-                "end": "02:00",
-                "text": "Haber başlığı"
-            },
-            ...
+                "type": "macro" | "bayram" | "inflation" | "news",
+                "message": "...",
+                "priority": 90,
+                "valid_until": "15:00",
+                "date": "2026-01-22"
+            }
         ]
     """
-    if not news_list:
-        logger.warning("⚠️ [PLAN] Planlanacak haber yok!")
-        return []
+    today = date.today()
+    today_str = today.strftime("%Y-%m-%d")
+    current_time = datetime.now()
+    events = []
     
-    # Toplam süre (dakika cinsinden)
-    total_duration_minutes = (end_hour - start_hour) * 60
-    
-    # Haber başına süre
-    news_count = len(news_list)
-    duration_per_news = total_duration_minutes // news_count
-    
-    schedule = []
-    current_time = datetime.now().replace(hour=start_hour, minute=0, second=0, microsecond=0)
-    
-    # Eğer gece yarısı için planlama yapılıyorsa, tarihi bir gün ileri al
-    if start_hour == 0 and datetime.now().hour >= 12:
-        current_time += timedelta(days=1)
-    
-    logger.info(f"📅 [PLAN] {news_count} haber, {start_hour}:00 - {end_hour}:00 arası dağıtılıyor")
-    logger.info(f"   Her haber ~{duration_per_news} dakika ekranda kalacak")
-    
-    for i, news in enumerate(news_list):
-        start_str = current_time.strftime("%H:%M")
+    # 1. JSON'daki Özel Olaylar (TCMB, Raporlar)
+    json_events = load_events_json()
+    if today_str in json_events:
+        event_data = json_events[today_str]
         
-        # Son haberde bitiş saatini tam end_hour'a getir
-        if i == news_count - 1:
-            end_time = current_time.replace(hour=end_hour, minute=0)
-        else:
-            end_time = current_time + timedelta(minutes=duration_per_news)
+        # Saat kontrolü: valid_until geçti mi?
+        time_expired = not is_valid_at_time(event_data['valid_until'], current_time)
         
-        end_str = end_time.strftime("%H:%M")
-        
-        schedule.append({
-            "start": start_str,
-            "end": end_str,
-            "text": news
-        })
-        
-        current_time = end_time
-    
-    return schedule
-
-
-# ======================================
-# 🚀 AKILLI BOOTSTRAP SİSTEMİ (YENİ!)
-# ======================================
-
-def bootstrap_news_system() -> bool:
-    """
-    🚀 İLK ÇALIŞTIRMA - AKILLI BOOTSTRAP
-    
-    Eğer vardiya verileri Redis'te yoksa, HEMEN doldurur.
-    Böylece kullanıcı 00:00 veya 12:00'ı beklemez!
-    
-    Returns:
-        bool: Bootstrap yapıldı mı?
-    """
-    try:
-        current_hour = datetime.now().hour
-        
-        # Hangi vardiya verisine ihtiyacımız var?
-        if 0 <= current_hour < 12:
-            # Sabah vardiyası lazım
-            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-            shift_name = "SABAH"
-            prepare_func = prepare_morning_shift
-        else:
-            # Akşam vardiyası lazım
-            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-            shift_name = "AKŞAM"
-            prepare_func = prepare_evening_shift
-        
-        # Vardiya verisi var mı kontrol et
-        existing_data = get_cache(cache_key)
-        
-        if existing_data:
-            logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası zaten hazır, bootstrap gerekmiyor")
-            return False
-        
-        # VERİ YOK! Hemen doldur
-        logger.warning(f"⚠️ [BOOTSTRAP] {shift_name} vardiyası boş! Acil doldurma başlıyor...")
-        
-        success = prepare_func()
-        
-        if success:
-            logger.info(f"🚀 [BOOTSTRAP] {shift_name} vardiyası başarıyla dolduruldu!")
-            return True
-        else:
-            logger.error(f"❌ [BOOTSTRAP] {shift_name} vardiyası doldurulamadı!")
-            return False
-        
-    except Exception as e:
-        logger.error(f"❌ [BOOTSTRAP] Hata: {e}")
-        return False
-
-
-# ======================================
-# ANA VARDİYA FONKSİYONLARI
-# ======================================
-
-def prepare_morning_shift() -> bool:
-    """
-    SABAH VARDİYASI (00:00 - 12:00)
-    Gece yarısı çalışır, sabah için haberleri hazırlar
-    
-    Returns:
-        bool: Başarılı mı?
-    """
-    try:
-        logger.info("🌅 [SABAH VARDİYASI] Hazırlık başlıyor...")
-        
-        # 1. Haberleri topla
-        news_list = fetch_all_news()
-        
-        if not news_list:
-            logger.warning("⚠️ [SABAH VARDİYASI] Haber bulunamadı!")
-            return False
-        
-        # 2. Gemini ile özetle (TOPLU)
-        summaries = summarize_news_batch(news_list)
-        
-        # 3. Sabah için planla (00:00 - 12:00)
-        schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
-        
-        # 4. Redis'e kaydet
-        cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-        set_cache(cache_key, schedule, ttl=43200)  # 12 saat
-        
-        # Son güncelleme zamanını kaydet
-        update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
-        set_cache(update_key, {
-            'shift': 'morning',
-            'timestamp': time.time(),
-            'news_count': len(schedule)
-        }, ttl=86400)  # 24 saat
-        
-        logger.info(f"✅ [SABAH VARDİYASI] {len(schedule)} haber hazırlandı!")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ [SABAH VARDİYASI] Hata: {e}")
-        return False
-
-
-def prepare_evening_shift() -> bool:
-    """
-    AKŞAM VARDİYASI (12:00 - 00:00)
-    Öğlen çalışır, akşam için haberleri hazırlar
-    
-    Returns:
-        bool: Başarılı mı?
-    """
-    try:
-        logger.info("🌆 [AKŞAM VARDİYASI] Hazırlık başlıyor...")
-        
-        # 1. Haberleri topla
-        news_list = fetch_all_news()
-        
-        if not news_list:
-            logger.warning("⚠️ [AKŞAM VARDİYASI] Haber bulunamadı!")
-            return False
-        
-        # 2. Gemini ile özetle (TOPLU)
-        summaries = summarize_news_batch(news_list)
-        
-        # 3. Akşam için planla (12:00 - 00:00)
-        schedule = plan_shift_schedule(summaries, start_hour=12, end_hour=24)
-        
-        # 4. Redis'e kaydet
-        cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-        set_cache(cache_key, schedule, ttl=43200)  # 12 saat
-        
-        # Son güncelleme zamanını kaydet
-        update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
-        set_cache(update_key, {
-            'shift': 'evening',
-            'timestamp': time.time(),
-            'news_count': len(schedule)
-        }, ttl=86400)  # 24 saat
-        
-        logger.info(f"✅ [AKŞAM VARDİYASI] {len(schedule)} haber hazırlandı!")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ [AKŞAM VARDİYASI] Hata: {e}")
-        return False
-
-
-# ======================================
-# KULLANICI İÇİN HABER GETIRME
-# ======================================
-
-def get_current_news_banner() -> Optional[str]:
-    """
-    Şu anki saate uygun haber başlığını döndürür
-    
-    🚀 YENİ: İlk çağrıda bootstrap otomatik devreye girer!
-    
-    Returns:
-        str: Haber başlığı veya None
-    """
-    try:
-        current_hour = datetime.now().hour
-        current_time = datetime.now().strftime("%H:%M")
-        
-        # Hangi vardiyayı kullanacağız?
-        if 0 <= current_hour < 12:
-            # Sabah vardiyası
-            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-            shift_name = "SABAH"
-        else:
-            # Akşam vardiyası
-            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-            shift_name = "AKŞAM"
-        
-        # Vardiya verilerini al
-        schedule = get_cache(cache_key)
-        
-        if not schedule:
-            logger.warning(f"⚠️ [BANNER] {shift_name} vardiyası verisi yok! Bootstrap tetikleniyor...")
+        if time_expired and 'query_after' in event_data:
+            # 🤖 GEMINI MODU: Event geçmiş, AI'dan sonuç çek
+            cache_key = f"gemini_result:{today_str}"
+            ai_result = get_gemini_result(event_data['query_after'], cache_key)
             
-            # 🚀 AKILLI BOOTSTRAP: Otomatik doldur
-            bootstrap_success = bootstrap_news_system()
-            
-            if bootstrap_success:
-                # Yeniden dene
-                schedule = get_cache(cache_key)
-                if not schedule:
-                    logger.error(f"❌ [BANNER] Bootstrap sonrası hala veri yok!")
-                    return None
+            if ai_result:
+                # AI sonucunu göster
+                events.append({
+                    "type": "ai_result",
+                    "message": f"🔴 {ai_result}",
+                    "priority": event_data['priority'] + 5,  # AI sonucu +5 priority
+                    "valid_until": "23:59",
+                    "date": today_str
+                })
             else:
-                logger.error(f"❌ [BANNER] Bootstrap başarısız!")
-                return None
+                # AI başarısız, fallback mesaj
+                fallback_msg = event_data['message'].replace("⚠️ Bugün", "✅").replace("günü", "açıklandı")
+                events.append({
+                    "type": event_data['type'],
+                    "message": fallback_msg,
+                    "priority": event_data['priority'],
+                    "valid_until": "23:59",
+                    "date": today_str
+                })
         
-        # Şu anki saate uygun haberi bul
-        for news_slot in schedule:
-            start_time = news_slot['start']
-            end_time = news_slot['end']
+        elif not time_expired:
+            # Henüz event zamanı geçmedi, normal mesajı göster
+            events.append({
+                "type": event_data['type'],
+                "message": event_data['message'],
+                "priority": event_data['priority'],
+                "valid_until": event_data['valid_until'],
+                "date": today_str
+            })
+    
+    # 2. 🏦 Bayramlar (Priority: 40) → ÖĞLENE KADAR (12:00)
+    tr_holidays = get_holidays()
+    if tr_holidays and today in tr_holidays:
+        holiday_name = tr_holidays.get(today)
+        
+        # 🆕 BAYRAM SAATİ: Saat 12:00'dan önce mi?
+        if current_time.hour < 12:
+            events.append({
+                "type": "bayram",
+                "message": f"🏦 Resmî tatil: {holiday_name}",
+                "priority": 40,
+                "valid_until": "12:00",  # ← ÖĞLENE KADAR!
+                "date": today_str
+            })
+            logger.info(f"🏦 [BAYRAM] {holiday_name} - 12:00'a kadar gösterilecek")
+        else:
+            logger.info(f"🏦 [BAYRAM] {holiday_name} süresi doldu (12:00+), haberler devrede")
+    
+    # 3. Enflasyon Günü (Priority: 85)
+    if is_inflation_day(today):
+        if current_time.hour < 11:  # 11:00'a kadar göster
+            events.append({
+                "type": "inflation",
+                "message": "📉 Bugün enflasyon verisi açıklanacak",
+                "priority": 85,
+                "valid_until": "11:00",
+                "date": today_str
+            })
+    
+    # 4. 📰 GÜNLÜK HABERLER (Priority: 75)
+    try:
+        from utils.news_manager import get_current_news_banner
+        
+        news_banner = get_current_news_banner()
+        if news_banner:
+            events.append({
+                "type": "news",
+                "message": news_banner,
+                "priority": 75,
+                "valid_until": "23:59",
+                "date": today_str
+            })
+            logger.debug(f"📰 [EVENT] Haber banner'ı eklendi: {news_banner[:50]}...")
+    except Exception as e:
+        logger.warning(f"⚠️ [EVENT] Haber banner'ı eklenemedi (önemsiz): {e}")
+    
+    # Priority'ye göre sırala (Yüksekten düşüğe)
+    events.sort(key=lambda x: x['priority'], reverse=True)
+    
+    return events
+
+# ======================================
+# ANA FONKSİYON: BUGÜNÜN BANNER'I
+# ======================================
+
+def get_todays_banner() -> Optional[str]:
+    """
+    🔥 TEK BANNER KURALI: Sadece en yüksek priority'li banner gösterilir!
+    
+    ÖNCELİK SIRASI:
+    1. Manuel Duyuru (Redis'ten - bu fonksiyon bilmez)
+    2. Makro Eventler (TCMB Faiz: 90, Enflasyon: 85-90)
+    3. 🤖 AI Sonuçları (Priority +5 boost = 95)
+    4. 📰 Günlük Haberler (Priority: 75)
+    5. 🏦 Bayramlar (40, sadece 00:00-12:00 arası) ← YENİ!
+    6. Piyasa Kapalı (Hafta sonu - 30)
+    7. Hiçbiri yoksa -> None
+    
+    Returns:
+        str: Banner mesajı
+        None: Banner yok
+    """
+    today = date.today()
+    current_time = datetime.now()
+    weekday = today.weekday()  # 0=Pzt, 4=Cuma, 5=Cmt, 6=Paz
+    
+    # --- 1. BUGÜNÜN ETKİNLİKLERİNİ AL (Priority sıralı) ---
+    events = get_todays_events()
+    
+    if events:
+        # En yüksek priority'li event (Liste zaten sıralı)
+        top_event = events[0]
+        logger.info(
+            f"📅 [BANNER] {top_event['type']} (Priority: {top_event['priority']}): "
+            f"{top_event['message']}"
+        )
+        return top_event['message']
+    
+    # --- 2. PİYASA KAPALI MI? (Hafta Sonu - Priority: 30) ---
+    # Cumartesi (5) - Pazar (6) tüm gün kapalı
+    if weekday == 5 or weekday == 6:
+        return "Piyasalar kapalı, iyi hafta sonları! 🌙"
+    
+    # Cuma akşam 18:00 sonrası
+    if weekday == 4 and current_time.hour >= 18:
+        return "Piyasalar kapandı, iyi hafta sonları! 🌙"
+    
+    # --- 3. HİÇBİR ŞEY YOK ---
+    return None
+
+# ======================================
+# 🆕 TAKVİM KONTROLÜ (SCHEDULER İÇİN)
+# ======================================
+
+def check_and_notify_events():
+    """
+    Bu fonksiyon Scheduler tarafından her gün sabah 08:00'da çağrılır.
+    Bugünün etkinliklerini kontrol eder ve Telegram'a bildirim gönderir.
+    """
+    from utils.cache import get_cache, set_cache
+    from config import Config
+    
+    try:
+        events = get_todays_events()
+        
+        if not events:
+            logger.info("📅 [TAKVİM] Bugün özel bir etkinlik yok.")
+            return
+        
+        # Telegram bildirimi gönder
+        from utils.telegram_monitor import get_telegram_monitor
+        telegram = get_telegram_monitor()
+        
+        if telegram:
+            # Sadece en yüksek priority'li eventi bildir
+            top_event = events[0]
             
-            # Saat karşılaştırması
-            if start_time <= current_time < end_time:
-                logger.info(f"📰 [BANNER] {shift_name} vardiyası: {news_slot['text'][:50]}...")
-                return f"📰 {news_slot['text']}"
-        
-        # Hiçbir slot'a uymazsa ilk haberi göster
-        if schedule:
-            return f"📰 {schedule[0]['text']}"
-        
-        return None
+            telegram.send_calendar_notification(
+                event_name=top_event['message'],
+                event_date=top_event['date']
+            )
+            
+            logger.info(
+                f"📅 [TAKVİM] Bildirim gönderildi: {top_event['message']} "
+                f"(Priority: {top_event['priority']})"
+            )
         
     except Exception as e:
-        logger.error(f"❌ [BANNER] Haber getirme hatası: {e}")
-        return None
-
+        logger.error(f"❌ Takvim kontrolü hatası: {e}")
 
 # ======================================
 # TEST FONKSİYONU
 # ======================================
 
-def test_news_manager():
+def test_event_manager():
     """
     Terminal'den test etmek için:
-    python -c "from utils.news_manager import test_news_manager; test_news_manager()"
+    python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 News Manager V1.1 🚀 Test Ediliyor...\n")
+    print("🧪 Event Manager V5.1 🤖📰🏦 Test Ediliyor...\n")
     
-    # 1. Haber toplama testi
-    print("1️⃣ HABER TOPLAMA TESTİ:")
-    news_list = fetch_all_news()
-    print(f"   ✅ {len(news_list)} haber toplandı\n")
-    
-    if news_list:
-        print("   İlk 3 haber:")
-        for i, news in enumerate(news_list[:3], 1):
-            print(f"   {i}. {news[:80]}...")
-        print()
-    
-    # 2. Gemini özet testi
-    if news_list:
-        print("2️⃣ GEMİNİ ÖZET TESTİ:")
-        summaries = summarize_news_batch(news_list[:3])
-        print(f"   ✅ {len(summaries)} özet alındı\n")
-        
-        print("   Özetler:")
-        for i, summary in enumerate(summaries, 1):
-            print(f"   {i}. {summary}")
-        print()
-    
-    # 3. Planlama testi
-    if summaries:
-        print("3️⃣ VARDİYA PLANLAMA TESTİ:")
-        schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
-        print(f"   ✅ {len(schedule)} slot oluşturuldu\n")
-        
-        print("   İlk 3 slot:")
-        for slot in schedule[:3]:
-            print(f"   {slot['start']} - {slot['end']}: {slot['text']}")
-        print()
-    
-    # 4. Bootstrap testi
-    print("4️⃣ BOOTSTRAP TESTİ:")
-    bootstrap_success = bootstrap_news_system()
-    if bootstrap_success:
-        print("   ✅ Bootstrap başarıyla çalıştı\n")
-    else:
-        print("   ℹ️ Bootstrap gerekli değildi (veri zaten var)\n")
-    
-    # 5. Banner testi
-    print("5️⃣ BANNER GETİRME TESTİ:")
-    banner = get_current_news_banner()
+    # Bugünün banner'ı
+    banner = get_todays_banner()
     if banner:
-        print(f"   ✅ Şu anki banner: {banner}\n")
+        print(f"✅ BUGÜNÜN BANNER'I:\n{banner}\n")
     else:
-        print("   ℹ️ Banner bulunamadı\n")
-
+        print("ℹ️ Bugün özel bir mesaj yok.\n")
+    
+    # Bugünün etkinlikleri (Priority sıralı)
+    events = get_todays_events()
+    if events:
+        print("📅 BUGÜNÜN ETKİNLİKLERİ (Priority sıralı):")
+        for evt in events:
+            print(
+                f"  • [{evt['type']}] Priority: {evt['priority']} | "
+                f"Valid: {evt['valid_until']} | {evt['message']}"
+            )
+        print()
+    
+    # Bayram listesi
+    tr_holidays = get_holidays()
+    if tr_holidays:
+        print("📅 2026 BAYRAMLARI:")
+        for hol_date, hol_name in sorted(tr_holidays.items()):
+            if hol_date.year == 2026:
+                print(f"  • {hol_date.strftime('%d.%m.%Y')}: {hol_name}")
+    
+    # JSON olayları
+    json_events = load_events_json()
+    if json_events:
+        print("\n📊 2026 FİNANS TAKVİMİ:")
+        for evt_date, evt_data in sorted(json_events.items()):
+            if isinstance(evt_data, dict):
+                msg = f"  • {evt_date}: {evt_data['message']} (P:{evt_data['priority']}, Until:{evt_data['valid_until']})"
+                if 'query_after' in evt_data:
+                    msg += " 🤖 [AI]"
+                print(msg)
+            else:
+                print(f"  • {evt_date}: {evt_data}")
 
 if __name__ == "__main__":
-    test_news_manager()
+    test_event_manager()
