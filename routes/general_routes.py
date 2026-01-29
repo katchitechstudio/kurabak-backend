@@ -1,5 +1,5 @@
 """
-General Routes - PRODUCTION READY V4.3 🚀
+General Routes - PRODUCTION READY V4.4 🚀
 ==========================================================
 ✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
@@ -11,6 +11,7 @@ General Routes - PRODUCTION READY V4.3 🚀
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
 ✅ FCM ENDPOINTS: Firebase token kayıt/silme
 ✅ SUMMARY SYNC FIX: Özet her zaman currencies'den hesaplanır
+✅ EVENT MANAGER BANNER: Otomatik takvim bazlı banner 🤖
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -31,6 +32,8 @@ from utils.notification_service import (
     unregister_fcm_token,
     get_token_count
 )
+# 🤖 Event Manager - Akıllı Takvim
+from utils.event_manager import get_todays_banner
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +193,39 @@ def calculate_summary_from_currencies(currencies_list):
         logger.error(f"❌ Summary hesaplama hatası: {e}")
         return {}
 
+
+def get_smart_banner():
+    """
+    🤖 AKILLI BANNER SİSTEMİ (Sıralama Önemli!)
+    
+    Öncelik Sırası:
+    1. System Banner (Telegram'dan manuel gönderilen) - Priority: 100
+    2. Event Manager Banner (Takvim bazlı - TCMB, Enflasyon vb.) - Priority: 90-75
+    3. Market Status Banner (Piyasa durumu) - Priority: 30
+    4. Hiçbiri - None
+    """
+    banner = None
+    priority = -1
+    
+    # 1️⃣ Telegram'dan gönderilen manuel banner (En yüksek priority)
+    manual_banner = get_cache("system_banner")
+    if manual_banner:
+        logger.debug(f"📢 [BANNER] Manual banner bulundu (Priority: 100)")
+        return manual_banner  # Manuel banner her zaman öncelikli
+    
+    # 2️⃣ Event Manager'dan otomatik banner (TCMB, Enflasyon vb.)
+    try:
+        event_banner = get_todays_banner()
+        if event_banner:
+            logger.debug(f"🤖 [BANNER] Event banner bulundu: {event_banner[:50]}...")
+            return event_banner  # Event banner bulundu, döndür
+    except Exception as e:
+        logger.warning(f"⚠️ [BANNER] Event Manager hatası (önemsiz): {e}")
+    
+    # 3️⃣ Eğer hiçbiri yoksa None (Frontend kendi logic'ini uygulayacak)
+    return None
+
+
 # ======================================
 # CURRENCY ENDPOINTLER (RATE LIMITED!)
 # ======================================
@@ -203,6 +239,7 @@ def get_all_currencies():
     📢 Banner desteği eklendi!
     🛡️ Rate limit: 60/dakika
     🚧 Bakım Modu: Otomatik banner güncelleme
+    🤖 Akıllı Banner: Event Manager entegrasyonu
     """
     # Bot kontrolü
     check_user_agent()
@@ -222,16 +259,14 @@ def get_all_currencies():
         status = result.get('status', 'OPEN')
         market_msg = result.get('market_msg')
         
-        # Banner var mı kontrol et
-        banner_msg = get_cache("system_banner")
+        # 🤖 AKILLI BANNER SISTEMI
+        banner_msg = get_smart_banner()
         
-        # 🔥 AKILLI BANNER: Bakım modundaysa banner'ı otomatik güncelle
-        if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
-            # Bakım mesajını banner olarak kullan
-            banner_msg = market_msg or "🚧 Sistem şu an bakımda. Lütfen daha sonra tekrar deneyin."
-        elif status == 'CLOSED':
-            # Piyasa kapalıysa ona göre banner göster (eğer manuel banner yoksa)
-            if not banner_msg:
+        # Eğer banner yoksa market durumuyla ilgili msg göster
+        if not banner_msg:
+            if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
+                banner_msg = market_msg or "🚧 Sistem şu an bakımda. Lütfen daha sonra tekrar deneyin."
+            elif status == 'CLOSED':
                 banner_msg = market_msg or "🌙 Piyasalar kapalı, iyi hafta sonları!"
         
         # Meta verisine banner'ı ekle
@@ -320,6 +355,7 @@ def get_summary():
     🛡️ Rate limit: 60/dakika
     📢 Banner Desteği Eklendi!
     🔥 SUMMARY SYNC FIX: Artık currencies cache'inin içinden alınır!
+    🤖 Akıllı Banner: Event Manager entegrasyonu
     """
     check_user_agent()
     track_online_user()
@@ -348,14 +384,15 @@ def get_summary():
             status = currencies_result.get('status', 'OPEN')
             market_msg = currencies_result.get('market_msg')
 
-        # Banner'ı çek
-        banner_msg = get_cache("system_banner")
+        # 🤖 AKILLI BANNER SISTEMI
+        banner_msg = get_smart_banner()
         
-        # Eğer bakım varsa veya piyasa kapalıysa banner'ı güncelle
-        if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
-            banner_msg = market_msg or "🚧 Sistem bakımda."
-        elif status == 'CLOSED' and not banner_msg:
-            banner_msg = market_msg or "🌙 Piyasalar kapalı."
+        # Eğer banner yoksa market durumuyla ilgili msg göster
+        if not banner_msg:
+            if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
+                banner_msg = market_msg or "🚧 Sistem bakımda."
+            elif status == 'CLOSED' and not banner_msg:
+                banner_msg = market_msg or "🌙 Piyasalar kapalı."
 
         # Meta verisine banner'ı paketle
         meta_data = {
@@ -420,6 +457,89 @@ def get_regional_currencies():
     except Exception as e:
         logger.error(f"Regional Error: {e}")
         return create_response({}, 500, "Sunucu hatası")
+
+
+# ======================================
+# 🤖 AKILLI BANNER ENDPOINT
+# ======================================
+
+@api_bp.route('/banner/today', methods=['GET'])
+@limiter.limit("120 per minute")  # Sık istenen endpoint
+def get_todays_event_banner():
+    """
+    Bugünün Etkinlik Bazlı Banner'ı
+    
+    🤖 Event Manager'dan gelen akıllı banner
+    - TCMB Faiz Kararları
+    - Enflasyon Raporları
+    - Finansal İstikrar Raporları
+    - 🔴 Gemini AI: Event geçince otomatik sonuç çekme
+    
+    Response:
+    {
+        "success": true,
+        "data": {
+            "banner": "⚠️ Bugün TCMB faiz kararı günü" veya null
+        },
+        "meta": {
+            "banner_type": "ai_result" | "macro" | "bayram" | "inflation" | null,
+            "priority": 90,
+            "valid_until": "15:00"
+        }
+    }
+    
+    🛡️ Rate limit: 120/dakika
+    """
+    check_user_agent()
+    track_online_user()
+    
+    try:
+        from utils.event_manager import get_todays_events
+        
+        # Bugünün tüm etkinliklerini al (Priority sıralı)
+        events = get_todays_events()
+        
+        if events:
+            # En yüksek priority'li event
+            top_event = events[0]
+            
+            return create_response(
+                {
+                    "banner": top_event['message'],
+                    "event_type": top_event['type']
+                },
+                200,
+                "Bugünün banner'ı getirildi",
+                {
+                    'banner_type': top_event['type'],
+                    'priority': top_event['priority'],
+                    'valid_until': top_event['valid_until'],
+                    'has_events': len(events) > 0,
+                    'total_events': len(events)
+                }
+            )
+        else:
+            return create_response(
+                {
+                    "banner": None,
+                    "event_type": None
+                },
+                200,
+                "Bugün özel bir banner yok",
+                {
+                    'banner_type': None,
+                    'priority': 0,
+                    'has_events': False
+                }
+            )
+            
+    except Exception as e:
+        logger.error(f"Event Banner Error: {e}")
+        return create_response(
+            {"banner": None},
+            500,
+            "Banner alınırken hata oluştu"
+        )
 
 
 # ======================================
