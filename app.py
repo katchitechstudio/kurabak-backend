@@ -1,12 +1,12 @@
 """
-KuraBak Backend - ENTRY POINT V4.7 🚀
+KuraBak Backend - ENTRY POINT V5.0 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları (FIX)
 ✅ CİHAZ KAYIT SİSTEMİ: FCM Token yönetimi
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
-✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
+✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler (404 FIX!)
 ✅ ALARM SİSTEMİ: Redis tabanlı fiyat alarmları
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
@@ -14,6 +14,7 @@ KuraBak Backend - ENTRY POINT V4.7 🚀
 ✅ SCHEDULER STATUS FIX: Scheduler durumu artık doğru gösteriliyor
 ✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü
 ✅ TELEGRAM INSTANCE FIX: Global instance kullanımı
+✅ FIREBASE PROJECT ID FIX: 404 hatası çözüldü!
 """
 import os
 import logging
@@ -37,7 +38,7 @@ from utils.telegram_monitor import init_telegram_monitor
 from utils.notification_service import register_fcm_token, send_test_notification
 
 # ======================================
-# 🔥 FIREBASE INITIALIZATION
+# 🔥 FIREBASE INITIALIZATION (FIX!)
 # ======================================
 import firebase_admin
 from firebase_admin import credentials
@@ -62,12 +63,15 @@ def init_firebase():
             logger.warning("   Push notification özellikleri devre dışı!")
             return False
         
-        # Firebase'i başlat
+        # 🔥 Firebase'i başlat (PROJECT ID İLE - 404 HATASI ÇÖZÜLDÜ!)
         cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(cred)
+        firebase_admin.initialize_app(cred, {
+            'projectId': 'kurabak-f1950'  # 🔥 404 HATASINI ÇÖZEN SATIR!
+        })
         
         logger.info("✅ [Firebase] Admin SDK başarıyla başlatıldı!")
         logger.info(f"   📁 Credentials: {cred_path}")
+        logger.info(f"   🎯 Project ID: kurabak-f1950")
         return True
         
     except Exception as e:
@@ -118,7 +122,7 @@ def background_initialization():
     logger.info("⏳ [Arka Plan] Sistem servisleri başlatılıyor...")
     time.sleep(1)  # Kısa bir nefes alma payı
     
-    # 1. Firebase'i Başlat
+    # 1. Firebase'i Başlat (PROJECT ID İLE!)
     firebase_status = init_firebase()
     if firebase_status:
         logger.info("🔥 [Firebase] Push notification sistemi aktif!")
@@ -177,7 +181,7 @@ def index():
     """Health Check & Info"""
     return jsonify({
         "app": Config.APP_NAME,
-        "version": "V4.7",
+        "version": Config.APP_VERSION,
         "status": "active",
         "environment": Config.ENVIRONMENT,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -298,7 +302,7 @@ def send_feedback():
     Günde 1 mesaj sınırı Android tarafında kontrol edilir
     Maksimum 250 karakter sınırı
     
-    🔥 V4.7 FIX: Global telegram_instance kullanımı
+    🔥 V5.0 FIX: Global telegram_instance kullanımı
     """
     try:
         data = request.json
@@ -389,6 +393,6 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"🌍 Local Sunucu Başlatılıyor: http://localhost:{port}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    logger.info(f"🚀 KuraBak Backend V4.7")
+    logger.info(f"🚀 KuraBak Backend {Config.APP_VERSION}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
