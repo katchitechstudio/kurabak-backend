@@ -6,6 +6,11 @@ Event Manager - AKILLI TAKVİM SİSTEMİ V6.0 🗓️📰🏦
 ✅ ÖNCELİK SİSTEMİ: Bayram (15:00'a kadar) > Haberler
 ✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
 ✅ BASIT VE ETKİLİ: Gereksiz karmaşıklık yok
+
+Priority Değerleri (Düşük sayı = Yüksek öncelik):
+- 10: Bayram/Tatil
+- 30: Piyasa Kapalı
+- 75: Günlük Haberler
 """
 
 import logging
@@ -30,8 +35,8 @@ def get_todays_events() -> List[Dict[str, any]]:
             {
                 "type": "bayram" | "news",
                 "message": "...",
-                "priority": 40 | 75,
-                "date": "2026-01-29"
+                "priority": 10 | 75,  # Düşük = Yüksek öncelik
+                "date": "2026-01-30"
             }
         ]
     """
@@ -52,11 +57,11 @@ def get_todays_events() -> List[Dict[str, any]]:
             events.append({
                 "type": "bayram",
                 "message": bayram_msg,
-                "priority": 40,
+                "priority": 10,  # EN YÜKSEK ÖNCELİK
                 "valid_until": "15:00",
                 "date": today_str
             })
-            logger.info(f"🏦 [BAYRAM] {bayram_msg} - 15:00'a kadar gösterilecek")
+            logger.info(f"🏦 [BAYRAM] {bayram_msg} - 15:00'a kadar gösterilecek (Priority: 10)")
         elif bayram_msg and current_time.hour >= 15:
             logger.info(f"🏦 [BAYRAM] Süresi doldu (15:00+), haberler devrede")
             
@@ -72,16 +77,16 @@ def get_todays_events() -> List[Dict[str, any]]:
             events.append({
                 "type": "news",
                 "message": news_banner,
-                "priority": 75,
+                "priority": 75,  # NORMAL ÖNCELİK
                 "valid_until": "23:59",
                 "date": today_str
             })
-            logger.debug(f"📰 [HABER] Banner eklendi")
+            logger.debug(f"📰 [HABER] Banner eklendi (Priority: 75)")
     except Exception as e:
         logger.warning(f"⚠️ [HABER] Banner eklenemedi (önemsiz): {e}")
     
-    # Priority'ye göre sırala (Yüksekten düşüğe)
-    events.sort(key=lambda x: x['priority'], reverse=True)
+    # Priority'ye göre sırala (DÜŞÜKTEN YÜKSEĞE - düşük sayı = yüksek öncelik)
+    events.sort(key=lambda x: x['priority'])
     
     return events
 
@@ -93,9 +98,9 @@ def get_todays_banner() -> Optional[str]:
     """
     🔥 TEK BANNER KURALI: Sadece en yüksek priority'li banner gösterilir!
     
-    ÖNCELİK SIRASI:
+    ÖNCELİK SIRASI (Düşük sayı = Yüksek öncelik):
     1. Manuel Duyuru (Redis'ten - bu fonksiyon bilmez)
-    2. 🏦 Bayram (Priority: 40, sadece 00:00-15:00 arası)
+    2. 🏦 Bayram (Priority: 10, sadece 00:00-15:00 arası)
     3. 📰 Günlük Haberler (Priority: 75)
     4. Piyasa Kapalı (Hafta sonu - Priority: 30)
     5. Hiçbiri yoksa -> None
@@ -112,10 +117,10 @@ def get_todays_banner() -> Optional[str]:
     events = get_todays_events()
     
     if events:
-        # En yüksek priority'li event (Liste zaten sıralı)
+        # En yüksek priority'li event (Liste başı = en düşük sayı = en yüksek öncelik)
         top_event = events[0]
         logger.info(
-            f"📅 [BANNER] {top_event['type']} (Priority: {top_event['priority']}): "
+            f"📅 [BANNER] {top_event['type'].upper()} (Priority: {top_event['priority']}): "
             f"{top_event['message'][:60]}..."
         )
         return top_event['message']
@@ -123,13 +128,16 @@ def get_todays_banner() -> Optional[str]:
     # --- 2. PİYASA KAPALI MI? (Hafta Sonu - Priority: 30) ---
     # Cumartesi (5) - Pazar (6) tüm gün kapalı
     if weekday == 5 or weekday == 6:
+        logger.info("📅 [BANNER] Piyasa kapalı (Hafta sonu)")
         return "Piyasalar kapalı, iyi hafta sonları! 🌙"
     
     # Cuma akşam 18:00 sonrası
     if weekday == 4 and current_time.hour >= 18:
+        logger.info("📅 [BANNER] Piyasa kapalı (Cuma akşam)")
         return "Piyasalar kapandı, iyi hafta sonları! 🌙"
     
     # --- 3. HİÇBİR ŞEY YOK ---
+    logger.info("📅 [BANNER] Bugün özel banner yok")
     return None
 
 # ======================================
@@ -142,28 +150,34 @@ def test_event_manager():
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
     print("🧪 Event Manager V6.0 📰🏦 Test Ediliyor...\n")
+    print("Priority Sistemi: DÜŞÜK SAYI = YÜKSEK ÖNCELİK\n")
     
     # Bugünün banner'ı
+    print("=" * 60)
     banner = get_todays_banner()
     if banner:
         print(f"✅ BUGÜNÜN BANNER'I:\n{banner}\n")
     else:
         print("ℹ️ Bugün özel bir mesaj yok.\n")
+    print("=" * 60)
+    print()
     
     # Bugünün etkinlikleri
     events = get_todays_events()
     if events:
-        print("📅 BUGÜNÜN ETKİNLİKLERİ (Priority sıralı):")
-        for evt in events:
+        print("📅 BUGÜNÜN ETKİNLİKLERİ (Priority sıralı - düşük = yüksek):")
+        for i, evt in enumerate(events, 1):
+            priority_emoji = "🔥" if evt['priority'] < 30 else "📰" if evt['priority'] < 50 else "ℹ️"
             print(
-                f"  • [{evt['type']}] Priority: {evt['priority']} | "
-                f"{evt['message']}"
+                f"  {i}. {priority_emoji} [{evt['type'].upper()}] "
+                f"Priority: {evt['priority']:>2} | {evt['message'][:80]}..."
             )
         print()
     else:
         print("ℹ️ Bugün etkinlik yok\n")
     
     # Bayram kontrolü
+    print("=" * 60)
     from utils.cache import get_cache
     from config import Config
     
@@ -171,9 +185,13 @@ def test_event_manager():
     bayram_msg = get_cache(bayram_key)
     
     if bayram_msg:
-        print(f"🏦 BAYRAM CACHE'İ:\n{bayram_msg}\n")
+        current_hour = datetime.now().hour
+        status = "AKTİF ✅" if current_hour < 15 else "SÜRÜŞ SONA ERDİ ❌ (15:00+)"
+        print(f"🏦 BAYRAM CACHE'İ: {status}")
+        print(f"   {bayram_msg}")
     else:
-        print("ℹ️ Bayram cache'i boş (Gemini henüz kontrol etmedi)\n")
+        print("ℹ️ Bayram cache'i boş (Gemini henüz kontrol etmedi veya bayram yok)")
+    print("=" * 60)
 
 if __name__ == "__main__":
     test_event_manager()
