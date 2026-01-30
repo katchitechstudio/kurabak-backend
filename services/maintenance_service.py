@@ -1,5 +1,5 @@
 """
-Maintenance Service - PRODUCTION READY V4.6 🚧
+Maintenance Service - PRODUCTION READY V5.0 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
 ✅ API V5: Tek kaynak sistemi
