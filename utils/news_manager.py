@@ -1,8 +1,8 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V2.0 📰🚀🏦
+News Manager - GÜNLÜK HABER SİSTEMİ V3.0 📰🚀🏦
 =============================================
 ✅ 2 KAYNAK: GNews + NewsData API
-✅ TOPLU GEMİNİ 2.0: Tek çağrıda tüm haberleri özetle + BAYRAM KONTROLÜ
+✅ TOPLU GEMİNİ 3.0: Tek çağrıda FİLTRELEME + ÖZET + BAYRAM KONTROLÜ
 ✅ VARDİYA SİSTEMİ: Sabah (00:00-12:00) + Akşam (12:00-00:00)
 ✅ DİNAMİK SÜRE: Haber sayısına göre otomatik dağıtım
 ✅ REDIS ENTEGRASYONU: Cache + Backup
@@ -10,6 +10,7 @@ News Manager - GÜNLÜK HABER SİSTEMİ V2.0 📰🚀🏦
 ✅ ÖNCELIK: Priority 75 (TCMB ve Enflasyon'un altında)
 ✅ 🚀 AKILLI BOOTSTRAP: İlk çalıştırmada otomatik doldurma
 ✅ 🏦 BAYRAM KONTROLÜ: Her vardiya hazırlığında Gemini'ye sorar
+✅ 🎯 AKILLI FİLTRE: Suç/magazin haberleri otomatik elenir
 """
 
 import os
@@ -188,19 +189,19 @@ def fetch_all_news() -> List[str]:
 
 
 # ======================================
-# 🏦 GEMİNİ 2.0 - TOPLU ÖZET + BAYRAM KONTROLÜ
+# 🏦 GEMİNİ 3.0 - FİLTRELEME + ÖZET + BAYRAM
 # ======================================
 
 def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]]:
     """
-    GEMİNİ 2.0 ile toplu haber özetleme + BAYRAM KONTROLÜ (TEK ÇAĞRI!)
+    GEMİNİ 3.0 ile AKILLI FİLTRELEME + ÖZET + BAYRAM KONTROLÜ (TEK ÇAĞRI!)
     
     Args:
-        news_list: Uzun haber başlıkları
+        news_list: Ham haber başlıkları
         
     Returns:
-        Tuple[List[str], Optional[str]]: (özetler, bayram_mesajı)
-        Örnek: (["Dolar yükseldi", ...], "🏦 Ramazan Bayramı 1. Gün")
+        Tuple[List[str], Optional[str]]: (filtrelenmiş_özetler, bayram_mesajı)
+        Örnek: (["Dolar 43.5 TL'ye yükseldi", ...], "🏦 Ramazan Bayramı 1. Gün")
     """
     try:
         if not GEMINI_API_KEY:
@@ -220,42 +221,69 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         
         # Bugünün tarihi
-        today = datetime.now().strftime('%d %B %Y, %A')  # "29 Ocak 2026, Çarşamba"
+        today = datetime.now().strftime('%d %B %Y, %A')  # "30 Ocak 2026, Perşembe"
         
-        # TEK PROMPT: Bayram + Özetler
+        # 🎯 YENİ PROMPT: FİLTRE + ÖZET + BAYRAM
         prompt = f"""
-Bugün {today} tarihinde Türkiye'de resmi tatil veya önemli bayram var mı?
+SEN BİR FİNANS HABER EDİTÖRÜSÜN. İŞLEV: Profesyonel döviz takip uygulaması için haber seçimi.
+
+GÖREV 1 - BAYRAM KONTROLÜ:
+Bugün {today} tarihinde Türkiye'de resmi tatil veya bayram var mı?
 
 Kontrol et:
-- Resmi tatiller (Ramazan Bayramı, Kurban Bayramı, 23 Nisan, 19 Mayıs, 30 Ağustos, 29 Ekim, 1 Ocak)
-- Arefe günleri (yarım gün tatil)
+- Resmi tatiller (Ramazan, Kurban Bayramı, 23 Nisan, 19 Mayıs, 30 Ağustos, 29 Ekim, 1 Ocak)
+- Arefe günleri
 - Dini bayramlar
 
-VARSA:
-"BAYRAM: [tam isim ve kaçıncı gün]" yaz
-Örnek: "BAYRAM: Ramazan Bayramı 1. Gün"
-Örnek: "BAYRAM: Kurban Bayramı Arefe"
-Örnek: "BAYRAM: 29 Ekim Cumhuriyet Bayramı"
+VARSA → "BAYRAM: [tam isim]" yaz (örn: "BAYRAM: Ramazan Bayramı 1. Gün")
+YOKSA → "BAYRAM: YOK" yaz
 
-YOKSA:
-"BAYRAM: YOK" yaz
+---
 
-SONRA aşağıdaki {len(news_list)} ekonomi haberini özetle (her biri max 10 kelime, sadece özet, emoji yok):
+GÖREV 2 - HABER FİLTRELEME + ÖZET:
 
+Aşağıdaki {len(news_list)} haberden sadece FİNANSAL DEĞERİ olanları seç ve özetle.
+
+❌ ŞUNLARI ASLA ALMA:
+- Suç haberleri (hırsızlık, dolandırıcılık, sahte para/altın, kuyumcu soygunu)
+- Yerel polis olayları
+- Trafik kazaları
+- Mahkeme kararları
+- Magazin/şov haberleri
+- Spor haberleri
+
+✅ SADECE BUNLARI AL:
+- Merkez Bankası kararları (TCMB, FED, ECB, BoE vb.)
+- Döviz kuru hareketleri (dolar/euro/sterlin yükseldi/düştü/rekor kırdı)
+- Altın/gümüş FİYAT hareketleri (gram altın, ons altın)
+- Faiz, enflasyon, büyüme rakamları
+- Borsa endeksleri (BIST 100, S&P 500 vb.)
+- Ekonomik büyüme/daralma verileri
+- Ticaret savaşları, ambargolar, uluslararası anlaşmalar
+- Petrol/doğalgaz fiyat hareketleri
+
+HAM HABERLER:
 {numbered_news}
 
 FORMAT:
 BAYRAM: [VAR/YOK veya isim]
-1. [10 kelimelik özet]
-2. [10 kelimelik özet]
+1. [Max 10 kelime finansal özet]
+2. [Max 10 kelime finansal özet]
 ...
 
-Başka açıklama yapma, sadece bu formatı kullan!
+KURALLAR:
+- Her özet MAX 10 kelime
+- Emoji YOK
+- Sadece sayı varsa birim ekle (örn: "Dolar 43.5 TL'ye yükseldi")
+- Finansal olmayan haberi ATLA, numarasını yazmadan geç
+- Eğer hiçbir finansal haber yoksa sadece "HABER: YOK" yaz
+
+BAŞKA AÇIKLAMA YAPMA, SADECE BU FORMATI KULLAN!
 """
         
-        logger.info(f"🤖 [GEMİNİ 2.0] {len(news_list)} haber özetleniyor + bayram kontrolü...")
+        logger.info(f"🤖 [GEMİNİ 3.0] {len(news_list)} haber filtreleniyor + bayram kontrolü...")
         
-        # Gemini'ye tek seferde gönder
+        # Gemini'ye gönder
         response = model.generate_content(prompt)
         result = response.text.strip()
         
@@ -269,37 +297,46 @@ Başka açıklama yapma, sadece bu formatı kullan!
         if first_line.startswith("BAYRAM:"):
             bayram_text = first_line.replace("BAYRAM:", "").strip()
             if bayram_text and bayram_text.upper() != "YOK":
-                bayram_msg = f"🏦 Resmî tatil: {bayram_text}"
+                bayram_msg = f"🏦 {bayram_text}"
                 logger.info(f"🏦 [GEMİNİ] Bayram tespit edildi: {bayram_text}")
             else:
                 logger.info(f"🏦 [GEMİNİ] Bugün bayram yok")
             lines = lines[1:]  # Bayram satırını çıkar
         
-        # Kalan satırlar: Özetler
+        # Kalan satırlar: Filtrelenmiş özetler
         summaries = []
         for line in lines:
             clean_line = line.strip()
-            if clean_line:
-                # Numarayı kaldır
-                if '. ' in clean_line:
-                    clean_line = clean_line.split('. ', 1)[1]
-                
-                if clean_line:
-                    summaries.append(clean_line)
+            
+            # Boş satırları atla
+            if not clean_line:
+                continue
+            
+            # "HABER: YOK" kontrolü
+            if "HABER:" in clean_line.upper() and "YOK" in clean_line.upper():
+                logger.warning("⚠️ [GEMİNİ] Finansal haber bulunamadı!")
+                break
+            
+            # Numarayı kaldır
+            if '. ' in clean_line:
+                clean_line = clean_line.split('. ', 1)[1]
+            
+            if clean_line and len(clean_line) > 5:
+                summaries.append(clean_line)
         
-        logger.info(f"✅ [GEMİNİ 2.0] {len(summaries)} özet + bayram kontrolü tamamlandı")
+        logger.info(f"✅ [GEMİNİ 3.0] {len(summaries)} finansal haber filtrelendi + özetlendi")
         
-        # Eksik özetleri tamamla
-        while len(summaries) < len(news_list):
-            idx = len(summaries)
-            summaries.append(' '.join(news_list[idx].split()[:10]))
+        # Eğer hiç haber kalmadıysa fallback
+        if not summaries:
+            logger.warning("⚠️ [GEMİNİ] Filtreleme sonrası haber kalmadı! Fallback devrede...")
+            summaries = [' '.join(news.split()[:10]) for news in news_list[:3]]
         
-        return summaries[:len(news_list)], bayram_msg
+        return summaries, bayram_msg
         
     except Exception as e:
-        logger.error(f"❌ [GEMİNİ 2.0] Özet hatası: {e}")
+        logger.error(f"❌ [GEMİNİ 3.0] Hata: {e}")
         # Fallback: Haberleri kısalt
-        return [' '.join(news.split()[:10]) for news in news_list], None
+        return [' '.join(news.split()[:10]) for news in news_list[:5]], None
 
 
 # ======================================
@@ -316,14 +353,7 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
         end_hour: Bitiş saati (örn: 12)
         
     Returns:
-        List[Dict]: [
-            {
-                "start": "00:00",
-                "end": "02:00",
-                "text": "Haber başlığı"
-            },
-            ...
-        ]
+        List[Dict]: [{"start": "00:00", "end": "02:00", "text": "..."}]
     """
     if not news_list:
         logger.warning("⚠️ [PLAN] Planlanacak haber yok!")
@@ -351,7 +381,6 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
         
         # Son haberde bitiş saatini tam end_hour'a getir
         if i == news_count - 1:
-            # end_hour=24 ise 23:59 kullan (Python'da saat 0-23 arası)
             if end_hour == 24:
                 end_time = current_time.replace(hour=23, minute=59, second=59)
             else:
@@ -381,7 +410,6 @@ def bootstrap_news_system() -> bool:
     🚀 İLK ÇALIŞTIRMA - AKILLI BOOTSTRAP
     
     Eğer vardiya verileri Redis'te yoksa, HEMEN doldurur.
-    Böylece kullanıcı 00:00 veya 12:00'ı beklemez!
     
     Returns:
         bool: Bootstrap yapıldı mı?
@@ -391,21 +419,19 @@ def bootstrap_news_system() -> bool:
         
         # Hangi vardiya verisine ihtiyacımız var?
         if 0 <= current_hour < 12:
-            # Sabah vardiyası lazım
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             shift_name = "SABAH"
             prepare_func = prepare_morning_shift
         else:
-            # Akşam vardiyası lazım
             cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
             shift_name = "AKŞAM"
             prepare_func = prepare_evening_shift
         
-        # Vardiya verisi var mı kontrol et
+        # Vardiya verisi var mı?
         existing_data = get_cache(cache_key)
         
         if existing_data:
-            logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası zaten hazır, bootstrap gerekmiyor")
+            logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası zaten hazır")
             return False
         
         # VERİ YOK! Hemen doldur
@@ -432,10 +458,7 @@ def bootstrap_news_system() -> bool:
 def prepare_morning_shift() -> bool:
     """
     SABAH VARDİYASI (00:00 - 12:00)
-    Gece yarısı çalışır, sabah için haberleri hazırlar + BAYRAM KONTROLÜ
-    
-    Returns:
-        bool: Başarılı mı?
+    Gece yarısı çalışır, sabah için haberleri hazırlar
     """
     try:
         logger.info("🌅 [SABAH VARDİYASI] Hazırlık başlıyor...")
@@ -447,14 +470,14 @@ def prepare_morning_shift() -> bool:
             logger.warning("⚠️ [SABAH VARDİYASI] Haber bulunamadı!")
             return False
         
-        # 2. Gemini 2.0 ile özetle + Bayram kontrolü (TOPLU)
+        # 2. Gemini 3.0 ile filtrele + özetle + bayram kontrolü
         summaries, bayram_msg = summarize_news_batch(news_list)
         
-        # 3. Bayram varsa Redis'e kaydet (15:00'a kadar gösterilecek)
+        # 3. Bayram varsa Redis'e kaydet
         if bayram_msg:
             bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            set_cache(bayram_key, bayram_msg, ttl=54000)  # 15 saat (15:00'a kadar)
-            logger.info(f"🏦 [SABAH VARDİYASI] Bayram Redis'e kaydedildi: {bayram_msg}")
+            set_cache(bayram_key, bayram_msg, ttl=54000)  # 15 saat
+            logger.info(f"🏦 [SABAH VARDİYASI] Bayram kaydedildi: {bayram_msg}")
         
         # 4. Sabah için planla (00:00 - 12:00)
         schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
@@ -463,17 +486,16 @@ def prepare_morning_shift() -> bool:
         cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
         set_cache(cache_key, schedule, ttl=43200)  # 12 saat
         
-        # Son güncelleme zamanını kaydet
+        # Son güncelleme
         update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
         set_cache(update_key, {
             'shift': 'morning',
             'timestamp': time.time(),
             'news_count': len(schedule),
             'bayram': bayram_msg if bayram_msg else 'yok'
-        }, ttl=86400)  # 24 saat
+        }, ttl=86400)
         
         logger.info(f"✅ [SABAH VARDİYASI] {len(schedule)} haber hazırlandı!")
-        
         return True
         
     except Exception as e:
@@ -484,10 +506,7 @@ def prepare_morning_shift() -> bool:
 def prepare_evening_shift() -> bool:
     """
     AKŞAM VARDİYASI (12:00 - 00:00)
-    Öğlen çalışır, akşam için haberleri hazırlar + BAYRAM KONTROLÜ
-    
-    Returns:
-        bool: Başarılı mı?
+    Öğlen çalışır, akşam için haberleri hazırlar
     """
     try:
         logger.info("🌆 [AKŞAM VARDİYASI] Hazırlık başlıyor...")
@@ -499,15 +518,14 @@ def prepare_evening_shift() -> bool:
             logger.warning("⚠️ [AKŞAM VARDİYASI] Haber bulunamadı!")
             return False
         
-        # 2. Gemini 2.0 ile özetle + Bayram kontrolü (TOPLU)
+        # 2. Gemini 3.0 ile filtrele + özetle + bayram kontrolü
         summaries, bayram_msg = summarize_news_batch(news_list)
         
-        # 3. Bayram varsa Redis'e kaydet (15:00'a kadar gösterilecek)
-        # NOT: Akşam vardiyası 12:00'da hazırlanır, bu yüzden bayram mesajı 15:00'a kadar geçerli
+        # 3. Bayram varsa Redis'e kaydet
         if bayram_msg:
             bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            set_cache(bayram_key, bayram_msg, ttl=10800)  # 3 saat (12:00 + 3 = 15:00)
-            logger.info(f"🏦 [AKŞAM VARDİYASI] Bayram Redis'e kaydedildi: {bayram_msg}")
+            set_cache(bayram_key, bayram_msg, ttl=10800)  # 3 saat (15:00'a kadar)
+            logger.info(f"🏦 [AKŞAM VARDİYASI] Bayram kaydedildi: {bayram_msg}")
         
         # 4. Akşam için planla (12:00 - 00:00)
         schedule = plan_shift_schedule(summaries, start_hour=12, end_hour=24)
@@ -516,17 +534,16 @@ def prepare_evening_shift() -> bool:
         cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
         set_cache(cache_key, schedule, ttl=43200)  # 12 saat
         
-        # Son güncelleme zamanını kaydet
+        # Son güncelleme
         update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
         set_cache(update_key, {
             'shift': 'evening',
             'timestamp': time.time(),
             'news_count': len(schedule),
             'bayram': bayram_msg if bayram_msg else 'yok'
-        }, ttl=86400)  # 24 saat
+        }, ttl=86400)
         
         logger.info(f"✅ [AKŞAM VARDİYASI] {len(schedule)} haber hazırlandı!")
-        
         return True
         
     except Exception as e:
@@ -542,7 +559,7 @@ def get_current_news_banner() -> Optional[str]:
     """
     Şu anki saate uygun haber başlığını döndürür
     
-    🚀 YENİ: İlk çağrıda bootstrap otomatik devreye girer!
+    🚀 İlk çağrıda bootstrap otomatik devreye girer!
     
     Returns:
         str: Haber başlığı veya None
@@ -551,13 +568,11 @@ def get_current_news_banner() -> Optional[str]:
         current_hour = datetime.now().hour
         current_time = datetime.now().strftime("%H:%M")
         
-        # Hangi vardiyayı kullanacağız?
+        # Hangi vardiya?
         if 0 <= current_hour < 12:
-            # Sabah vardiyası
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             shift_name = "SABAH"
         else:
-            # Akşam vardiyası
             cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
             shift_name = "AKŞAM"
         
@@ -565,13 +580,12 @@ def get_current_news_banner() -> Optional[str]:
         schedule = get_cache(cache_key)
         
         if not schedule:
-            logger.warning(f"⚠️ [BANNER] {shift_name} vardiyası verisi yok! Bootstrap tetikleniyor...")
+            logger.warning(f"⚠️ [BANNER] {shift_name} vardiyası yok! Bootstrap tetikleniyor...")
             
-            # 🚀 AKILLI BOOTSTRAP: Otomatik doldur
+            # 🚀 AKILLI BOOTSTRAP
             bootstrap_success = bootstrap_news_system()
             
             if bootstrap_success:
-                # Yeniden dene
                 schedule = get_cache(cache_key)
                 if not schedule:
                     logger.error(f"❌ [BANNER] Bootstrap sonrası hala veri yok!")
@@ -585,19 +599,18 @@ def get_current_news_banner() -> Optional[str]:
             start_time = news_slot['start']
             end_time = news_slot['end']
             
-            # Saat karşılaştırması
             if start_time <= current_time < end_time:
-                logger.debug(f"📰 [BANNER] {shift_name} vardiyası: {news_slot['text'][:50]}...")
+                logger.debug(f"📰 [BANNER] {shift_name}: {news_slot['text'][:50]}...")
                 return f"📰 {news_slot['text']}"
         
-        # Hiçbir slot'a uymazsa ilk haberi göster
+        # Slot bulunamazsa ilk haberi göster
         if schedule:
             return f"📰 {schedule[0]['text']}"
         
         return None
         
     except Exception as e:
-        logger.error(f"❌ [BANNER] Haber getirme hatası: {e}")
+        logger.error(f"❌ [BANNER] Hata: {e}")
         return None
 
 
@@ -607,13 +620,12 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """
-    Terminal'den test etmek için:
-    python -c "from utils.news_manager import test_news_manager; test_news_manager()"
+    Test: python -c "from utils.news_manager import test_news_manager; test_news_manager()"
     """
-    print("🧪 News Manager V2.0 🚀🏦 Test Ediliyor...\n")
+    print("🧪 News Manager V3.0 🎯 (FİLTRELİ) Test...\n")
     
-    # 1. Haber toplama testi
-    print("1️⃣ HABER TOPLAMA TESTİ:")
+    # 1. Haber toplama
+    print("1️⃣ HABER TOPLAMA:")
     news_list = fetch_all_news()
     print(f"   ✅ {len(news_list)} haber toplandı\n")
     
@@ -623,57 +635,45 @@ def test_news_manager():
             print(f"   {i}. {news[:80]}...")
         print()
     
-    # 2. Gemini 2.0 özet + bayram testi
+    # 2. Gemini 3.0 filtre + özet + bayram
     if news_list:
-        print("2️⃣ GEMİNİ 2.0 ÖZET + BAYRAM TESTİ:")
-        summaries, bayram_msg = summarize_news_batch(news_list[:3])
-        print(f"   ✅ {len(summaries)} özet alındı\n")
+        print("2️⃣ GEMİNİ 3.0 FİLTRE + ÖZET + BAYRAM:")
+        summaries, bayram_msg = summarize_news_batch(news_list[:5])
+        print(f"   ✅ {len(summaries)} finansal haber filtrelendi\n")
         
         if bayram_msg:
             print(f"   🏦 BAYRAM: {bayram_msg}\n")
         else:
-            print("   🏦 BAYRAM: Bugün bayram yok\n")
+            print("   🏦 BAYRAM: Yok\n")
         
-        print("   Özetler:")
+        print("   Filtrelenmiş özetler:")
         for i, summary in enumerate(summaries, 1):
             print(f"   {i}. {summary}")
         print()
     
-    # 3. Planlama testi
+    # 3. Planlama
     if summaries:
-        print("3️⃣ VARDİYA PLANLAMA TESTİ:")
+        print("3️⃣ VARDİYA PLANLAMA:")
         schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
-        print(f"   ✅ {len(schedule)} slot oluşturuldu\n")
+        print(f"   ✅ {len(schedule)} slot\n")
         
         print("   İlk 3 slot:")
         for slot in schedule[:3]:
-            print(f"   {slot['start']} - {slot['end']}: {slot['text']}")
+            print(f"   {slot['start']}-{slot['end']}: {slot['text']}")
         print()
     
-    # 4. Bootstrap testi
-    print("4️⃣ BOOTSTRAP TESTİ:")
+    # 4. Bootstrap
+    print("4️⃣ BOOTSTRAP:")
     bootstrap_success = bootstrap_news_system()
-    if bootstrap_success:
-        print("   ✅ Bootstrap başarıyla çalıştı\n")
-    else:
-        print("   ℹ️ Bootstrap gerekli değildi (veri zaten var)\n")
+    print(f"   {'✅ Başarılı' if bootstrap_success else 'ℹ️ Gerek yok'}\n")
     
-    # 5. Banner testi
-    print("5️⃣ BANNER GETİRME TESTİ:")
+    # 5. Banner
+    print("5️⃣ BANNER:")
     banner = get_current_news_banner()
     if banner:
-        print(f"   ✅ Şu anki banner: {banner}\n")
+        print(f"   ✅ {banner}\n")
     else:
-        print("   ℹ️ Banner bulunamadı\n")
-    
-    # 6. Bayram cache kontrolü
-    print("6️⃣ BAYRAM CACHE KONTROLÜ:")
-    bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-    bayram_cached = get_cache(bayram_key)
-    if bayram_cached:
-        print(f"   🏦 Redis'te bayram var: {bayram_cached}\n")
-    else:
-        print("   ℹ️ Redis'te bayram yok\n")
+        print("   ℹ️ Bulunamadı\n")
 
 
 if __name__ == "__main__":
