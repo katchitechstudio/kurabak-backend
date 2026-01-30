@@ -1,7 +1,9 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.5 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V5.0 🤖
 =======================================================
+✅ CIRCUIT BREAKER SPAM FIX: 15 dakika sürekli hata → TEK uyarı
 ✅ TEST SİSTEMİ: /test, /test mobil, /test detay
+✅ STRES TESTİ: /test stres light|medium|hard (YENİ!)
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ SELF-HEALING: Otomatik CPU/RAM izleme ve müdahale
 ✅ TÜRKÇE KARAKTER FIX: 'ı', 'ş', 'ğ', 'ü', 'ö', 'ç' otomatik düzeltme
@@ -12,6 +14,7 @@ Telegram Monitor - ŞEF KOMUTA MERKEZİ V4.5 🤖
 ✅ ÖZEL OLAY LİSTESİ: Circuit breaker, cleanup, trend detayları
 ✅ /circuit KOMUTU: Circuit Breaker durumu sorgulama
 ✅ GÜVENLİ CACHE TEMİZLİĞİ: Redis bağlantısı korunur (V4.5)
+✅ SADELEŞTİRİLMİŞ KOMUTLAR: Duyuru ve rapor komutları optimize edildi
 """
 
 import os
@@ -29,15 +32,16 @@ ALLOWED_ADMIN_IDS = [7101853980]
 
 class TelegramMonitor:
     """
-    Gelişmiş Telegram Bot V4.5:
+    Gelişmiş Telegram Bot V5.0:
     1. RAPOR MODU: Sessiz bildirimler, zengin günlük raporlar
     2. KOMUT MODU: Komutları dinler ve cevaplar
-    3. TEST SİSTEMİ: Otomatik sistem sağlık kontrolü
+    3. TEST SİSTEMİ: Otomatik sistem sağlık kontrolü + STRES TESTI
     4. TAKVİM SİSTEMİ: Etkinlik bildirimleri
     5. SELF-HEALING: Otomatik CPU/RAM izleme ve düzeltme
     6. 🔒 ADMİN FİLTRESİ: Sadece yetkili kullanıcılar
     7. ZENGİN RAPORLAMA: CPU, RAM, Disk, Circuit Breaker, özel olaylar
-    8. 🔐 GÜVENLİ CACHE: Redis bağlantısını koruyarak temizlik (V4.5)
+    8. 🔐 GÜVENLİ CACHE: Redis bağlantısını koruyarak temizlik
+    9. 🛡️ AKILLI CIRCUIT BREAKER: 15 dakika sürekli hata → TEK uyarı
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -45,6 +49,12 @@ class TelegramMonitor:
         self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         self._lock = threading.Lock()
+        
+        # 🛡️ CIRCUIT BREAKER SPAM PROTECTION (YENİ!)
+        self.circuit_error_start_time = None  # İlk hatanın zamanı
+        self.circuit_recovery_notified = False  # Kurtarma bildirimi gönderildi mi?
+        self.circuit_down_notified = False  # Çökme bildirimi gönderildi mi?
+        
         self.last_critical_alert = datetime.min
         self.command_thread = None
         self.is_listening = False
@@ -64,6 +74,92 @@ class TelegramMonitor:
             requests.post(url, json=payload, timeout=10)
         except Exception as e:
             logger.error(f"❌ Telegram Gönderim Hatası: {e}")
+
+    def notify_circuit_breaker_event(self, event_type: str, details: Dict[str, Any] = None):
+        """
+        🛡️ AKILLI CIRCUIT BREAKER BİLDİRİM SİSTEMİ
+        
+        Kurallar:
+        1. İlk hata: Sessiz (sadece log)
+        2. 15 dakika boyunca sürekli hata: TEK kritik uyarı
+        3. Sistem düzeldi: TEK kurtarma mesajı
+        4. Aradaki her timeout/error: SESSİZ
+        
+        Args:
+            event_type: "error", "recovery", "open", "closed"
+            details: Ek detaylar (opsiyonel)
+        """
+        now = time.time()
+        
+        if event_type == "error":
+            # İlk hata mı?
+            if self.circuit_error_start_time is None:
+                self.circuit_error_start_time = now
+                logger.info("🟡 Circuit Breaker: İlk hata kaydedildi (sessiz)")
+                return
+            
+            # 15 dakika boyunca sürekli hata var mı?
+            error_duration = now - self.circuit_error_start_time
+            
+            if error_duration >= 900:  # 900 saniye = 15 dakika
+                if not self.circuit_down_notified:
+                    # 15 DAKİKADIR HATA VAR - TEK UYARI GÖNDER
+                    self.circuit_down_notified = True
+                    self.circuit_recovery_notified = False
+                    
+                    alert_msg = (
+                        f"🚨 *KRİTİK: V5 API 15 DAKİKADIR ÇALIŞMIYOR!*\n\n"
+                        f"⏱️ *Süre:* {int(error_duration/60)} dakika\n"
+                        f"💾 *Durum:* Backup veri kullanılıyor\n"
+                        f"🔄 *Aksiyon:* Sistem otomatik kurtarma yapıyor\n\n"
+                        f"_Sistem düzelince haber vereceğim._"
+                    )
+                    
+                    threading.Thread(target=self._send_raw, args=(alert_msg,)).start()
+                    logger.warning(f"📤 Circuit Breaker: 15 dakikalık downtime bildirimi gönderildi")
+                else:
+                    # Bildirim gönderildi, artık sessiz kal
+                    logger.debug("🔇 Circuit Breaker: Hata devam ediyor (sessiz)")
+            else:
+                # Henüz 15 dakika olmadı, sessiz kal
+                logger.debug(f"🟡 Circuit Breaker: Hata devam ({int(error_duration/60)} dk, sessiz)")
+        
+        elif event_type == "recovery":
+            # Sistem düzeldi mi?
+            if self.circuit_down_notified and not self.circuit_recovery_notified:
+                # DÜZELME BİLDİRİMİ GÖNDER (TEK)
+                self.circuit_recovery_notified = True
+                self.circuit_down_notified = False
+                self.circuit_error_start_time = None
+                
+                downtime = ""
+                if details and 'downtime_minutes' in details:
+                    downtime = f"\n⏱️ *Downtime:* {details['downtime_minutes']} dakika"
+                
+                recovery_msg = (
+                    f"✅ *SİSTEM KURTARILDI!*\n\n"
+                    f"🚀 V5 API tekrar çalışıyor\n"
+                    f"📊 Veriler güncelleniyor{downtime}\n\n"
+                    f"_Sistem normale döndü, sorun çözüldü._"
+                )
+                
+                threading.Thread(target=self._send_raw, args=(recovery_msg,)).start()
+                logger.info("📤 Circuit Breaker: Kurtarma bildirimi gönderildi")
+            else:
+                # Düzelme bildirildi veya hiç çökmemişti, sessiz kal
+                self.circuit_error_start_time = None
+                logger.debug("🔇 Circuit Breaker: Kurtarma (sessiz)")
+        
+        elif event_type == "open":
+            # Circuit Breaker OPEN oldu (3 hata)
+            # Eğer 15 dakikalık bildirim gönderildiyse, bu bildirimi atla
+            if not self.circuit_down_notified:
+                logger.info("🟡 Circuit Breaker: OPEN (henüz 15 dk değil, sessiz)")
+        
+        elif event_type == "closed":
+            # Circuit Breaker CLOSED (normal durum)
+            # Kurtarma bildirimi yukarıda gönderildi, burada sessiz
+            logger.debug("🟢 Circuit Breaker: CLOSED (sessiz)")
 
     def send_message(self, text: str, level: str = 'info') -> bool:
         """
@@ -100,7 +196,7 @@ class TelegramMonitor:
 
     def send_daily_report(self, metrics: Dict[str, Any]):
         """
-        🌙 GÜN SONU ZENGİN RAPORU V4.5
+        🌙 GÜN SONU ZENGİN RAPORU V5.0
         
         YENİ ÖZELLİKLER:
         - CPU, RAM, Disk kullanımı
@@ -216,7 +312,7 @@ class TelegramMonitor:
                     report_lines.append(f"• {event}")
             
             # Footer
-            report_lines.append(f"\n_KuraBak Backend v4.5 • {now.strftime('%H:%M')}_")
+            report_lines.append(f"\n_KuraBak Backend v5.0 • {now.strftime('%H:%M')}_")
             
             report = "\n".join(report_lines)
             
@@ -244,21 +340,14 @@ class TelegramMonitor:
         self.send_message(msg, level='report')
 
     def send_startup_message(self):
-        """Başlangıç mesajı"""
+        """🚀 Modern ve Temiz Başlangıç Mesajı"""
         from config import Config
         msg = (
             f"🚀 *SİSTEM BAŞLATILDI*\n\n"
-            f"📦 *Versiyon:* {Config.APP_VERSION}\n"
-            f"🔌 *Kaynak:* V5 API Only\n"
-            f"💾 *Backup:* 15 dakikalık otomatik\n"
-            f"🤖 *Self-Healing:* Aktif\n"
-            f"🗓️ *Takvim:* Aktif\n"
-            f"🧪 *Test:* /test komutu aktif\n"
-            f"🛡️ *Circuit Breaker:* Aktif (3 hata = 60s)\n"
-            f"🔔 *Push Notification:* Her gün 12:00\n"
-            f"🧹 *Cleanup:* Her gün 03:00\n"
-            f"🔐 *Güvenli Cache:* Aktif (V4.5)\n\n"
-            f"✅ Tüm sistemler hazır!"
+            f"📦 v{Config.APP_VERSION} • V5 API Only\n"
+            f"🛡️ Circuit Breaker • Self-Healing\n"
+            f"🔔 Push (12:00) • Cleanup (03:00)\n\n"
+            f"✅ Tüm sistemler online!"
         )
         self.send_message(msg, level='report')
 
@@ -332,17 +421,13 @@ class TelegramMonitor:
                         self._handle_analiz()
                     elif text.startswith('/duyuru'):
                         self._handle_duyuru(text)
-                    elif text == '/sus':
-                        self._handle_sus()
-                    elif text == '/konus':
-                        self._handle_konus()
                     elif text.startswith('/bakim'):
                         self._handle_bakim(text)
                     elif text.startswith('/test'):
                         self._handle_test(text)
                     elif text == '/circuit':
                         self._handle_circuit()
-                    elif text.startswith('/'):
+                    elif text == '/yardim' or text.startswith('/'):
                         self._send_help()
                 
             except Exception as e:
@@ -350,29 +435,28 @@ class TelegramMonitor:
                 time.sleep(10)
 
     def _send_help(self):
-        """Yardım Mesajı"""
+        """Sadeleştirilmiş Yardım Mesajı"""
         self._send_raw(
             "❓ *KOMUT LİSTESİ* 🔒\n\n"
-            "🧪 *TEST SİSTEMİ:*\n"
-            "`/test` - Basit sağlık testi (5sn)\n"
+            "🧪 *TEST:*\n"
+            "`/test` - Basit test (5sn)\n"
             "`/test mobil` - Mobil uyumluluk\n"
-            "`/test detay` - Detaylı sistem testi\n\n"
+            "`/test detay` - Detaylı test\n"
+            "`/test stres light` - 30dk orta yük\n"
+            "`/test stres medium` - 1sa yüksek yük\n"
+            "`/test stres hard` - 1sa maksimum yük\n\n"
             "📢 *YÖNETİM:*\n"
             "`/duyuru [mesaj]` - Duyuru as\n"
-            "`/duyuru 3g [mesaj]` - 3 günlük duyuru\n"
             "`/duyuru sil` - Duyuruyu kaldır\n"
-            "`/sus` - 🛑 SİSTEMİ GİZLE\n"
-            "`/konus` - 🔊 SİSTEMİ AÇ\n\n"
-            "🚧 *BAKIM:*\n"
-            "`/bakim` - Bakım modunu aç\n"
-            "`/bakim kapat` - Bakım modunu kapat\n\n"
+            "`/bakim` - Bakım modu aç\n"
+            "`/bakim kapat` - Bakım kapat\n\n"
             "📊 *RAPOR:*\n"
             "`/durum` - Sistem sağlık raporu\n"
             "`/online` - Aktif kullanıcı\n"
             "`/temizle` - Güvenli cache temizliği 🔐\n"
             "`/analiz` - Sistem analizi\n"
             "`/circuit` - Circuit Breaker durumu\n\n"
-            "🔒 _Bu komutlar sadece yetkili admin tarafından kullanılabilir._"
+            "🔒 _Sadece yetkili admin kullanabilir._"
         )
 
     def _handle_circuit(self):
@@ -430,10 +514,27 @@ class TelegramMonitor:
             self._send_raw(f"❌ Circuit breaker sorgu hatası: {str(e)}")
 
     def _handle_test(self, text):
-        """🧪 TEST SİSTEMİ"""
+        """🧪 TEST SİSTEMİ (Stres Testi Eklendi!)"""
         try:
             raw_content = text.replace('/test', '').strip().lower()
             raw_content = raw_content.replace('ı', 'i').replace('ş', 's').replace('ğ', 'g').replace('ü', 'u').replace('ö', 'o').replace('ç', 'c')
+            
+            # Stres testi kontrolü
+            if raw_content.startswith('stres'):
+                parts = raw_content.split()
+                if len(parts) >= 2:
+                    level = parts[1]  # light, medium, hard
+                    self._handle_stress_test(level)
+                    return
+                else:
+                    self._send_raw(
+                        "❌ Stres testi seviyesi belirt!\n\n"
+                        "Kullanım:\n"
+                        "`/test stres light` - 30dk orta yük\n"
+                        "`/test stres medium` - 1sa yüksek yük\n"
+                        "`/test stres hard` - 1sa maksimum yük"
+                    )
+                    return
             
             self._send_raw("⏳ Test başlatılıyor...")
             
@@ -449,7 +550,8 @@ class TelegramMonitor:
                     "Kullanım:\n"
                     "`/test` - Basit test (5sn)\n"
                     "`/test mobil` - Mobil uyumluluk\n"
-                    "`/test detay` - Detaylı test"
+                    "`/test detay` - Detaylı test\n"
+                    "`/test stres [level]` - Stres testi"
                 )
                 return
             
@@ -457,6 +559,26 @@ class TelegramMonitor:
             
         except Exception as e:
             self._send_raw(f"❌ Test hatası: {str(e)}")
+
+    def _handle_stress_test(self, level: str):
+        """💪 STRES TESTİ (YENİ!)"""
+        self._send_raw(
+            f"💪 *STRES TESTİ BAŞLATILIYOR*\n\n"
+            f"Seviye: `{level}`\n"
+            f"Test başladı, sonuçlar gelecek..."
+        )
+        
+        # test_runner'ı thread'de çalıştır (blocking olmasın)
+        def run_stress():
+            try:
+                from utils.test_runner import run_stress_test
+                result = run_stress_test(level)
+                self._send_raw(result)
+            except Exception as e:
+                self._send_raw(f"❌ Stres testi hatası: {str(e)}")
+        
+        thread = threading.Thread(target=run_stress, daemon=True)
+        thread.start()
 
     def _run_basic_test(self) -> str:
         """Basit 5 saniyelik test"""
@@ -764,7 +886,7 @@ class TelegramMonitor:
                 
                 f"🔒 *GÜVENLİK*\n"
                 f"• Admin Filter: `Aktif`\n"
-                f"• Güvenli Cache: `V4.5`\n\n"
+                f"• Güvenli Cache: `V5.0`\n\n"
                 
                 f"_Rapor Zamanı: {datetime.now().strftime('%H:%M:%S')}_"
             )
@@ -795,7 +917,7 @@ class TelegramMonitor:
 
     def _handle_temizle(self):
         """
-        🔥 GÜVENLİ Cache Temizliği (V4.5)
+        🔥 GÜVENLİ Cache Temizliği (V5.0)
         
         ÖNCEKİ SORUN: flush_all_cache() Redis connection'ı koparıyordu
         YENİ ÇÖZÜM: Sadece KuraBak key'lerini sil, connection'ı koru
@@ -916,7 +1038,7 @@ class TelegramMonitor:
                 "🛡️ *Circuit Breaker:* 3 hata = 60s\n"
                 "🔔 *Push Notification:* Her gün 12:00\n"
                 "🧹 *Cleanup:* Her gün 03:00\n"
-                "🔐 *Güvenli Cache:* V4.5\n\n"
+                "🔐 *Güvenli Cache:* V5.0\n\n"
                 "_Sistem otomatik olarak yüksek yük durumlarını tespit edip düzeltiyor._"
             )
             
@@ -924,7 +1046,7 @@ class TelegramMonitor:
             self._send_raw(f"❌ Analiz hatası: {str(e)}")
 
     def _handle_duyuru(self, text):
-        """Süreli Duyuru Sistemi"""
+        """Sadeleştirilmiş Duyuru Sistemi"""
         try:
             from utils.cache import set_cache, delete_cache
             from config import Config
@@ -933,84 +1055,22 @@ class TelegramMonitor:
             
             if raw_content.lower() == 'sil' or raw_content == '':
                 delete_cache(Config.CACHE_KEYS['banner'])
-                self._send_raw("🔇 *DUYURU KALDIRILDI*\n\nPatron, mesajı sildim. Uygulama ekranlarından kayboldu.")
+                self._send_raw("🔇 *DUYURU KALDIRILDI*\n\nPatron, mesajı sildim.")
                 return
 
-            parts = raw_content.split(' ', 1)
-            
-            ttl = 0
-            message = raw_content
-            duration_info = "Süresiz ♾️ (Sen silene kadar kalacak)"
-
-            if len(parts) > 1:
-                time_code = parts[0].lower()
-                potential_msg = parts[1]
-                
-                multiplier = 0
-                unit_name = ""
-
-                if time_code.endswith('d') and time_code[:-1].isdigit():
-                    multiplier = 60
-                    unit_name = "Dakika"
-                elif time_code.endswith('s') and time_code[:-1].isdigit():
-                    multiplier = 3600
-                    unit_name = "Saat"
-                elif time_code.endswith('g') and time_code[:-1].isdigit():
-                    multiplier = 86400
-                    unit_name = "Gün"
-                
-                if multiplier > 0:
-                    val = int(time_code[:-1])
-                    ttl = val * multiplier
-                    message = potential_msg
-                    
-                    end_time = datetime.now() + timedelta(seconds=ttl)
-                    duration_info = f"{val} {unit_name} ⏳\n🗓️ *Bitiş:* {end_time.strftime('%d.%m %H:%M')}"
-
-            set_cache(Config.CACHE_KEYS['banner'], message, ttl=ttl)
+            # Süresiz duyuru
+            set_cache(Config.CACHE_KEYS['banner'], raw_content, ttl=0)
             
             self._send_raw(
                 f"📢 *DUYURU YAYINDA!*\n"
                 f"━━━━━━━━━━━━━━━━\n"
-                f"📝 *Mesaj:* \"{message}\"\n"
-                f"⏱️ *Süre:* {duration_info}\n\n"
-                f"✅ Tamamdır Patron! Uygulama ekranlarında görünüyor."
+                f"📝 *Mesaj:* \"{raw_content}\"\n"
+                f"⏱️ *Süre:* Süresiz ♾️\n\n"
+                f"✅ Uygulama ekranlarında görünüyor."
             )
             
         except Exception as e:
             self._send_raw(f"❌ Duyuru hatası: {str(e)}")
-
-    def _handle_sus(self):
-        """🛑 SİSTEMİ SUSTUR"""
-        try:
-            from utils.cache import set_cache
-            from config import Config
-            
-            set_cache(Config.CACHE_KEYS['mute'], "true", ttl=0)
-            
-            self._send_raw(
-                "🤫 *SİSTEM SUSTURULDU!* 🛑\n\n"
-                "Patron emriyle tüm banner ve duyurular gizlendi.\n"
-                "Uygulama artık ekranında hiçbir uyarı göstermeyecek.\n\n"
-                "✅ Açmak için: `/konus`"
-            )
-        except Exception as e:
-            self._send_raw(f"❌ Susturma hatası: {str(e)}")
-
-    def _handle_konus(self):
-        """🔊 SİSTEMİ AÇ"""
-        try:
-            from utils.cache import delete_cache
-            from config import Config
-            
-            delete_cache(Config.CACHE_KEYS['mute'])
-            
-            self._send_raw(
-                "🔊 *SİSTEM TEKRAR ONLINE* ✅\n\n"
-                "Susturma kaldırıldı. Otomatik takvim ve duyurular tekrar görünmeye başlayacak."
-            )
-        except Exception as e:
-            self._send_raw(f"❌ Açma hatası: {str(e)}")
 
     def _handle_bakim(self, text):
         """🚧 BAKIM MODU"""
@@ -1023,7 +1083,7 @@ class TelegramMonitor:
                 deactivate_maintenance()
                 self._send_raw(
                     "✅ *BAKIM MODU KAPANDI*\n\n"
-                    "Sistem normal moda döndü. Kullanıcılar tekrar veri alabilir."
+                    "Sistem normal moda döndü."
                 )
                 return
             
@@ -1093,7 +1153,7 @@ class TelegramMonitor:
                     logger.warning(f"💾 RAM yüksek ({ram}%), otomatik temizlik yapılıyor...")
                     
                     try:
-                        # 🔥 V4.5: Güvenli temizlik yap
+                        # 🔥 V5.0: Güvenli temizlik yap
                         from utils.cache import get_redis_client
                         
                         redis_client = get_redis_client()
