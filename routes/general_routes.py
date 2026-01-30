@@ -1,5 +1,5 @@
 """
-General Routes - PRODUCTION READY V4.5 🚀
+General Routes - PRODUCTION READY V5.0 🚀
 ==========================================================
 ✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
 ✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
