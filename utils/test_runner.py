@@ -1,16 +1,19 @@
 """
-Test Runner - OTOMATİK TEST SİSTEMİ 🧪
-=====================================
+Test Runner - OTOMATİK TEST SİSTEMİ + STRES TESTİ 🧪💪
+=======================================================
 ✅ Telegram'dan /test komutu ile çalışır
 ✅ 3 mod: basit, detay, mobil
 ✅ 5 saniyede rapor hazır
+✅ STRES TESTİ: 30dk/1sa/2sa - Sistem terlemeye hazır olsun! 🔥
 """
 
 import logging
 import time
 import requests
+import threading
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,18 @@ class TestRunner:
     def __init__(self, base_url: str = "http://localhost:10000"):
         self.base_url = base_url
         self.results = {}
+        
+        # Stres testi için
+        self.stress_active = False
+        self.stress_stats = {
+            'total_requests': 0,
+            'successful': 0,
+            'failed': 0,
+            'total_time': 0,
+            'min_response': 999999,
+            'max_response': 0,
+            'errors': []
+        }
     
     def run_basic_test(self) -> str:
         """
@@ -278,6 +293,302 @@ class TestRunner:
         
         return "\n".join(report_lines)
 
+    # ================================================================
+    # 💪 STRES TESTİ SİSTEMİ - SİSTEM TERLESIN! 🔥
+    # ================================================================
+
+    def _make_stress_request(self, endpoint: str) -> Dict[str, Any]:
+        """Tek bir stres test isteği yapar"""
+        start = time.time()
+        try:
+            resp = requests.get(f"{self.base_url}{endpoint}", timeout=10)
+            elapsed = time.time() - start
+            
+            return {
+                'success': resp.status_code == 200,
+                'status_code': resp.status_code,
+                'response_time': elapsed
+            }
+        except Exception as e:
+            elapsed = time.time() - start
+            return {
+                'success': False,
+                'status_code': 0,
+                'response_time': elapsed,
+                'error': str(e)[:50]
+            }
+
+    def _stress_worker_thread(self, endpoints: list, duration_minutes: int, requests_per_minute: int, thread_id: int):
+        """Stres testi worker thread'i"""
+        end_time = time.time() + (duration_minutes * 60)
+        request_interval = 60.0 / requests_per_minute  # İstekler arası süre
+        
+        logger.info(f"🔥 [STRESS-{thread_id}] Thread başladı: {requests_per_minute} req/min, {duration_minutes} dakika")
+        
+        while self.stress_active and time.time() < end_time:
+            # Random endpoint seç
+            endpoint = random.choice(endpoints)
+            
+            # İstek yap
+            result = self._make_stress_request(endpoint)
+            
+            # İstatistikleri güncelle (thread-safe)
+            self.stress_stats['total_requests'] += 1
+            
+            if result['success']:
+                self.stress_stats['successful'] += 1
+            else:
+                self.stress_stats['failed'] += 1
+                if result.get('error'):
+                    self.stress_stats['errors'].append(result['error'])
+            
+            self.stress_stats['total_time'] += result['response_time']
+            self.stress_stats['min_response'] = min(self.stress_stats['min_response'], result['response_time'])
+            self.stress_stats['max_response'] = max(self.stress_stats['max_response'], result['response_time'])
+            
+            # Bekle (rate limiting)
+            time.sleep(request_interval)
+        
+        logger.info(f"✅ [STRESS-{thread_id}] Thread tamamlandı")
+
+    def run_stress_test(self, level: str) -> str:
+        """
+        💪 STRES TESTİ - SİSTEM TERLETİCİ!
+        
+        Seviyeler:
+        - light: 30 dakika, orta yoğunluk (60 req/min, 5 thread)
+        - medium: 1 saat, yüksek yoğunluk (120 req/min, 10 thread)
+        - hard: 2 SAAT, MAKSIMUM YÜK! 🔥 (200 req/min, 20 thread)
+        """
+        
+        # Seviye ayarları
+        stress_configs = {
+            'light': {
+                'duration': 30,  # dakika
+                'threads': 5,
+                'requests_per_minute': 60,
+                'description': '30 dakika, orta yük'
+            },
+            'medium': {
+                'duration': 60,  # dakika
+                'threads': 10,
+                'requests_per_minute': 120,
+                'description': '1 saat, yüksek yük'
+            },
+            'hard': {
+                'duration': 120,  # dakika (2 SAAT!)
+                'threads': 20,
+                'requests_per_minute': 200,
+                'description': '2 SAAT, MAKSIMUM YÜK! 🔥'
+            }
+        }
+        
+        if level not in stress_configs:
+            return (
+                f"❌ *GEÇERSIZ SEVİYE!*\n\n"
+                f"Kullanılabilir seviyeler:\n"
+                f"• `light` - 30dk orta yük\n"
+                f"• `medium` - 1sa yüksek yük\n"
+                f"• `hard` - 2sa MAKSIMUM YÜK 🔥"
+            )
+        
+        config = stress_configs[level]
+        
+        # Test endpoint'leri
+        endpoints = [
+            '/api/currency/all',
+            '/api/currency/gold/all',
+            '/api/currency/silver/all',
+            '/api/currency/summary',
+            '/api/currency/regional'
+        ]
+        
+        # İstatistikleri sıfırla
+        self.stress_stats = {
+            'total_requests': 0,
+            'successful': 0,
+            'failed': 0,
+            'total_time': 0,
+            'min_response': 999999,
+            'max_response': 0,
+            'errors': []
+        }
+        
+        self.stress_active = True
+        
+        # Başlangıç mesajı
+        start_msg = (
+            f"💪 *STRES TESTİ BAŞLIYOR!*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🎯 *Seviye:* `{level.upper()}`\n"
+            f"📝 *Açıklama:* {config['description']}\n"
+            f"⏱️ *Süre:* {config['duration']} dakika\n"
+            f"🔥 *Thread Sayısı:* {config['threads']}\n"
+            f"📊 *Hedef:* {config['requests_per_minute']} req/min/thread\n"
+            f"📈 *Toplam:* ~{config['threads'] * config['requests_per_minute'] * config['duration']} istek\n\n"
+            f"⚠️ *UYARI:* Sistem yoğun yük altında olacak!\n"
+            f"{'🔥🔥🔥 SİSTEM TERLEYECEK! 🔥🔥🔥' if level == 'hard' else ''}\n\n"
+            f"Test başladı... Sonuçlar {config['duration']} dakika sonra gelecek."
+        )
+        
+        logger.info(f"🚀 Stres testi başlıyor: {level}")
+        
+        # Thread'leri başlat
+        threads = []
+        start_time = time.time()
+        
+        for i in range(config['threads']):
+            thread = threading.Thread(
+                target=self._stress_worker_thread,
+                args=(endpoints, config['duration'], config['requests_per_minute'], i+1),
+                daemon=True
+            )
+            thread.start()
+            threads.append(thread)
+            time.sleep(0.1)  # Thread'leri kademeli başlat
+        
+        # İlerleme raporu thread'i
+        def progress_reporter():
+            """Her 5 dakikada bir ilerleme raporu gönder"""
+            report_interval = 300  # 5 dakika
+            next_report = time.time() + report_interval
+            
+            while self.stress_active and any(t.is_alive() for t in threads):
+                if time.time() >= next_report:
+                    elapsed = int((time.time() - start_time) / 60)
+                    remaining = config['duration'] - elapsed
+                    
+                    # İstatistikler
+                    total = self.stress_stats['total_requests']
+                    success_rate = 0
+                    if total > 0:
+                        success_rate = (self.stress_stats['successful'] / total) * 100
+                    
+                    avg_response = 0
+                    if total > 0:
+                        avg_response = self.stress_stats['total_time'] / total
+                    
+                    progress_msg = (
+                        f"⏳ *İLERLEME RAPORU*\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"⏱️ *Geçen:* {elapsed} dakika\n"
+                        f"⏳ *Kalan:* {remaining} dakika\n"
+                        f"📊 *Toplam İstek:* {total}\n"
+                        f"✅ *Başarılı:* {self.stress_stats['successful']} (%{success_rate:.1f})\n"
+                        f"❌ *Başarısız:* {self.stress_stats['failed']}\n"
+                        f"⚡ *Ort. Yanıt:* {avg_response*1000:.0f}ms\n"
+                        f"📈 *Min/Max:* {self.stress_stats['min_response']*1000:.0f}ms / {self.stress_stats['max_response']*1000:.0f}ms\n\n"
+                        f"{'🔥 Sistem terlemeye devam! 🔥' if level == 'hard' else '💪 Test devam ediyor...'}"
+                    )
+                    
+                    # Telegram'a gönder
+                    try:
+                        from utils.telegram_monitor import get_telegram_monitor
+                        telegram = get_telegram_monitor()
+                        if telegram:
+                            telegram._send_raw(progress_msg)
+                    except:
+                        pass
+                    
+                    logger.info(f"📊 İlerleme: {elapsed}/{config['duration']} dakika, {total} istek")
+                    
+                    next_report = time.time() + report_interval
+                
+                time.sleep(10)  # Her 10 saniyede kontrol et
+        
+        # İlerleme reporter'ı başlat
+        reporter_thread = threading.Thread(target=progress_reporter, daemon=True)
+        reporter_thread.start()
+        
+        # Tüm thread'lerin bitmesini bekle
+        for thread in threads:
+            thread.join()
+        
+        self.stress_active = False
+        
+        # Final rapor
+        elapsed_total = time.time() - start_time
+        total_requests = self.stress_stats['total_requests']
+        success_rate = 0
+        if total_requests > 0:
+            success_rate = (self.stress_stats['successful'] / total_requests) * 100
+        
+        avg_response = 0
+        if total_requests > 0:
+            avg_response = self.stress_stats['total_time'] / total_requests
+        
+        # Performans değerlendirmesi
+        if success_rate >= 99:
+            performance = "🟢 MÜKEMMEL"
+            emoji = "🎉"
+        elif success_rate >= 95:
+            performance = "🟡 İYİ"
+            emoji = "👍"
+        elif success_rate >= 85:
+            performance = "🟠 ORTA"
+            emoji = "⚠️"
+        else:
+            performance = "🔴 ZAYIF"
+            emoji = "😰"
+        
+        # Sistem kaynak durumu
+        try:
+            import psutil
+            cpu = psutil.cpu_percent(interval=1)
+            ram = psutil.virtual_memory().percent
+            
+            system_status = (
+                f"\n💻 *SİSTEM KAYNAKLARI:*\n"
+                f"• CPU: %{cpu:.1f}\n"
+                f"• RAM: %{ram:.1f}\n"
+            )
+        except:
+            system_status = ""
+        
+        # Hata örnekleri (max 5)
+        error_samples = ""
+        if self.stress_stats['errors']:
+            unique_errors = list(set(self.stress_stats['errors'][:5]))
+            error_samples = "\n\n❌ *HATA ÖRNEKLERİ:*\n"
+            for i, err in enumerate(unique_errors[:3], 1):
+                error_samples += f"{i}. {err}\n"
+        
+        final_report = (
+            f"{emoji} *STRES TESTİ TAMAMLANDI!* {emoji}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🎯 *Seviye:* `{level.upper()}`\n"
+            f"⏱️ *Süre:* {elapsed_total/60:.1f} dakika\n"
+            f"📊 *Performans:* {performance}\n\n"
+            f"📈 *İSTATİSTİKLER:*\n"
+            f"• Toplam İstek: *{total_requests:,}*\n"
+            f"• ✅ Başarılı: *{self.stress_stats['successful']:,}* (%{success_rate:.2f})\n"
+            f"• ❌ Başarısız: *{self.stress_stats['failed']:,}*\n"
+            f"• ⚡ Ort. Yanıt: *{avg_response*1000:.0f}ms*\n"
+            f"• 📉 Min Yanıt: *{self.stress_stats['min_response']*1000:.0f}ms*\n"
+            f"• 📈 Max Yanıt: *{self.stress_stats['max_response']*1000:.0f}ms*\n"
+            f"• 🔥 İstek/Saniye: *{total_requests/elapsed_total:.1f}*\n"
+            f"{system_status}"
+            f"{error_samples}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{'🔥🔥🔥 SİSTEM TERLEDİ! 🔥🔥🔥' if level == 'hard' else '✅ Test başarıyla tamamlandı!'}\n\n"
+            f"_Tavsiye: {self._get_recommendation(success_rate, avg_response)}_"
+        )
+        
+        logger.info(f"✅ Stres testi tamamlandı: {level} - {total_requests} istek, %{success_rate:.2f} başarı")
+        
+        return final_report
+
+    def _get_recommendation(self, success_rate: float, avg_response: float) -> str:
+        """Test sonuçlarına göre tavsiye üret"""
+        if success_rate >= 99 and avg_response < 0.5:
+            return "Sistem mükemmel durumda! Google Play'e çıkabilirsin. 🚀"
+        elif success_rate >= 95 and avg_response < 1.0:
+            return "Sistem stabil. Birkaç optimizasyon yapabilirsin."
+        elif success_rate >= 85:
+            return "Sistem yük altında zorluk çekiyor. Rate limiting veya cache optimizasyonu önerilir."
+        else:
+            return "Ciddi performans sorunları var! Circuit breaker ve cache stratejisini gözden geçir."
+
 
 # Global instance
 test_runner = TestRunner(base_url="http://localhost:10000")
@@ -301,3 +612,16 @@ def run_test(test_type: str = "basic") -> str:
         return test_runner.run_detailed_test()
     else:
         return "❌ Geçersiz test tipi! Kullanım: /test, /test mobil, /test detay"
+
+
+def run_stress_test(level: str = "light") -> str:
+    """
+    💪 Stres testi çalıştırıcı (Telegram'dan çağrılır)
+    
+    Args:
+        level: "light" (30dk), "medium" (1sa), "hard" (2sa!)
+    
+    Returns:
+        str: Stres test raporu (Markdown formatında)
+    """
+    return test_runner.run_stress_test(level)
