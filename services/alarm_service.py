@@ -1,5 +1,5 @@
 """
-Alarm Service - PRODUCTION READY V1.1 🚀
+Alarm Service - PRODUCTION READY V1.2 🚀
 ==========================================================
 ✅ PERIODIC CHECK: Her 5-15 dakikada alarmları kontrol eder
 ✅ FCM NOTIFICATION: Hedef tuttuğunda bildirim gönderir
@@ -9,6 +9,7 @@ Alarm Service - PRODUCTION READY V1.1 🚀
 ✅ ERROR HANDLING: Hata durumunda sistem durmasın
 ✅ LOGGING: Detaylı log sistemi
 ✅ KEY FILTERING: Geçersiz key'leri otomatik filtreler
+✅ 404 FIX: Geçersiz token kontrolü ve detaylı hata logları
 """
 
 import logging
@@ -164,6 +165,39 @@ def save_fcm_token_mapping(fcm_token: str, token_hash: str):
         logger.warning(f"⚠️ [ALARM] Token mapping kayıt hatası: {e}")
 
 
+def validate_fcm_token(fcm_token: str) -> bool:
+    """
+    🔥 YENİ: FCM token formatını kontrol et
+    
+    Firebase FCM token'ları genelde 150+ karakter uzunluğundadır.
+    
+    Args:
+        fcm_token: Kontrol edilecek token
+        
+    Returns:
+        bool: Geçerli ise True
+    """
+    try:
+        if not fcm_token or not isinstance(fcm_token, str):
+            return False
+        
+        # FCM token'ları genelde 150+ karakter
+        if len(fcm_token) < 100:
+            logger.warning(f"⚠️ [ALARM] Token çok kısa: {len(fcm_token)} karakter")
+            return False
+        
+        # Boşluk içermemeli
+        if ' ' in fcm_token:
+            logger.warning(f"⚠️ [ALARM] Token boşluk içeriyor!")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ [ALARM] Token validasyon hatası: {e}")
+        return False
+
+
 def check_alarm_trigger(alarm_data: dict, current_price: float) -> bool:
     """
     Alarmın tetiklenmesi gerekip gerekmediğini kontrol et
@@ -197,6 +231,7 @@ def check_alarm_trigger(alarm_data: dict, current_price: float) -> bool:
 def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: float) -> bool:
     """
     Alarm bildirimi gönder
+    🔥 YENİ: Gelişmiş hata yönetimi ve detaylı loglama
     
     Args:
         fcm_token: Firebase Cloud Messaging token
@@ -207,6 +242,11 @@ def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: flo
         bool: Başarılı mı?
     """
     try:
+        # 🔥 Token validasyonu
+        if not validate_fcm_token(fcm_token):
+            logger.error(f"❌ [ALARM] Geçersiz FCM token formatı: {fcm_token[:20]}...")
+            return False
+        
         currency_name = alarm_data.get('currency_name', 'Varlık')
         currency_code = alarm_data.get('currency_code', '')
         target_price = alarm_data.get('target_price', 0)
@@ -234,6 +274,11 @@ def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: flo
             "timestamp": str(int(time.time()))
         }
         
+        logger.info(f"📤 [ALARM] Bildirim gönderiliyor...")
+        logger.info(f"   Token: {fcm_token[:20]}...{fcm_token[-10:]}")
+        logger.info(f"   Başlık: {title}")
+        logger.info(f"   Mesaj: {body}")
+        
         # FCM gönder (tek token)
         result = send_notification(
             tokens=[fcm_token],
@@ -244,18 +289,39 @@ def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: flo
             sound="default"
         )
         
+        # 🔥 Detaylı sonuç kontrolü
         if result.get('success'):
-            logger.info(
-                f"✅ [ALARM] Bildirim gönderildi: {currency_name} "
-                f"→ Hedef: ₺{target_price:,.2f}, Mevcut: ₺{current_price:,.2f}"
-            )
-            return True
+            success_count = result.get('success_count', 0)
+            failure_count = result.get('failure_count', 0)
+            
+            if success_count > 0:
+                logger.info(
+                    f"✅ [ALARM] Bildirim gönderildi: {currency_name} "
+                    f"→ Hedef: ₺{target_price:,.2f}, Mevcut: ₺{current_price:,.2f}"
+                )
+                return True
+            else:
+                logger.error(
+                    f"❌ [ALARM] Bildirim başarısız: {failure_count} hata\n"
+                    f"   Detay: {result}"
+                )
+                return False
         else:
-            logger.error(f"❌ [ALARM] Bildirim hatası: {result.get('error')}")
+            error_msg = result.get('error', 'Bilinmeyen hata')
+            logger.error(
+                f"❌ [ALARM] Bildirim hatası: {error_msg}\n"
+                f"   Token: {fcm_token[:20]}...\n"
+                f"   Currency: {currency_code}\n"
+                f"   Detay: {result}"
+            )
             return False
         
     except Exception as e:
         logger.error(f"❌ [ALARM] Bildirim gönderme hatası: {e}")
+        logger.error(f"   Token: {fcm_token[:20] if fcm_token else 'None'}...")
+        logger.error(f"   Currency: {alarm_data.get('currency_code', 'Unknown')}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         return False
 
 
@@ -305,7 +371,7 @@ def check_all_alarms() -> Dict:
             key_str = key.decode('utf-8') if isinstance(key, bytes) else key
             
             # Bu key'leri atla
-            if key_str.startswith("fcm_token_map:"):
+            if key_str.startswith("alarm:fcm_token_map:"):
                 continue
             if key_str == "alarm:price:last_check":
                 continue
@@ -428,6 +494,8 @@ def check_all_alarms() -> Dict:
                 
             except Exception as alarm_err:
                 logger.error(f"❌ [ALARM] Alarm kontrolü hatası ({key}): {alarm_err}")
+                import traceback
+                logger.error(f"   Traceback: {traceback.format_exc()}")
                 failed_count += 1
                 continue
         
@@ -455,6 +523,8 @@ def check_all_alarms() -> Dict:
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
         logger.error(f"❌ [ALARM] Genel kontrol hatası: {e}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         
         return {
             'total_alarms': 0,
@@ -498,7 +568,7 @@ def get_alarm_stats() -> Dict:
         for key in all_alarm_keys:
             key_str = key.decode('utf-8') if isinstance(key, bytes) else key
             
-            if key_str.startswith("fcm_token_map:"):
+            if key_str.startswith("alarm:fcm_token_map:"):
                 continue
             if key_str == "alarm:price:last_check":
                 continue
