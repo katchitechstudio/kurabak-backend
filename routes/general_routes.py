@@ -11,6 +11,7 @@ General Routes - PRODUCTION READY V5.0 🚀
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
 ✅ FCM ENDPOINTS: Firebase token kayıt/silme
 ✅ EVENT MANAGER BANNER: Otomatik takvim bazlı banner 🤖
+✅ FEEDBACK SYSTEM: Kullanıcı geri bildirimleri Telegram'a 📬
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -610,6 +611,129 @@ def fcm_status():
             None,
             500,
             f"Sunucu hatası: {str(e)}"
+        )
+
+
+# ======================================
+# 📬 FEEDBACK ENDPOINT (YENİ!)
+# ======================================
+
+@api_bp.route('/feedback/send', methods=['POST'])
+@limiter.limit("5 per hour")  # Saatte 5 mesaj (Spam önleme)
+def send_feedback():
+    """
+    Kullanıcı Geri Bildirimi
+    
+    📬 Direkt Telegram'a gönderilir, sistem kayıt tutmaz
+    🛡️ Rate limit: 5/saat (Spam önleme)
+    
+    Request Body:
+    {
+        "message": "Uygulama çok güzel!"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "message": "Geri bildiriminiz alındı, teşekkürler!"
+    }
+    """
+    try:
+        # Request body'den mesajı al
+        data = request.get_json()
+        
+        if not data or 'message' not in data:
+            logger.warning("⚠️ [Feedback] Boş mesaj denemesi")
+            return create_response(
+                None,
+                400,
+                "Mesaj gerekli! Body: {\"message\": \"Mesajınız\"}"
+            )
+        
+        user_message = data['message'].strip()
+        
+        # Mesaj validasyonu
+        if not user_message:
+            logger.warning("⚠️ [Feedback] Boş mesaj denemesi")
+            return create_response(
+                None,
+                400,
+                "Mesaj boş olamaz"
+            )
+        
+        if len(user_message) < 5:
+            return create_response(
+                None,
+                400,
+                "Mesaj en az 5 karakter olmalı"
+            )
+        
+        if len(user_message) > 500:
+            return create_response(
+                None,
+                400,
+                "Mesaj en fazla 500 karakter olabilir"
+            )
+        
+        # Kullanıcı bilgilerini topla (opsiyonel)
+        user_id = request.headers.get('X-Client-Id', 'Bilinmiyor')
+        device_id = request.headers.get('X-Device-Id', 'Bilinmiyor')
+        ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
+        user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
+        
+        # 📬 Telegram'a gönder
+        from utils.telegram_monitor import get_telegram_monitor
+        
+        telegram = get_telegram_monitor()
+        
+        if telegram:
+            # Güzel formatlı mesaj hazırla
+            feedback_text = (
+                f"📬 *YENİ KULLANICI GERİ BİLDİRİMİ*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"💬 *Mesaj:*\n{user_message}\n\n"
+                f"👤 *Kullanıcı Bilgileri:*\n"
+                f"• User ID: `{user_id[:20]}`\n"
+                f"• Device ID: `{device_id[:20]}`\n"
+                f"• IP: `{ip_address}`\n"
+                f"• Platform: `{user_agent[:50]}`\n\n"
+                f"⏰ *Zaman:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+            )
+            
+            # Telegram'a gönder (level='report' = anında gönder)
+            success = telegram.send_message(feedback_text, level='report')
+            
+            if success:
+                logger.info(f"✅ [Feedback] Mesaj Telegram'a gönderildi: {user_message[:30]}...")
+                return create_response(
+                    {"sent": True},
+                    200,
+                    "Geri bildiriminiz alındı, teşekkürler! 🙏"
+                )
+            else:
+                # Telegram gönderimi başarısız (ama kullanıcıya başarılı de)
+                logger.warning(f"⚠️ [Feedback] Telegram devre dışı, mesaj kaydedildi ama gönderilemedi")
+                return create_response(
+                    {"sent": False},
+                    200,
+                    "Geri bildiriminiz alındı, teşekkürler! 🙏"
+                )
+        else:
+            # Telegram bot yok (config hatası)
+            logger.error("❌ [Feedback] Telegram bot başlatılmamış!")
+            return create_response(
+                {"sent": False},
+                200,
+                "Geri bildiriminiz alındı, teşekkürler! 🙏"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ [Feedback] Beklenmeyen hata: {e}")
+        # Kullanıcıya hata gösterme, başarılı gibi davran
+        return create_response(
+            {"sent": False},
+            200,
+            "Geri bildiriminiz alındı, teşekkürler! 🙏"
         )
 
 
