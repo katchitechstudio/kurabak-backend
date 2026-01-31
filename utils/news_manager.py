@@ -1,5 +1,5 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V3.3 PROD-READY 📰🚀
+News Manager - GÜNLÜK HABER SİSTEMİ V3.4 PROD-READY 📰🚀
 =============================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
@@ -7,12 +7,16 @@ News Manager - GÜNLÜK HABER SİSTEMİ V3.3 PROD-READY 📰🚀
 ✅ GÜÇLÜ FALLBACK: Gemini patlarsa da sistem ayakta
 ✅ RATE-LIMIT KORUMA: Retry + exponential backoff
 ✅ BAYRAM MANTIKLI TTL: Gece 03:00'e kadar geçerli
+✅ GEMİNİ 3 FLASH: Yeni model desteği
+✅ NULL SAFETY: NEWSDATA null kontrolü
+✅ RACE CONDITION FIX: Bootstrap lock mekanizması
 """
 
 import os
 import logging
 import requests
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import google.generativeai as genai
@@ -26,6 +30,13 @@ logger = logging.getLogger(__name__)
 GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+
+# 🔒 BOOTSTRAP LOCK - Race condition önleme
+_bootstrap_lock = threading.Lock()
+_bootstrap_in_progress = {
+    'morning': False,
+    'evening': False
+}
 
 
 # ======================================
@@ -132,7 +143,10 @@ def fetch_gnews(max_results: int = 20) -> List[str]:
 
 
 def fetch_newsdata(max_results: int = 20) -> List[str]:
-    """NewsData API'den ekonomi haberleri çeker - RETRY KORUMASLI"""
+    """
+    NewsData API'den ekonomi haberleri çeker - RETRY KORUMASLI
+    🔥 NULL SAFETY: None kontrolü eklendi
+    """
     try:
         if not NEWSDATA_API_KEY:
             logger.warning("⚠️ NEWSDATA_API_KEY bulunamadı!")
@@ -158,10 +172,24 @@ def fetch_newsdata(max_results: int = 20) -> List[str]:
         news_list = []
         
         for article in results:
-            title = article.get('title', '').strip()
-            description = article.get('description', '').strip()
-            full_text = f"{title}. {description}" if description else title
+            # 🔥 NULL SAFETY: Her field için None kontrolü
+            title = article.get('title')
+            description = article.get('description')
             
+            # Title None ise atla
+            if title is None:
+                continue
+            
+            title = title.strip()
+            
+            # Description None ise sadece title kullan
+            if description is None:
+                full_text = title
+            else:
+                description = description.strip()
+                full_text = f"{title}. {description}" if description else title
+            
+            # Son kontrol: full_text boş mu?
             if full_text and len(full_text) > 15:
                 news_list.append(full_text)
         
@@ -194,7 +222,10 @@ def fetch_all_news() -> List[str]:
 # ======================================
 
 def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]]:
-    """ULTRA SIKI FİLTRE - Gemini patlarsa da sistem ayakta kalır"""
+    """
+    ULTRA SIKI FİLTRE - Gemini patlarsa da sistem ayakta kalır
+    🔥 YENİ MODEL: gemini-3-flash-preview
+    """
     try:
         if not GEMINI_API_KEY:
             logger.warning("⚠️ GEMINI_API_KEY bulunamadı! Fallback modu...")
@@ -205,7 +236,9 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
             return [], None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        # 🔥 YENİ MODEL: gemini-3-flash-preview (ücretsiz ve güçlü!)
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
@@ -419,38 +452,67 @@ def calculate_bayram_ttl() -> int:
 
 
 def bootstrap_news_system() -> bool:
-    """İlk çalıştırma bootstrap"""
+    """
+    İlk çalıştırma bootstrap
+    🔒 RACE CONDITION FIX: Lock mekanizması ile aynı anda sadece 1 bootstrap
+    """
     try:
         current_hour = datetime.now().hour
         
         if 0 <= current_hour < 12:
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             shift_name = "SABAH"
+            shift_type = "morning"
             prepare_func = prepare_morning_shift
         else:
             cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
             shift_name = "AKŞAM"
+            shift_type = "evening"
             prepare_func = prepare_evening_shift
         
-        existing_data = get_cache(cache_key)
+        # 🔒 LOCK: Aynı vardiya için eş zamanlı bootstrap engelle
+        with _bootstrap_lock:
+            # Başka thread bootstrap yapıyor mu?
+            if _bootstrap_in_progress[shift_type]:
+                logger.info(f"ℹ️ [BOOTSTRAP] {shift_name} vardiyası zaten hazırlanıyor (başka thread), atlanıyor...")
+                return False
+            
+            # Cache'de veri var mı?
+            existing_data = get_cache(cache_key)
+            if existing_data:
+                logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır")
+                return False
+            
+            # Bootstrap başlıyor, flag set et
+            _bootstrap_in_progress[shift_type] = True
+            logger.warning(f"⚠️ [BOOTSTRAP] {shift_name} vardiyası boş! Doldurma başlıyor...")
         
-        if existing_data:
-            logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır")
-            return False
-        
-        logger.warning(f"⚠️ [BOOTSTRAP] {shift_name} vardiyası boş! Doldurma başlıyor...")
-        
-        success = prepare_func()
-        
-        if success:
-            logger.info(f"🚀 [BOOTSTRAP] {shift_name} vardiyası dolduruldu!")
-            return True
-        else:
-            logger.error(f"❌ [BOOTSTRAP] {shift_name} vardiyası doldurulamadı!")
-            return False
+        # 🔓 Lock dışında prepare yap (uzun sürebilir)
+        try:
+            success = prepare_func()
+            
+            if success:
+                logger.info(f"🚀 [BOOTSTRAP] {shift_name} vardiyası dolduruldu!")
+                return True
+            else:
+                logger.error(f"❌ [BOOTSTRAP] {shift_name} vardiyası doldurulamadı!")
+                return False
+        finally:
+            # Her durumda flag'i temizle
+            with _bootstrap_lock:
+                _bootstrap_in_progress[shift_type] = False
         
     except Exception as e:
         logger.error(f"❌ [BOOTSTRAP] Hata: {e}")
+        # Hata durumunda da flag'i temizle
+        try:
+            with _bootstrap_lock:
+                if 0 <= datetime.now().hour < 12:
+                    _bootstrap_in_progress['morning'] = False
+                else:
+                    _bootstrap_in_progress['evening'] = False
+        except:
+            pass
         return False
 
 
@@ -600,7 +662,7 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.3 PROD-READY - Test\n")
+    print("🧪 News Manager V3.4 PROD-READY - Test\n")
     
     print("1️⃣ HABER TOPLAMA:")
     news_list = fetch_all_news()
