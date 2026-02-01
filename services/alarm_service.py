@@ -1,5 +1,5 @@
 """
-Alarm Service - PRODUCTION READY V1.2 🚀
+Alarm Service - PRODUCTION READY V1.3 🚀
 ==========================================================
 ✅ PERIODIC CHECK: Her 5-15 dakikada alarmları kontrol eder
 ✅ FCM NOTIFICATION: Hedef tuttuğunda bildirim gönderir
@@ -10,6 +10,7 @@ Alarm Service - PRODUCTION READY V1.2 🚀
 ✅ LOGGING: Detaylı log sistemi
 ✅ KEY FILTERING: Geçersiz key'leri otomatik filtreler
 ✅ 404 FIX: Geçersiz token kontrolü ve detaylı hata logları
+✅ 🔥 SCAN OPTİMİZASYONU: KEYS yerine SCAN kullanımı (V1.3)
 """
 
 import logging
@@ -326,6 +327,63 @@ def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: flo
 
 
 # ======================================
+# 🔥 V1.3: SCAN OPTİMİZASYONU
+# ======================================
+
+def get_all_alarm_keys_safe(redis_client) -> List[str]:
+    """
+    🔥 YENİ: SCAN ile güvenli alarm key listesi (KEYS yerine)
+    
+    KEYS sorunu: Redis'i bloklar, 10,000 alarm'da 1-2 saniye donma
+    SCAN çözümü: Iterative okuma, Redis asla kilitlenmez
+    
+    Args:
+        redis_client: Redis client instance
+        
+    Returns:
+        List[str]: Geçerli alarm key'leri
+    """
+    try:
+        alarm_keys = []
+        cursor = 0
+        
+        # SCAN ile iterative okuma
+        while True:
+            # Her seferinde 100 key oku (ayarlanabilir)
+            cursor, keys = redis_client.scan(
+                cursor=cursor,
+                match="alarm:*",
+                count=100
+            )
+            
+            # Geçersiz key'leri filtrele
+            for key in keys:
+                # Bytes'tan string'e çevir
+                key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+                
+                # Mapping ve meta key'leri atla
+                if key_str.startswith("alarm:fcm_token_map:"):
+                    continue
+                if key_str == "alarm:price:last_check":
+                    continue
+                
+                # Geçerli alarm key formatı: alarm:HASH:CODE:TYPE (4 parça)
+                parts = key_str.split(':')
+                if len(parts) == 4:
+                    alarm_keys.append(key_str)
+            
+            # Cursor 0 ise tarama tamamlandı
+            if cursor == 0:
+                break
+        
+        return alarm_keys
+        
+    except Exception as e:
+        logger.error(f"❌ [ALARM] SCAN hatası: {e}")
+        return []
+
+
+# ======================================
 # ANA ALARM KONTROLCÜ
 # ======================================
 
@@ -334,6 +392,8 @@ def check_all_alarms() -> Dict:
     Tüm alarmları kontrol et ve gerekirse bildirim gönder
     
     Bu fonksiyon scheduler tarafından periyodik olarak çağrılır.
+    
+    🔥 V1.3: SCAN optimizasyonu ile Redis'i bloklamaz
     
     Returns:
         dict: {
@@ -361,25 +421,8 @@ def check_all_alarms() -> Dict:
                 'error': 'Redis connection failed'
             }
         
-        # Tüm alarmları al
-        all_alarm_keys = redis_client.keys("alarm:*")
-        
-        # Geçersiz key'leri filtrele
-        alarm_keys = []
-        for key in all_alarm_keys:
-            # Bytes'tan string'e çevir
-            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-            
-            # Bu key'leri atla
-            if key_str.startswith("alarm:fcm_token_map:"):
-                continue
-            if key_str == "alarm:price:last_check":
-                continue
-            
-            # Geçerli alarm key formatı: alarm:HASH:CODE:TYPE (4 parça)
-            parts = key_str.split(':')
-            if len(parts) == 4:
-                alarm_keys.append(key)
+        # 🔥 SCAN ile güvenli key listesi (KEYS yerine)
+        alarm_keys = get_all_alarm_keys_safe(redis_client)
         
         total_alarms = len(alarm_keys)
         
@@ -393,7 +436,7 @@ def check_all_alarms() -> Dict:
                 'duration_ms': 0
             }
         
-        logger.info(f"📊 [ALARM] {total_alarms} alarm kontrol ediliyor...")
+        logger.info(f"📊 [ALARM] {total_alarms} alarm kontrol ediliyor... (SCAN modu)")
         
         checked_count = 0
         triggered_count = 0
@@ -402,10 +445,6 @@ def check_all_alarms() -> Dict:
         # Her bir alarm için kontrol
         for key in alarm_keys:
             try:
-                # Bytes'tan string'e çevir
-                if isinstance(key, bytes):
-                    key = key.decode('utf-8')
-                
                 # Alarm verisini al
                 alarm_data = redis_client.get(key)
                 
@@ -512,7 +551,7 @@ def check_all_alarms() -> Dict:
         }
         
         logger.info(
-            f"✅ [ALARM] Kontrol tamamlandı: "
+            f"✅ [ALARM] Kontrol tamamlandı (SCAN modu): "
             f"{checked_count} kontrol edildi, "
             f"{triggered_count} tetiklendi, "
             f"{failed_count} hata ({duration_ms:.2f}ms)"
@@ -544,6 +583,8 @@ def get_alarm_stats() -> Dict:
     """
     Alarm sistemi istatistiklerini döner
     
+    🔥 V1.3: SCAN ile güvenli sayım
+    
     Returns:
         dict: {
             'total_alarms': int,
@@ -560,22 +601,8 @@ def get_alarm_stats() -> Dict:
                 'alarm_types': {'HIGH': 0, 'LOW': 0}
             }
         
-        # Tüm alarmları al
-        all_alarm_keys = redis_client.keys("alarm:*")
-        
-        # Geçersiz key'leri filtrele
-        alarm_keys = []
-        for key in all_alarm_keys:
-            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-            
-            if key_str.startswith("alarm:fcm_token_map:"):
-                continue
-            if key_str == "alarm:price:last_check":
-                continue
-            
-            parts = key_str.split(':')
-            if len(parts) == 4:
-                alarm_keys.append(key)
+        # 🔥 SCAN ile güvenli key listesi
+        alarm_keys = get_all_alarm_keys_safe(redis_client)
         
         total_alarms = len(alarm_keys)
         
@@ -586,9 +613,6 @@ def get_alarm_stats() -> Dict:
         
         for key in alarm_keys:
             try:
-                if isinstance(key, bytes):
-                    key = key.decode('utf-8')
-                
                 # alarm:HASH:CODE:TYPE formatından parse et
                 parts = key.split(':')
                 if len(parts) >= 4:
