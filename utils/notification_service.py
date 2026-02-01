@@ -1,5 +1,5 @@
 """
-Firebase Push Notification Service V4.4 🔥
+Firebase Push Notification Service V4.5 🔥
 =====================================
 ✅ Token Yönetimi (Kayıt/Silme)
 ✅ Bildirim Gönderme (Tekil/Toplu)
@@ -7,10 +7,11 @@ Firebase Push Notification Service V4.4 🔥
 ✅ Özel Bildirim Tipleri (Fiyat Alarmı, Günlük Özet, vb.)
 ✅ Hata Yönetimi ve Logging
 ✅ GÜNLÜK ÖZET: Öğlen 12:00 otomatik gönderim
+✅ 🔥 GENERATOR PATTERN: RAM dostu token okuma (V4.5)
 """
 import logging
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Generator
 from datetime import datetime
 import firebase_admin
 from firebase_admin import messaging
@@ -75,9 +76,69 @@ def unregister_fcm_token(token: str) -> bool:
         logger.error(f"❌ [FCM] Token silme hatası: {e}")
         return False
 
+
+# ======================================
+# 🔥 V4.5: GENERATOR PATTERN (RAM DOSTU)
+# ======================================
+
+def get_tokens_generator(batch_size: int = 500) -> Generator[List[str], None, None]:
+    """
+    🔥 YENİ: Tokenları Redis'ten parça parça okuyan Generator
+    
+    SMEMBERS sorunu: 100,000 token'ı RAM'e yükler (200-300 MB) → OOM Kill
+    SSCAN çözümü: Parça parça okur, RAM kullanımı sabit kalır
+    
+    Args:
+        batch_size: Her batch'te kaç token (varsayılan 500)
+        
+    Yields:
+        List[str]: Token batch'i
+    """
+    redis_client = get_redis_client()
+    if not redis_client:
+        return
+
+    key = Config.CACHE_KEYS['fcm_tokens']
+    cursor = 0
+    batch = []
+
+    try:
+        while True:
+            # SSCAN ile parça parça oku
+            cursor, data = redis_client.sscan(key, cursor=cursor, count=batch_size)
+            
+            for token in data:
+                # Bytes'tan string'e çevir
+                if isinstance(token, bytes):
+                    token = token.decode('utf-8')
+                batch.append(token)
+
+                # Batch dolduysa yield et ve boşalt
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            
+            # Cursor 0 ise tarama tamamlandı
+            if cursor == 0:
+                break
+        
+        # Kalan son parçayı ver
+        if batch:
+            yield batch
+            
+    except Exception as e:
+        logger.error(f"❌ [FCM] Generator hatası: {e}")
+        # Hata durumunda bile kalan batch'i ver
+        if batch:
+            yield batch
+
+
 def get_all_tokens() -> List[str]:
     """
-    Tüm kayıtlı FCM tokenlarını getir
+    Tüm kayıtlı FCM tokenlarını getir (DEPRECATED - Geriye uyumluluk için)
+    
+    ⚠️ UYARI: Bu fonksiyon RAM dostu değildir!
+    Yeni kod için get_tokens_generator() kullanın.
     
     Returns:
         List[str]: Token listesi
@@ -93,6 +154,7 @@ def get_all_tokens() -> List[str]:
     except Exception as e:
         logger.error(f"❌ [FCM] Token listesi hatası: {e}")
         return []
+
 
 def get_token_count() -> int:
     """
@@ -234,9 +296,12 @@ def send_notification(
         logger.error(f"❌ [FCM] Bildirim gönderme hatası: {e}")
         return {"success": False, "error": str(e)}
 
+
 def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
     """
-    TÜM kayıtlı cihazlara bildirim gönder
+    TÜM kayıtlı cihazlara bildirim gönder (RAM dostu - Generator ile)
+    
+    🔥 V4.5: Generator pattern kullanır, RAM şişmesi olmaz
     
     Args:
         title: Bildirim başlığı
@@ -246,15 +311,97 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
     Returns:
         Dict: Sonuç
     """
-    tokens = get_all_tokens()
-    
-    if not tokens:
-        logger.warning("⚠️ [FCM] Hiç kayıtlı cihaz yok!")
-        return {"success": False, "error": "No registered devices"}
-    
-    logger.info(f"📢 [FCM] Toplu bildirim gönderiliyor ({len(tokens)} cihaz)")
-    
-    return send_notification(tokens, title, body, data)
+    try:
+        logger.info("📢 [FCM] Toplu bildirim gönderiliyor (Generator modu)...")
+        
+        total_success = 0
+        total_failure = 0
+        total_tokens = 0
+        
+        # 🔥 Generator'dan 500'lük paketler halinde al
+        token_generator = get_tokens_generator(batch_size=FCM_BATCH_SIZE)
+        
+        # Bildirim mesajını hazırla
+        notification = messaging.Notification(
+            title=title,
+            body=body
+        )
+        
+        # Android ayarları
+        android_config = messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(
+                sound="default",
+                channel_id='kurabak_default'
+            )
+        )
+        
+        batch_num = 0
+        for batch_tokens in token_generator:
+            batch_num += 1
+            
+            if not batch_tokens:
+                continue
+            
+            logger.info(f"📤 [FCM] Batch {batch_num} gönderiliyor ({len(batch_tokens)} token)...")
+            
+            try:
+                # MulticastMessage oluştur
+                message = messaging.MulticastMessage(
+                    notification=notification,
+                    tokens=batch_tokens,
+                    data=data or {},
+                    android=android_config
+                )
+                
+                # Gönder
+                response = messaging.send_multicast(message)
+                
+                # Sayaçları güncelle
+                total_success += response.success_count
+                total_failure += response.failure_count
+                total_tokens += len(batch_tokens)
+                
+                # Başarısız tokenları temizle
+                if response.failure_count > 0:
+                    failed_tokens = [batch_tokens[idx] for idx, resp in enumerate(response.responses) if not resp.success]
+                    for token in failed_tokens:
+                        unregister_fcm_token(token)
+                
+                logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
+                
+            except Exception as batch_err:
+                logger.error(f"❌ [FCM] Batch {batch_num} hatası: {batch_err}")
+                total_failure += len(batch_tokens)
+                total_tokens += len(batch_tokens)
+        
+        if total_tokens == 0:
+            logger.warning("⚠️ [FCM] Hiç kayıtlı cihaz yok!")
+            return {"success": False, "error": "No registered devices"}
+        
+        # Sonuç
+        result = {
+            "success": True,
+            "total_sent": total_tokens,
+            "success_count": total_success,
+            "failure_count": total_failure,
+            "batch_count": batch_num,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        logger.info(f"🏁 [FCM] Toplu gönderim tamamlandı!")
+        logger.info(f"   📊 Toplam: {total_tokens} token")
+        logger.info(f"   ✅ Başarılı: {total_success}")
+        logger.info(f"   ❌ Başarısız: {total_failure}")
+        
+        # Son bildirim zamanını kaydet
+        set_cache(Config.CACHE_KEYS['fcm_last_notification'], str(datetime.now().timestamp()), ttl=86400)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ [FCM] Toplu gönderim hatası: {e}")
+        return {"success": False, "error": str(e)}
 
 # ======================================
 # ÖZEL BİLDİRİM TİPLERİ
