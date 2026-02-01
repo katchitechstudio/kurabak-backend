@@ -1,10 +1,10 @@
 """
-General Routes - PRODUCTION READY V5.0 🚀
+General Routes - PRODUCTION READY V5.1 🚀
 ==========================================================
 ✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
-✅ 503 ERROR FIX: Asla boş dönmez, gerekirse bayat veri (Stale) sunar
+✅ 503 ERROR FIX: Cache boşsa 503 dön, API çağırma (Thundering Herd fix)
 ✅ REGIONAL SUPPORT: 20 Döviz için Bölgesel Filtreleme
-✅ SMART RECOVERY: Cache boşsa anlık tetikleme yapar
+✅ ATOMIC TRACKING: Race Condition fix - Redis INCR kullanımı
 ✅ STANDARDIZED RESPONSE: Frontend (Android) için sabit format
 ✅ GELİŞMİŞ TRACKING: Header bazlı kullanıcı takibi + istatistik
 ✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
@@ -23,9 +23,7 @@ from datetime import datetime
 
 # Config ve Cache mekanizmaları
 from config import Config
-from utils.cache import get_cache, set_cache
-# Maintenance servisten güvenli veri çekme fonksiyonu
-from services.maintenance_service import fetch_all_data_safe
+from utils.cache import get_cache, set_cache, incr_cache  # 🔥 INCR_CACHE EKLENDİ
 # 🔥 Notification servisleri (utils klasöründe)
 from utils.notification_service import (
     register_fcm_token,
@@ -59,6 +57,10 @@ def track_online_user():
     """
     🕵️ AJAN: Kullanıcıyı "Online" olarak işaretle
     
+    🔥 V5.1 FIX: Race Condition düzeltildi!
+    - ❌ ÖNCE: get_cache() → set_cache() (2 adımlı, thread-unsafe)
+    - ✅ ŞIMDI: incr_cache() (atomik, thread-safe)
+    
     Öncelik Sırası:
     1. Custom Headers (X-Client-Id, X-Device-Id) - Mobil uygulama gönderecek
     2. Query Parameters (user_id, device_id) - Eski versiyon uyumluluğu
@@ -91,10 +93,10 @@ def track_online_user():
         cache_key = f"online_user:{unique_key}"
         set_cache(cache_key, "1", ttl=300)  # 300 saniye = 5 dakika
         
-        # 📊 İstatistik için de kaydet (24 saat ömürlü)
+        # 📊 İstatistik için ATOMIK INCREMENT (24 saat ömürlü)
+        # 🔥 V5.1 FIX: Race Condition düzeltildi!
         log_key = f"api_request:{unique_key}"
-        count = get_cache(log_key) or 0
-        set_cache(log_key, int(count) + 1, ttl=86400)  # 24 saat
+        incr_cache(log_key, ttl=86400)  # ✅ Atomik, thread-safe!
         
     except Exception as e:
         # Hata olsa bile API durmasın
@@ -119,10 +121,17 @@ def create_response(data, status_code=200, message=None, meta=None):
 def get_data_guaranteed(cache_key):
     """
     GARANTİLİ VERİ GETİRİCİ 🛡️
-    1. Normal Cache'e bak.
-    2. Yoksa Stale (Bayat) Cache'e bak.
-    3. O da yoksa anlık gidip API'den çek (Blocking).
-    4. Asla 'None' dönme (Mümkünse).
+    
+    🔥 V5.1 THUNDERING HERD FIX:
+    - ❌ ÖNCE: Cache boşsa fetch_all_data_safe() çağrılırdı
+    - ✅ ŞIMDI: Cache boşsa None dön, kullanıcı 503 alsın
+    
+    Mantık:
+    1. Normal Cache'e bak → Varsa döndür
+    2. Yoksa Stale (Bayat) Cache'e bak → Varsa döndür
+    3. O da yoksa → None dön (Worker çekecek, kullanıcı çekmesin!)
+    
+    ⚠️ ASLA kullanıcı isteğinde API çağırma!
     """
     # 1. Normal Cache
     data = get_cache(cache_key)
@@ -137,14 +146,12 @@ def get_data_guaranteed(cache_key):
         logger.warning(f"⚠️ {cache_key} için güncel veri yok, BAYAT veri sunuluyor.")
         return stale_data
 
-    # 3. Hiçbir şey yoksa (Cold Start) -> Mecbur gidip çekeceğiz
-    logger.warning(f"🔴 {cache_key} için hiç veri yok! Anlık çekim başlatılıyor...")
-    success = fetch_all_data_safe()
-    
-    if success:
-        # Şimdi tekrar cache'e bak
-        return get_cache(cache_key)
-    
+    # 3. 🔥 THUNDERING HERD FIX: Cache boşsa None dön!
+    # Kullanıcı 503 alsın, Worker 1 dakikada bir çekecek
+    logger.error(
+        f"🔴 KRİTİK: {cache_key} verisi yok! "
+        f"Scheduler kontrol edilmeli. 503 dönülüyor."
+    )
     return None
 
 
@@ -211,6 +218,7 @@ def get_all_currencies():
     🛡️ Rate limit: 60/dakika
     🚧 Bakım Modu: Otomatik banner güncelleme
     🤖 Akıllı Banner: Event Manager entegrasyonu
+    🔥 V5.1: Thundering Herd fix - Cache boşsa 503!
     """
     # Bot kontrolü
     check_user_agent()
@@ -221,8 +229,13 @@ def get_all_currencies():
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
         
+        # 🔥 V5.1 FIX: Cache boşsa 503 dön (API çağırma!)
         if not result:
-            return create_response([], 503, "Servis başlatılıyor, lütfen tekrar deneyin.")
+            return create_response(
+                [], 
+                503, 
+                "Veriler hazırlanıyor, lütfen 1-2 dakika sonra tekrar deneyin."
+            )
 
         # Veri formatı kontrolü
         data_list = result.get('data', [])
@@ -267,6 +280,7 @@ def get_all_golds():
     """
     Tüm Altın Fiyatları (6 Adet)
     🛡️ Rate limit: 60/dakika
+    🔥 V5.1: Thundering Herd fix
     """
     check_user_agent()
     track_online_user()
@@ -274,8 +288,13 @@ def get_all_golds():
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['golds_all'])
         
+        # 🔥 V5.1 FIX: Cache boşsa 503 dön
         if not result:
-            return create_response([], 503, "Veriler hazırlanıyor...")
+            return create_response(
+                [], 
+                503, 
+                "Veriler hazırlanıyor, lütfen 1-2 dakika sonra tekrar deneyin."
+            )
 
         data_list = result.get('data', [])
         return create_response(
@@ -299,6 +318,7 @@ def get_all_silvers():
     """
     Gümüş Fiyatları
     🛡️ Rate limit: 60/dakika
+    🔥 V5.1: Thundering Herd fix
     """
     check_user_agent()
     track_online_user()
@@ -306,8 +326,13 @@ def get_all_silvers():
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['silvers_all'])
         
+        # 🔥 V5.1 FIX: Cache boşsa 503 dön
         if not result:
-            return create_response([], 503, "Veriler hazırlanıyor...")
+            return create_response(
+                [], 
+                503, 
+                "Veriler hazırlanıyor, lütfen 1-2 dakika sonra tekrar deneyin."
+            )
 
         data_list = result.get('data', [])
         return create_response(
@@ -324,6 +349,7 @@ def get_regional_currencies():
     """
     Bölgesel Filtrelenmiş Dövizler
     🛡️ Rate limit: 30/dakika
+    🔥 V5.1: Thundering Herd fix
     """
     check_user_agent()
     track_online_user()
@@ -332,8 +358,13 @@ def get_regional_currencies():
         # Ana veriyi çek
         result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
         
+        # 🔥 V5.1 FIX: Cache boşsa 503 dön
         if not result:
-            return create_response({}, 503, "Veriler hazırlanıyor...")
+            return create_response(
+                {}, 
+                503, 
+                "Veriler hazırlanıyor, lütfen 1-2 dakika sonra tekrar deneyin."
+            )
             
         all_currencies = result.get('data', [])
         regional_data = {}
@@ -615,7 +646,7 @@ def fcm_status():
 
 
 # ======================================
-# 📬 FEEDBACK ENDPOINT (YENİ!)
+# 📬 FEEDBACK ENDPOINT
 # ======================================
 
 @api_bp.route('/feedback/send', methods=['POST'])
