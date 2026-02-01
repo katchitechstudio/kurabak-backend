@@ -1,5 +1,5 @@
 """
-Maintenance Service - PRODUCTION READY V5.0 🚧
+Maintenance Service - PRODUCTION READY V5.1 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
 ✅ API V5: Tek kaynak sistemi
@@ -12,6 +12,8 @@ Maintenance Service - PRODUCTION READY V5.0 🚧
 ✅ CLEANUP SYSTEM: Her gün eski backup'ları temizle
 ✅ ALARM SYSTEM: Her 5-15 dakikada alarm kontrolü
 ✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:00 + 12:00) 📰
+✅ JOB ERROR LISTENER: Job crash'lerde Telegram bildirimi (V5.1)
+✅ JOB OVERLAP PROTECTION: Çift çalışma önleme (V5.1)
 """
 
 import logging
@@ -20,6 +22,7 @@ from typing import Optional, Dict, Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.events import EVENT_JOB_ERROR  # 🔥 V5.1: Error listener için
 
 from utils.cache import get_cache, set_cache, delete_cache
 from config import Config
@@ -216,13 +219,59 @@ def force_worker_update():
 
 
 # ======================================
+# 🔥 V5.1: JOB ERROR LISTENER
+# ======================================
+
+def job_error_listener(event):
+    """
+    🔥 V5.1 YENİ: Job hata verdiğinde tetiklenir
+    
+    Scheduler job'larından biri crash olursa:
+    1. Detaylı log yazar
+    2. Telegram'a kritik bildirim gönderir
+    
+    Args:
+        event: APScheduler JobExecutionEvent
+    """
+    if event.exception:
+        job_id = event.job_id
+        exception = event.exception
+        
+        # Detaylı log
+        logger.critical(f"💣 SCHEDULER JOB HATASI!")
+        logger.critical(f"   Job ID: {job_id}")
+        logger.critical(f"   Hata: {exception}")
+        logger.critical(f"   Hata Tipi: {type(exception).__name__}")
+        
+        # Telegram'a bildir
+        try:
+            from utils.telegram_monitor import get_telegram_monitor
+            
+            telegram = get_telegram_monitor()
+            if telegram:
+                error_message = (
+                    f"🚨 *KRİTİK: SCHEDULER JOB ÇÖKTÜ!*\n\n"
+                    f"*Job ID:* `{job_id}`\n"
+                    f"*Hata Tipi:* `{type(exception).__name__}`\n"
+                    f"*Hata Mesajı:*\n```\n{str(exception)[:500]}\n```\n\n"
+                    f"⚠️ Sistem otomatik olarak job'ı yeniden başlatacak."
+                )
+                
+                telegram.send_message(error_message, level='critical')
+                logger.info("✅ Hata bildirimi Telegram'a gönderildi")
+        
+        except Exception as telegram_err:
+            logger.error(f"❌ Telegram bildirim hatası: {telegram_err}")
+
+
+# ======================================
 # SCHEDULER FONKSİYONLARI
 # ======================================
 
 def worker_job():
     """
     👷 İŞÇİ (WORKER)
-    Her 2 dakikada bir veri çeker ve cache'e yazar.
+    🔥 V5.1: 1 dakikada bir veri çeker (60 saniye)
     """
     try:
         logger.info("👷 [WORKER] Veri güncelleme başlıyor...")
@@ -239,6 +288,7 @@ def worker_job():
             
     except Exception as e:
         logger.error(f"❌ [WORKER] Hata: {e}")
+        raise  # 🔥 Error listener'ın yakalaması için raise et
 
 
 def snapshot_job():
@@ -259,6 +309,7 @@ def snapshot_job():
             
     except Exception as e:
         logger.error(f"❌ [SNAPSHOT] Hata: {e}")
+        raise
 
 
 def supervisor_check():
@@ -288,6 +339,7 @@ def supervisor_check():
         
     except Exception as e:
         logger.error(f"❌ [ŞEF] Hata: {e}")
+        raise
 
 
 def calendar_check():
@@ -305,6 +357,7 @@ def calendar_check():
         
     except Exception as e:
         logger.error(f"❌ [TAKVİM] Hata: {e}")
+        raise
 
 
 def daily_report():
@@ -327,6 +380,7 @@ def daily_report():
         
     except Exception as e:
         logger.error(f"❌ [RAPOR] Hata: {e}")
+        raise
 
 
 def push_notification_daily():
@@ -349,6 +403,7 @@ def push_notification_daily():
         
     except Exception as e:
         logger.error(f"❌ [PUSH] Hata: {e}")
+        raise
 
 
 def cleanup_old_backups():
@@ -382,6 +437,7 @@ def cleanup_old_backups():
         
     except Exception as e:
         logger.error(f"❌ [CLEANUP] Hata: {e}")
+        raise
 
 
 def alarm_check_job():
@@ -418,10 +474,11 @@ def alarm_check_job():
         
     except Exception as e:
         logger.error(f"❌ [ALARM] Kontrol hatası: {e}")
+        raise
 
 
 # ======================================
-# 📰 HABER SİSTEMİ JOB'LARI (YENİ!)
+# 📰 HABER SİSTEMİ JOB'LARI
 # ======================================
 
 def news_morning_shift_job():
@@ -442,6 +499,7 @@ def news_morning_shift_job():
             
     except Exception as e:
         logger.error(f"❌ [SABAH VARDİYASI] Hata: {e}")
+        raise
 
 
 def news_evening_shift_job():
@@ -462,15 +520,22 @@ def news_evening_shift_job():
             
     except Exception as e:
         logger.error(f"❌ [AKŞAM VARDİYASI] Hata: {e}")
+        raise
 
 
 # ======================================
-# SCHEDULER YÖNETİMİ
+# 🔥 V5.1: SCHEDULER YÖNETİMİ
 # ======================================
 
 def start_scheduler():
     """
-    Zamanlayıcıyı başlat ve tüm job'ları ekle.
+    🔥 V5.1: Zamanlayıcıyı başlat ve tüm job'ları ekle
+    
+    YENİ:
+    - Job Error Listener eklendi
+    - Her job için max_instances=1 (overlap önleme)
+    - Her job için coalesce=True (missed runs birleştir)
+    - Worker interval 60 saniye (1 dakika)
     """
     global scheduler
     
@@ -480,13 +545,21 @@ def start_scheduler():
     
     scheduler = BackgroundScheduler(timezone=Config.DEFAULT_TIMEZONE)
     
-    # 👷 WORKER: Her 2 dakikada bir (120 saniye)
+    # 🔥 V5.1: ERROR LISTENER EKLE (Scheduler'ı start'dan ÖNCE!)
+    scheduler.add_listener(job_error_listener, EVENT_JOB_ERROR)
+    logger.info("✅ Job Error Listener eklendi")
+    
+    # 👷 WORKER: 🔥 V5.1: Her 1 dakikada bir (60 saniye)
+    worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)  # Default: 60 saniye
+    
     scheduler.add_job(
         worker_job,
-        trigger=IntervalTrigger(seconds=Config.UPDATE_INTERVAL),
+        trigger=IntervalTrigger(seconds=worker_interval),
         id='worker',
         name='Worker (Veri Güncelleyici)',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1: Overlap önleme
+        coalesce=True     # 🔥 V5.1: Missed runs birleştir
     )
     
     # 📸 SNAPSHOT: Her gece 00:00:05
@@ -499,7 +572,9 @@ def start_scheduler():
         ),
         id='snapshot',
         name='Snapshot (Referans Fiyatları)',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
     # 👮 ŞEF: Her 10 dakikada bir
@@ -508,7 +583,9 @@ def start_scheduler():
         trigger=IntervalTrigger(minutes=Config.SUPERVISOR_INTERVAL),
         id='supervisor',
         name='Şef (Sistem Kontrolü)',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
     # 🗓️ TAKVİM: Her gün 08:00
@@ -520,7 +597,9 @@ def start_scheduler():
         ),
         id='calendar',
         name='Takvim (Etkinlik Kontrolü)',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
     # 📊 GÜNLÜK RAPOR: Her gün 09:00
@@ -529,7 +608,9 @@ def start_scheduler():
         trigger=CronTrigger(hour=Config.TELEGRAM_DAILY_REPORT_HOUR),
         id='daily_report',
         name='Günlük Rapor',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
     # 🔔 PUSH NOTIFICATION: Her gün 12:00
@@ -541,7 +622,9 @@ def start_scheduler():
         ),
         id='push_notification',
         name='Push Notification (Günlük Özet)',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
     # 🧹 CLEANUP: Her gün 03:00 (Gece saatlerinde)
@@ -550,7 +633,9 @@ def start_scheduler():
         trigger=CronTrigger(hour=3, minute=0),
         id='cleanup',
         name='Cleanup (Eski Backup Temizliği)',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
     # 🔔 ALARM: Her 5-15 dakikada bir (Config'den okunuyor)
@@ -560,31 +645,37 @@ def start_scheduler():
         trigger=IntervalTrigger(minutes=alarm_interval_minutes),
         id='alarm_check',
         name='Alarm Check (Fiyat Alarmları)',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
-    # 🌅 SABAH VARDİYASI: Her gece 00:00 (YENİ!)
+    # 🌅 SABAH VARDİYASI: Her gece 00:00
     scheduler.add_job(
         news_morning_shift_job,
         trigger=CronTrigger(hour=0, minute=0),
         id='news_morning',
         name='Haber Sabah Vardiyası',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
-    # 🌆 AKŞAM VARDİYASI: Her gün 12:00 (YENİ!)
+    # 🌆 AKŞAM VARDİYASI: Her gün 12:00
     scheduler.add_job(
         news_evening_shift_job,
         trigger=CronTrigger(hour=12, minute=0),
         id='news_evening',
         name='Haber Akşam Vardiyası',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,  # 🔥 V5.1
+        coalesce=True     # 🔥 V5.1
     )
     
     # Başlat
     scheduler.start()
-    logger.info("✅ Scheduler başlatıldı!")
-    logger.info("   👷 Worker: Her 2 dakikada")
+    logger.info("✅ Scheduler başlatıldı! (V5.1 - Error Listener + Overlap Protection)")
+    logger.info(f"   👷 Worker: Her {worker_interval} saniyede (1 dakika)")
     logger.info("   📸 Snapshot: Her gece 00:00:05")
     logger.info("   👮 Şef: Her 10 dakikada")
     logger.info("   🗓️ Takvim: Her gün 08:00")
@@ -594,6 +685,8 @@ def start_scheduler():
     logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
     logger.info("   🌅 Sabah Vardiyası: Her gece 00:00")
     logger.info("   🌆 Akşam Vardiyası: Her gün 12:00")
+    logger.info("   🚨 Error Listener: AKTİF (Telegram bildirimi)")
+    logger.info("   🛡️ Overlap Protection: AKTİF (max_instances=1)")
 
 
 def stop_scheduler():
@@ -632,16 +725,21 @@ def get_scheduler_status() -> Dict[str, Any]:
         last_cleanup_run = get_cache(Config.CACHE_KEYS['cleanup_last_run'])
         last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
         
+        # 🔥 V5.1: Worker interval'i config'den al
+        worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)
+        
         status = {
             'running': scheduler.running,
             'jobs': jobs,
             'last_worker_run': last_worker_run,
             'last_cleanup_run': last_cleanup_run,
             'last_alarm_check': last_alarm_check,
-            'worker_interval': Config.UPDATE_INTERVAL,
+            'worker_interval': worker_interval,  # 🔥 V5.1: Gerçek interval
             'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
-            'maintenance_active': check_maintenance_status()['is_active']
+            'maintenance_active': check_maintenance_status()['is_active'],
+            'error_listener_active': True,  # 🔥 V5.1
+            'overlap_protection_active': True  # 🔥 V5.1
         }
         
         return status
