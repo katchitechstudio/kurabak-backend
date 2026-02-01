@@ -1,11 +1,13 @@
 """
-Event Manager - AKILLI TAKVİM SİSTEMİ V6.0 🗓️📰🏦
+Event Manager - AKILLI TAKVİM SİSTEMİ V6.1 🗓️📰🏦
 ======================================
 ✅ BAYRAMLAR: Gemini otomatik tespit (her vardiya hazırlığında)
 ✅ HABERLER: GNews + NewsData + Gemini özet
 ✅ ÖNCELİK SİSTEMİ: Bayram (15:00'a kadar) > Haberler
 ✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
 ✅ BASIT VE ETKİLİ: Gereksiz karmaşıklık yok
+✅ CLEAN IMPORTS: Import'lar üstte (V6.1)
+✅ CHECK_AND_NOTIFY: Eksik fonksiyon eklendi (V6.1)
 
 Priority Değerleri (Düşük sayı = Yüksek öncelik):
 - 10: Bayram/Tatil
@@ -16,6 +18,10 @@ Priority Değerleri (Düşük sayı = Yüksek öncelik):
 import logging
 from datetime import datetime, date
 from typing import Optional, List, Dict
+
+# 🔥 V6.1: IMPORT'LARI ÜSTE TAŞINDI (Fonksiyon içi import kaldırıldı)
+from utils.cache import get_cache
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +52,6 @@ def get_todays_events() -> List[Dict[str, any]]:
     
     # 1. 🏦 BAYRAM KONTROLÜ (Gemini'den - Redis cache)
     try:
-        from utils.cache import get_cache
-        from config import Config
-        
         bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
         bayram_msg = get_cache(bayram_key)
         
@@ -89,6 +92,7 @@ def get_todays_events() -> List[Dict[str, any]]:
     events.sort(key=lambda x: x['priority'])
     
     return events
+
 
 # ======================================
 # ANA FONKSİYON: BUGÜNÜN BANNER'I
@@ -140,6 +144,84 @@ def get_todays_banner() -> Optional[str]:
     logger.info("📅 [BANNER] Bugün özel banner yok")
     return None
 
+
+# ======================================
+# 🔥 V6.1: EKSİK FONKSİYON EKLENDİ
+# ======================================
+
+def check_and_notify_events():
+    """
+    🔥 V6.1 YENİ: Bugünün etkinliklerini kontrol et ve Telegram'a bildir
+    
+    Bu fonksiyon maintenance_service.py içindeki calendar_check() 
+    tarafından her gün sabah 08:00'da çağrılır.
+    
+    Görevleri:
+    1. Bugünün etkinliklerini al
+    2. Varsa Telegram'a bildir
+    3. Log tut
+    """
+    try:
+        logger.info("🗓️ [CALENDAR CHECK] Bugünün etkinlikleri kontrol ediliyor...")
+        
+        # Bugünün etkinliklerini al
+        events = get_todays_events()
+        
+        if not events:
+            logger.info("ℹ️ [CALENDAR CHECK] Bugün özel bir etkinlik yok")
+            return
+        
+        # Etkinlik varsa Telegram'a bildir
+        try:
+            from utils.telegram_monitor import get_telegram_monitor
+            
+            telegram = get_telegram_monitor()
+            if not telegram:
+                logger.warning("⚠️ [CALENDAR CHECK] Telegram bot bulunamadı")
+                return
+            
+            # Mesaj hazırla
+            today_str = date.today().strftime("%d.%m.%Y")
+            message_parts = [
+                f"📅 *BUGÜNÜN ETKİNLİKLERİ* ({today_str})\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+            ]
+            
+            for i, event in enumerate(events, 1):
+                event_type = event['type'].upper()
+                priority = event['priority']
+                event_msg = event['message']
+                valid_until = event.get('valid_until', '23:59')
+                
+                # Emoji seç
+                if event_type == 'BAYRAM':
+                    emoji = "🏦"
+                elif event_type == 'NEWS':
+                    emoji = "📰"
+                else:
+                    emoji = "ℹ️"
+                
+                message_parts.append(
+                    f"{i}. {emoji} *{event_type}* (Priority: {priority})\n"
+                    f"   {event_msg}\n"
+                    f"   Geçerlilik: {valid_until}'e kadar\n"
+                )
+            
+            message = "\n".join(message_parts)
+            
+            # Telegram'a gönder
+            telegram.send_message(message, level='info')
+            logger.info(f"✅ [CALENDAR CHECK] {len(events)} etkinlik Telegram'a bildirildi")
+            
+        except Exception as telegram_err:
+            logger.error(f"❌ [CALENDAR CHECK] Telegram bildirimi hatası: {telegram_err}")
+        
+    except Exception as e:
+        logger.error(f"❌ [CALENDAR CHECK] Genel hata: {e}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
+
+
 # ======================================
 # TEST FONKSİYONU
 # ======================================
@@ -149,7 +231,7 @@ def test_event_manager():
     Terminal'den test etmek için:
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 Event Manager V6.0 📰🏦 Test Ediliyor...\n")
+    print("🧪 Event Manager V6.1 📰🏦 Test Ediliyor...\n")
     print("Priority Sistemi: DÜŞÜK SAYI = YÜKSEK ÖNCELİK\n")
     
     # Bugünün banner'ı
@@ -178,20 +260,30 @@ def test_event_manager():
     
     # Bayram kontrolü
     print("=" * 60)
-    from utils.cache import get_cache
-    from config import Config
-    
     bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
     bayram_msg = get_cache(bayram_key)
     
     if bayram_msg:
         current_hour = datetime.now().hour
-        status = "AKTİF ✅" if current_hour < 15 else "SÜRÜŞ SONA ERDİ ❌ (15:00+)"
+        status = "AKTİF ✅" if current_hour < 15 else "SÜRESİ SONA ERDİ ❌ (15:00+)"
         print(f"🏦 BAYRAM CACHE'İ: {status}")
         print(f"   {bayram_msg}")
     else:
         print("ℹ️ Bayram cache'i boş (Gemini henüz kontrol etmedi veya bayram yok)")
     print("=" * 60)
+    
+    # 🔥 V6.1: Yeni test - check_and_notify_events
+    print()
+    print("=" * 60)
+    print("🧪 check_and_notify_events() TEST EDİLİYOR...")
+    print("=" * 60)
+    try:
+        check_and_notify_events()
+        print("✅ Fonksiyon başarıyla çalıştı (Logları kontrol et)")
+    except Exception as e:
+        print(f"❌ Hata: {e}")
+    print("=" * 60)
+
 
 if __name__ == "__main__":
     test_event_manager()
