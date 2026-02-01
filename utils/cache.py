@@ -1,5 +1,5 @@
 """
-Redis Cache Utility - PRODUCTION READY V4.6 🚀
+Redis Cache Utility - PRODUCTION READY V4.7 🚀
 =======================================================
 ✅ CONNECTION POOL: 50 bağlantı sınırını patlatmaz (max=20)
 ✅ INFINITE TTL SUPPORT: ttl=0 gönderilirse veri ASLA silinmez
@@ -12,6 +12,7 @@ Redis Cache Utility - PRODUCTION READY V4.6 🚀
 ✅ CLEANUP SYSTEM: 7 günden eski backup'ları otomatik sil
 ✅ TIMEOUT FIX: Render Redis için yeterli bağlantı süresi (V4.5)
 ✅ EAGER CONNECTION: Startup'ta hemen bağlan (V4.6)
+✅ ATOMIC INCR: Race Condition önleme için atomik increment (V4.7)
 """
 
 import os
@@ -377,6 +378,40 @@ class RAMCache:
                 return True
             return False
     
+    def incr(self, key: str, ttl: int = 0) -> int:
+        """
+        🔥 V4.7: Atomik increment (RAM için thread-safe)
+        
+        Args:
+            key: Increment edilecek key
+            ttl: TTL (saniye, 0 = süresiz)
+            
+        Returns:
+            int: Yeni değer
+        """
+        with self._lock:
+            current_value = 0
+            
+            # Mevcut değeri al
+            if key in self._cache:
+                value, expiry = self._cache[key]
+                
+                # Süre dolmamışsa değeri al
+                if expiry == 0 or time.time() <= expiry:
+                    current_value = int(value) if isinstance(value, (int, str)) else 0
+                else:
+                    # Süre dolmuşsa sil
+                    del self._cache[key]
+            
+            # 1 artır
+            new_value = current_value + 1
+            
+            # Kaydet
+            expiry = time.time() + ttl if ttl > 0 else 0
+            self._cache[key] = (new_value, expiry)
+            
+            return new_value
+    
     def keys(self, pattern: str = "*"):
         """Pattern'e uyan tüm key'leri döndür"""
         with self._lock:
@@ -476,6 +511,49 @@ def set_cache(key: str, data: Any, ttl: int = 300) -> bool:
         logger.debug(f"💾 [{key}] Disk'e yedeklendi")
     
     return success or True  # RAM'e yazıldıysa başarılı say
+
+
+def incr_cache(key: str, ttl: int = 0) -> int:
+    """
+    🔥 V4.7: ATOMİK INCREMENT (Race Condition önleme)
+    
+    Redis INCR komutu kullanır - Thread-safe garantili!
+    Redis yoksa RAM'de thread-safe increment yapar.
+    
+    Args:
+        key: Increment edilecek key
+        ttl: TTL (saniye, 0 = süresiz)
+        
+    Returns:
+        int: Yeni değer
+        
+    Kullanım:
+        # Önceki hatalı yöntem (Race Condition var!)
+        count = get_cache(log_key) or 0
+        set_cache(log_key, int(count) + 1, ttl=86400)
+        
+        # Yeni doğru yöntem (Atomik!)
+        incr_cache(log_key, ttl=86400)
+    """
+    client = redis_wrapper.get_client()
+    
+    # 1. Redis INCR (Atomik - Thread-safe!)
+    if client:
+        try:
+            # Increment yap
+            new_value = client.incr(key)
+            
+            # TTL ayarla (sadece ilk increment'te)
+            if ttl > 0 and new_value == 1:
+                client.expire(key, ttl)
+            
+            return new_value
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Redis INCR hatası: {e} -> RAM'e geçiliyor")
+    
+    # 2. RAM INCR (Thread-safe fallback)
+    return ram_cache.incr(key, ttl)
 
 
 def cache_exists(key: str) -> bool:
