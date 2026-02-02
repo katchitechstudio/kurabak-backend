@@ -1,18 +1,3 @@
-"""
-Alarm Service - PRODUCTION READY V1.3 🚀
-==========================================================
-✅ PERIODIC CHECK: Her 5-15 dakikada alarmları kontrol eder
-✅ FCM NOTIFICATION: Hedef tuttuğunda bildirim gönderir
-✅ AUTO CLEANUP: Tetiklenen alarmları otomatik siler
-✅ PRICE MATCHING: Currencies cache'inden fiyat karşılaştırması
-✅ BATCH PROCESSING: Tüm alarmları verimli şekilde işler
-✅ ERROR HANDLING: Hata durumunda sistem durmasın
-✅ LOGGING: Detaylı log sistemi
-✅ KEY FILTERING: Geçersiz key'leri otomatik filtreler
-✅ 404 FIX: Geçersiz token kontrolü ve detaylı hata logları
-✅ 🔥 SCAN OPTİMİZASYONU: KEYS yerine SCAN kullanımı (V1.3)
-"""
-
 import logging
 import json
 import time
@@ -25,23 +10,8 @@ from utils.notification_service import send_notification
 
 logger = logging.getLogger("KuraBak.AlarmService")
 
-# ======================================
-# HELPER FUNCTIONS
-# ======================================
-
 def get_current_price(currency_code: str) -> Optional[float]:
-    """
-    Currencies cache'inden güncel fiyatı al
-    
-    Args:
-        currency_code: Döviz kodu (USD, EUR, GRA vb.)
-        
-    Returns:
-        float: Güncel fiyat (selling)
-        None: Fiyat bulunamazsa
-    """
     try:
-        # Prefix'leri temizle (FOREX_USD → USD, SILVER_AG → AG)
         original_code = currency_code
         if currency_code.startswith("FOREX_"):
             currency_code = currency_code.replace("FOREX_", "")
@@ -50,7 +20,6 @@ def get_current_price(currency_code: str) -> Optional[float]:
         elif currency_code.startswith("GOLD_"):
             currency_code = currency_code.replace("GOLD_", "")
         
-        # Önce currencies'e bak
         currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
         
         if currencies_data:
@@ -58,7 +27,6 @@ def get_current_price(currency_code: str) -> Optional[float]:
                 if item.get('code') == currency_code:
                     return item.get('selling', 0)
         
-        # Bulamazsa gold'a bak
         golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
         
         if golds_data:
@@ -66,7 +34,6 @@ def get_current_price(currency_code: str) -> Optional[float]:
                 if item.get('code') == currency_code:
                     return item.get('selling', 0)
         
-        # Bulamazsa silver'a bak
         silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
         
         if silvers_data:
@@ -81,52 +48,21 @@ def get_current_price(currency_code: str) -> Optional[float]:
         logger.error(f"❌ [ALARM] Fiyat alma hatası ({currency_code}): {e}")
         return None
 
-
 def extract_fcm_token_from_key(alarm_key: str) -> Optional[str]:
-    """
-    Redis key'den FCM token hash'ini çıkar
-    
-    Format: alarm:TOKEN_HASH:CURRENCY:TYPE
-    
-    Args:
-        alarm_key: Redis alarm key
-        
-    Returns:
-        str: Token hash
-        None: Parse edilemezse
-    """
     try:
         parts = alarm_key.split(':')
         if len(parts) >= 2:
-            return parts[1]  # Token hash
+            return parts[1]
         return None
     except:
         return None
 
-
 def get_fcm_token_from_hash(token_hash: str) -> Optional[str]:
-    """
-    Token hash'inden gerçek FCM token'ı bul
-    
-    NOT: Bu fonksiyon token hash'ini kullanarak Redis'teki
-    FCM token set'inden gerçek token'ı bulmaya çalışır.
-    
-    Ancak biz token'ı hash'lediğimiz için geriye dönüşüm yok.
-    Bu yüzden Redis'e ayrı bir mapping kaydediyoruz.
-    
-    Args:
-        token_hash: SHA256 token hash'i
-        
-    Returns:
-        str: Gerçek FCM token
-        None: Bulunamazsa
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
             return None
         
-        # Mapping key: fcm_token_map:HASH → TOKEN
         mapping_key = f"fcm_token_map:{token_hash}"
         fcm_token = redis_client.get(mapping_key)
         
@@ -141,17 +77,7 @@ def get_fcm_token_from_hash(token_hash: str) -> Optional[str]:
         logger.error(f"❌ [ALARM] Token mapping hatası: {e}")
         return None
 
-
 def save_fcm_token_mapping(fcm_token: str, token_hash: str):
-    """
-    FCM token hash mapping'i kaydet
-    
-    Bu sayede alarm tetiklendiğinde hash'ten gerçek token'ı bulabiliriz.
-    
-    Args:
-        fcm_token: Gerçek FCM token
-        token_hash: SHA256 hash
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
@@ -159,35 +85,20 @@ def save_fcm_token_mapping(fcm_token: str, token_hash: str):
         
         mapping_key = f"fcm_token_map:{token_hash}"
         
-        # 90 gün TTL (alarm TTL ile aynı)
         redis_client.setex(mapping_key, 90 * 24 * 60 * 60, fcm_token)
         
     except Exception as e:
         logger.warning(f"⚠️ [ALARM] Token mapping kayıt hatası: {e}")
 
-
 def validate_fcm_token(fcm_token: str) -> bool:
-    """
-    🔥 YENİ: FCM token formatını kontrol et
-    
-    Firebase FCM token'ları genelde 150+ karakter uzunluğundadır.
-    
-    Args:
-        fcm_token: Kontrol edilecek token
-        
-    Returns:
-        bool: Geçerli ise True
-    """
     try:
         if not fcm_token or not isinstance(fcm_token, str):
             return False
         
-        # FCM token'ları genelde 150+ karakter
         if len(fcm_token) < 100:
             logger.warning(f"⚠️ [ALARM] Token çok kısa: {len(fcm_token)} karakter")
             return False
         
-        # Boşluk içermemeli
         if ' ' in fcm_token:
             logger.warning(f"⚠️ [ALARM] Token boşluk içeriyor!")
             return False
@@ -198,89 +109,97 @@ def validate_fcm_token(fcm_token: str) -> bool:
         logger.error(f"❌ [ALARM] Token validasyon hatası: {e}")
         return False
 
-
 def check_alarm_trigger(alarm_data: dict, current_price: float) -> bool:
-    """
-    Alarmın tetiklenmesi gerekip gerekmediğini kontrol et
-    
-    Args:
-        alarm_data: Alarm objesi (Redis'ten)
-        current_price: Güncel fiyat
-        
-    Returns:
-        bool: Tetiklenmeli mi?
-    """
     try:
-        target_price = alarm_data.get('target_price', 0)
-        alarm_type = alarm_data.get('alarm_type', '').upper()
+        alarm_mode = alarm_data.get('alarm_mode', 'PRICE').upper()
         
-        if alarm_type == 'HIGH':
-            # Yükseliş alarmı: Mevcut fiyat >= Hedef fiyat
-            return current_price >= target_price
-        
-        elif alarm_type == 'LOW':
-            # Düşüş alarmı: Mevcut fiyat <= Hedef fiyat
-            return current_price <= target_price
-        
-        return False
+        if alarm_mode == 'PERCENT':
+            start_price = alarm_data.get('start_price', 0)
+            percent_value = alarm_data.get('percent_value', 0)
+            percent_direction = alarm_data.get('percent_direction', '').upper()
+            
+            if start_price <= 0 or percent_value <= 0:
+                return False
+            
+            change_percent = ((current_price - start_price) / start_price) * 100
+            
+            if percent_direction == 'UP':
+                return change_percent >= percent_value
+            elif percent_direction == 'DOWN':
+                return change_percent <= -percent_value
+            
+            return False
+        else:
+            target_price = alarm_data.get('target_price', 0)
+            alarm_type = alarm_data.get('alarm_type', '').upper()
+            
+            if alarm_type == 'HIGH':
+                return current_price >= target_price
+            elif alarm_type == 'LOW':
+                return current_price <= target_price
+            
+            return False
         
     except Exception as e:
         logger.error(f"❌ [ALARM] Trigger kontrolü hatası: {e}")
         return False
 
-
 def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: float) -> bool:
-    """
-    Alarm bildirimi gönder
-    🔥 YENİ: Gelişmiş hata yönetimi ve detaylı loglama
-    
-    Args:
-        fcm_token: Firebase Cloud Messaging token
-        alarm_data: Alarm objesi
-        current_price: Güncel fiyat
-        
-    Returns:
-        bool: Başarılı mı?
-    """
     try:
-        # 🔥 Token validasyonu
         if not validate_fcm_token(fcm_token):
             logger.error(f"❌ [ALARM] Geçersiz FCM token formatı: {fcm_token[:20]}...")
             return False
         
         currency_name = alarm_data.get('currency_name', 'Varlık')
         currency_code = alarm_data.get('currency_code', '')
-        target_price = alarm_data.get('target_price', 0)
-        alarm_type = alarm_data.get('alarm_type', '').upper()
+        alarm_mode = alarm_data.get('alarm_mode', 'PRICE').upper()
         
-        # Emoji seç
-        emoji = "📈" if alarm_type == 'HIGH' else "📉"
-        
-        # Bildirim metni
-        if alarm_type == 'HIGH':
-            title = f"{emoji} Fiyat Yükseldi!"
-            body = f"{currency_name} hedef fiyatı aştı: ₺{target_price:,.2f}"
+        if alarm_mode == 'PERCENT':
+            percent_value = alarm_data.get('percent_value', 0)
+            percent_direction = alarm_data.get('percent_direction', '').upper()
+            
+            emoji = "📈" if percent_direction == 'UP' else "📉"
+            
+            if percent_direction == 'UP':
+                title = f"{emoji} Fiyat Yükseldi!"
+                body = f"{currency_name} %{percent_value} yükseldi: ₺{current_price:,.2f}"
+            else:
+                title = f"{emoji} Fiyat Düştü!"
+                body = f"{currency_name} %{percent_value} düştü: ₺{current_price:,.2f}"
         else:
-            title = f"{emoji} Fiyat Düştü!"
-            body = f"{currency_name} hedef fiyatın altına düştü: ₺{target_price:,.2f}"
+            target_price = alarm_data.get('target_price', 0)
+            alarm_type = alarm_data.get('alarm_type', '').upper()
+            
+            emoji = "📈" if alarm_type == 'HIGH' else "📉"
+            
+            if alarm_type == 'HIGH':
+                title = f"{emoji} Fiyat Yükseldi!"
+                body = f"{currency_name} hedef fiyatı aştı: ₺{target_price:,.2f}"
+            else:
+                title = f"{emoji} Fiyat Düştü!"
+                body = f"{currency_name} hedef fiyatın altına düştü: ₺{target_price:,.2f}"
         
-        # Data payload
         data = {
             "type": "alarm_triggered",
             "currency_code": currency_code,
             "currency_name": currency_name,
-            "target_price": str(target_price),
             "current_price": str(current_price),
-            "alarm_type": alarm_type,
+            "alarm_mode": alarm_mode,
             "timestamp": str(int(time.time()))
         }
+        
+        if alarm_mode == 'PERCENT':
+            data["percent_value"] = str(alarm_data.get('percent_value', 0))
+            data["percent_direction"] = alarm_data.get('percent_direction', '')
+        else:
+            data["target_price"] = str(alarm_data.get('target_price', 0))
+            data["alarm_type"] = alarm_data.get('alarm_type', '')
         
         logger.info(f"📤 [ALARM] Bildirim gönderiliyor...")
         logger.info(f"   Token: {fcm_token[:20]}...{fcm_token[-10:]}")
         logger.info(f"   Başlık: {title}")
         logger.info(f"   Mesaj: {body}")
         
-        # FCM gönder (tek token)
         result = send_notification(
             tokens=[fcm_token],
             title=title,
@@ -290,7 +209,6 @@ def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: flo
             sound="default"
         )
         
-        # 🔥 Detaylı sonuç kontrolü
         if result.get('success'):
             success_count = result.get('success_count', 0)
             failure_count = result.get('failure_count', 0)
@@ -298,7 +216,7 @@ def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: flo
             if success_count > 0:
                 logger.info(
                     f"✅ [ALARM] Bildirim gönderildi: {currency_name} "
-                    f"→ Hedef: ₺{target_price:,.2f}, Mevcut: ₺{current_price:,.2f}"
+                    f"→ Mevcut: ₺{current_price:,.2f}"
                 )
                 return True
             else:
@@ -325,54 +243,30 @@ def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: flo
         logger.error(f"   Traceback: {traceback.format_exc()}")
         return False
 
-
-# ======================================
-# 🔥 V1.3: SCAN OPTİMİZASYONU
-# ======================================
-
 def get_all_alarm_keys_safe(redis_client) -> List[str]:
-    """
-    🔥 YENİ: SCAN ile güvenli alarm key listesi (KEYS yerine)
-    
-    KEYS sorunu: Redis'i bloklar, 10,000 alarm'da 1-2 saniye donma
-    SCAN çözümü: Iterative okuma, Redis asla kilitlenmez
-    
-    Args:
-        redis_client: Redis client instance
-        
-    Returns:
-        List[str]: Geçerli alarm key'leri
-    """
     try:
         alarm_keys = []
         cursor = 0
         
-        # SCAN ile iterative okuma
         while True:
-            # Her seferinde 100 key oku (ayarlanabilir)
             cursor, keys = redis_client.scan(
                 cursor=cursor,
                 match="alarm:*",
                 count=100
             )
             
-            # Geçersiz key'leri filtrele
             for key in keys:
-                # Bytes'tan string'e çevir
                 key_str = key.decode('utf-8') if isinstance(key, bytes) else key
                 
-                # Mapping ve meta key'leri atla
                 if key_str.startswith("alarm:fcm_token_map:"):
                     continue
                 if key_str == "alarm:price:last_check":
                     continue
                 
-                # Geçerli alarm key formatı: alarm:HASH:CODE:TYPE (4 parça)
                 parts = key_str.split(':')
                 if len(parts) == 4:
                     alarm_keys.append(key_str)
             
-            # Cursor 0 ise tarama tamamlandı
             if cursor == 0:
                 break
         
@@ -382,28 +276,7 @@ def get_all_alarm_keys_safe(redis_client) -> List[str]:
         logger.error(f"❌ [ALARM] SCAN hatası: {e}")
         return []
 
-
-# ======================================
-# ANA ALARM KONTROLCÜ
-# ======================================
-
 def check_all_alarms() -> Dict:
-    """
-    Tüm alarmları kontrol et ve gerekirse bildirim gönder
-    
-    Bu fonksiyon scheduler tarafından periyodik olarak çağrılır.
-    
-    🔥 V1.3: SCAN optimizasyonu ile Redis'i bloklamaz
-    
-    Returns:
-        dict: {
-            'total_alarms': int,
-            'checked': int,
-            'triggered': int,
-            'failed': int,
-            'duration_ms': float
-        }
-    """
     start_time = time.time()
     
     try:
@@ -421,7 +294,6 @@ def check_all_alarms() -> Dict:
                 'error': 'Redis connection failed'
             }
         
-        # 🔥 SCAN ile güvenli key listesi (KEYS yerine)
         alarm_keys = get_all_alarm_keys_safe(redis_client)
         
         total_alarms = len(alarm_keys)
@@ -442,10 +314,8 @@ def check_all_alarms() -> Dict:
         triggered_count = 0
         failed_count = 0
         
-        # Her bir alarm için kontrol
         for key in alarm_keys:
             try:
-                # Alarm verisini al
                 alarm_data = redis_client.get(key)
                 
                 if not alarm_data:
@@ -453,27 +323,23 @@ def check_all_alarms() -> Dict:
                     failed_count += 1
                     continue
                 
-                # JSON parse et
                 if isinstance(alarm_data, bytes):
                     alarm_data = alarm_data.decode('utf-8')
                 
                 alarm_obj = json.loads(alarm_data)
                 
-                # Aktif mi kontrol et
                 if not alarm_obj.get('is_active', True):
                     logger.debug(f"⏸️ [ALARM] Pasif alarm atlandı: {key}")
                     continue
                 
                 checked_count += 1
                 
-                # Currency code
                 currency_code = alarm_obj.get('currency_code')
                 if not currency_code:
                     logger.warning(f"⚠️ [ALARM] Currency code yok: {key}")
                     failed_count += 1
                     continue
                 
-                # Güncel fiyatı al
                 current_price = get_current_price(currency_code)
                 
                 if current_price is None or current_price <= 0:
@@ -481,13 +347,11 @@ def check_all_alarms() -> Dict:
                     failed_count += 1
                     continue
                 
-                # Alarm tetiklenmeli mi?
                 should_trigger = check_alarm_trigger(alarm_obj, current_price)
                 
                 if should_trigger:
                     logger.info(f"🎯 [ALARM] Tetiklendi: {currency_code} → {current_price}")
                     
-                    # Token hash'ini al
                     token_hash = extract_fcm_token_from_key(key)
                     
                     if not token_hash:
@@ -495,19 +359,16 @@ def check_all_alarms() -> Dict:
                         failed_count += 1
                         continue
                     
-                    # Gerçek FCM token'ı bul
                     fcm_token = get_fcm_token_from_hash(token_hash)
                     
                     if not fcm_token:
                         logger.error(f"❌ [ALARM] FCM token bulunamadı: {token_hash}")
                         failed_count += 1
                         
-                        # Token bulunamadıysa alarm'ı sil (geçersiz)
                         redis_client.delete(key)
                         logger.info(f"🗑️ [ALARM] Geçersiz alarm silindi: {key}")
                         continue
                     
-                    # Bildirim gönder
                     notification_sent = send_alarm_notification(
                         fcm_token,
                         alarm_obj,
@@ -515,13 +376,10 @@ def check_all_alarms() -> Dict:
                     )
                     
                     if notification_sent:
-                        # Başarılı → Alarm'ı sil (tek seferlik)
                         redis_client.delete(key)
                         triggered_count += 1
                         logger.info(f"✅ [ALARM] Bildirim gönderildi ve alarm silindi: {currency_code}")
                     else:
-                        # Bildirim gönderilemedi ama tetiklendi
-                        # Alarm'ı yine de sil (sürekli denemesin)
                         redis_client.delete(key)
                         failed_count += 1
                         logger.warning(f"⚠️ [ALARM] Bildirim gönderilemedi ama alarm silindi: {currency_code}")
@@ -538,10 +396,8 @@ def check_all_alarms() -> Dict:
                 failed_count += 1
                 continue
         
-        # Süre hesapla
         duration_ms = (time.time() - start_time) * 1000
         
-        # Sonuç
         result = {
             'total_alarms': total_alarms,
             'checked': checked_count,
@@ -574,24 +430,7 @@ def check_all_alarms() -> Dict:
             'error': str(e)
         }
 
-
-# ======================================
-# YARDIMCI FONKSİYONLAR (Public API)
-# ======================================
-
 def get_alarm_stats() -> Dict:
-    """
-    Alarm sistemi istatistiklerini döner
-    
-    🔥 V1.3: SCAN ile güvenli sayım
-    
-    Returns:
-        dict: {
-            'total_alarms': int,
-            'unique_users': int,
-            'alarm_types': {'HIGH': int, 'LOW': int}
-        }
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
@@ -601,19 +440,16 @@ def get_alarm_stats() -> Dict:
                 'alarm_types': {'HIGH': 0, 'LOW': 0}
             }
         
-        # 🔥 SCAN ile güvenli key listesi
         alarm_keys = get_all_alarm_keys_safe(redis_client)
         
         total_alarms = len(alarm_keys)
         
-        # Benzersiz kullanıcılar ve alarm tipleri
         unique_users = set()
         high_count = 0
         low_count = 0
         
         for key in alarm_keys:
             try:
-                # alarm:HASH:CODE:TYPE formatından parse et
                 parts = key.split(':')
                 if len(parts) >= 4:
                     token_hash = parts[1]
@@ -646,13 +482,6 @@ def get_alarm_stats() -> Dict:
             'alarm_types': {'HIGH': 0, 'LOW': 0}
         }
 
-
 def trigger_immediate_check() -> Dict:
-    """
-    Anında alarm kontrolü tetikle (Manuel test için)
-    
-    Returns:
-        dict: check_all_alarms() sonucu
-    """
     logger.info("🚀 [ALARM] Manuel kontrol tetiklendi")
     return check_all_alarms()
