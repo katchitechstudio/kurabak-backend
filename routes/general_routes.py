@@ -11,7 +11,7 @@ General Routes - PRODUCTION READY V5.1 🚀
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
 ✅ FCM ENDPOINTS: Firebase token kayıt/silme
 ✅ EVENT MANAGER BANNER: Otomatik takvim bazlı banner 🤖
-✅ FEEDBACK SYSTEM: Kullanıcı geri bildirimleri Telegram'a 📬
+✅ FEEDBACK SYSTEM FIX: telegram_instance kullanımı ile düzeltildi 📬
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -21,90 +21,53 @@ import logging
 import time
 from datetime import datetime
 
-# Config ve Cache mekanizmaları
 from config import Config
-from utils.cache import get_cache, set_cache, incr_cache  # 🔥 INCR_CACHE EKLENDİ
-# 🔥 Notification servisleri (utils klasöründe)
+from utils.cache import get_cache, set_cache, incr_cache
 from utils.notification_service import (
     register_fcm_token,
     unregister_fcm_token,
     get_token_count
 )
-# 🤖 Event Manager - Akıllı Takvim
 from utils.event_manager import get_todays_banner
 
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
-# ======================================
-# RATE LIMITER SETUP (KRİTİK GÜVENLİK)
-# ======================================
-
-# Flask-Limiter başlatıcısı
 limiter = Limiter(
-    key_func=get_remote_address,  # IP adresine göre limit
-    default_limits=["200 per hour"],  # Genel limit: Saatte 200 istek
-    storage_uri="memory://",  # Redis yoksa bellekte tut
-    strategy="fixed-window"  # Sabit pencere stratejisi
+    key_func=get_remote_address,
+    default_limits=["200 per hour"],
+    storage_uri="memory://",
+    strategy="fixed-window"
 )
 
-# ======================================
-# YARDIMCI FONKSİYONLAR
-# ======================================
-
 def track_online_user():
-    """
-    🕵️ AJAN: Kullanıcıyı "Online" olarak işaretle
-    
-    🔥 V5.1 FIX: Race Condition düzeltildi!
-    - ❌ ÖNCE: get_cache() → set_cache() (2 adımlı, thread-unsafe)
-    - ✅ ŞIMDI: incr_cache() (atomik, thread-safe)
-    
-    Öncelik Sırası:
-    1. Custom Headers (X-Client-Id, X-Device-Id) - Mobil uygulama gönderecek
-    2. Query Parameters (user_id, device_id) - Eski versiyon uyumluluğu
-    3. IP Adresi (fallback) - Son çare
-    
-    Her API isteğinde otomatik çalışır.
-    Kullanıcının kimliğini Redis'e yazar (5 dakika ömürlü).
-    Ayrıca 24 saatlik istek istatistiği tutar.
-    """
     try:
-        # 1. Öncelik: Custom headers (Mobil uygulama gönderecek)
         user_id = request.headers.get('X-Client-Id')
         device_id = request.headers.get('X-Device-Id')
         
-        # 2. Fallback: Query params (Eski versiyon uyumluluğu)
         if not user_id:
             user_id = request.args.get('user_id') or request.args.get('device_id')
         
         if not device_id:
             device_id = request.args.get('device_id')
         
-        # 3. Son çare: IP adresi
         if not user_id and not device_id:
             user_id = request.remote_addr or request.headers.get('X-Forwarded-For', 'unknown')
         
-        # Benzersiz anahtar oluştur
         unique_key = f"{user_id or 'unknown'}:{device_id or 'unknown'}"
         
-        # Redis'e kaydet (5 dakika ömürlü - online tracking)
         cache_key = f"online_user:{unique_key}"
-        set_cache(cache_key, "1", ttl=300)  # 300 saniye = 5 dakika
+        set_cache(cache_key, "1", ttl=300)
         
-        # 📊 İstatistik için ATOMIK INCREMENT (24 saat ömürlü)
-        # 🔥 V5.1 FIX: Race Condition düzeltildi!
         log_key = f"api_request:{unique_key}"
-        incr_cache(log_key, ttl=86400)  # ✅ Atomik, thread-safe!
+        incr_cache(log_key, ttl=86400)
         
     except Exception as e:
-        # Hata olsa bile API durmasın
         logger.debug(f"Online tracking hatası (önemsiz): {e}")
 
 
 def create_response(data, status_code=200, message=None, meta=None):
-    """Standart JSON response oluşturucu (Android uyumlu)"""
     response = {
         'success': status_code < 400,
         'data': data,
@@ -119,26 +82,10 @@ def create_response(data, status_code=200, message=None, meta=None):
 
 
 def get_data_guaranteed(cache_key):
-    """
-    GARANTİLİ VERİ GETİRİCİ 🛡️
-    
-    🔥 V5.1 THUNDERING HERD FIX:
-    - ❌ ÖNCE: Cache boşsa fetch_all_data_safe() çağrılırdı
-    - ✅ ŞIMDI: Cache boşsa None dön, kullanıcı 503 alsın
-    
-    Mantık:
-    1. Normal Cache'e bak → Varsa döndür
-    2. Yoksa Stale (Bayat) Cache'e bak → Varsa döndür
-    3. O da yoksa → None dön (Worker çekecek, kullanıcı çekmesin!)
-    
-    ⚠️ ASLA kullanıcı isteğinde API çağırma!
-    """
-    # 1. Normal Cache
     data = get_cache(cache_key)
     if data:
         return data
 
-    # 2. Stale (Bayat) Cache - 503'ü önleyen kahraman
     stale_key = f"{cache_key}:stale"
     stale_data = get_cache(stale_key)
     
@@ -146,8 +93,6 @@ def get_data_guaranteed(cache_key):
         logger.warning(f"⚠️ {cache_key} için güncel veri yok, BAYAT veri sunuluyor.")
         return stale_data
 
-    # 3. 🔥 THUNDERING HERD FIX: Cache boşsa None dön!
-    # Kullanıcı 503 alsın, Worker 1 dakikada bir çekecek
     logger.error(
         f"🔴 KRİTİK: {cache_key} verisi yok! "
         f"Scheduler kontrol edilmeli. 503 dönülüyor."
@@ -156,80 +101,42 @@ def get_data_guaranteed(cache_key):
 
 
 def check_user_agent():
-    """
-    Bot/Scraper kontrolü (İsteğe bağlı güvenlik)
-    Şüpheli User-Agent'ları logla
-    """
     user_agent = request.headers.get('User-Agent', 'Unknown')
     
-    # Bilinen bot user-agent'ları
     suspicious_agents = ['curl', 'wget', 'python-requests', 'scrapy']
     
     if any(bot in user_agent.lower() for bot in suspicious_agents):
         logger.warning(f"⚠️ Şüpheli User-Agent: {user_agent} | IP: {request.remote_addr}")
-        # İsterseniz burada rate limit'i daha da sıkılaştırabilirsiniz
     
-    return True  # Şimdilik tüm isteklere izin ver
+    return True
 
 
 def get_smart_banner():
-    """
-    🤖 AKILLI BANNER SİSTEMİ (Sıralama Önemli!)
-    
-    Öncelik Sırası:
-    1. System Banner (Telegram'dan manuel gönderilen) - Priority: 100
-    2. Event Manager Banner (Takvim bazlı - TCMB, Enflasyon vb.) - Priority: 90-75
-    3. Market Status Banner (Piyasa durumu) - Priority: 30
-    4. Hiçbiri - None
-    """
-    banner = None
-    priority = -1
-    
-    # 1️⃣ Telegram'dan gönderilen manuel banner (En yüksek priority)
     manual_banner = get_cache("system_banner")
     if manual_banner:
         logger.debug(f"📢 [BANNER] Manual banner bulundu (Priority: 100)")
-        return manual_banner  # Manuel banner her zaman öncelikli
+        return manual_banner
     
-    # 2️⃣ Event Manager'dan otomatik banner (TCMB, Enflasyon vb.)
     try:
         event_banner = get_todays_banner()
         if event_banner:
             logger.debug(f"🤖 [BANNER] Event banner bulundu: {event_banner[:50]}...")
-            return event_banner  # Event banner bulundu, döndür
+            return event_banner
     except Exception as e:
         logger.warning(f"⚠️ [BANNER] Event Manager hatası (önemsiz): {e}")
     
-    # 3️⃣ Eğer hiçbiri yoksa None (Frontend kendi logic'ini uygulayacak)
     return None
 
 
-# ======================================
-# CURRENCY ENDPOINTLER (RATE LIMITED!)
-# ======================================
-
 @api_bp.route('/currency/all', methods=['GET'])
-@limiter.limit("60 per minute")  # Dakikada 60 istek (Agresif kullanıcılar için)
+@limiter.limit("60 per minute")
 def get_all_currencies():
-    """
-    Tüm Döviz Kurları (23 Adet)
-    🕵️ Gelişmiş tracking aktif!
-    📢 Banner desteği eklendi!
-    🛡️ Rate limit: 60/dakika
-    🚧 Bakım Modu: Otomatik banner güncelleme
-    🤖 Akıllı Banner: Event Manager entegrasyonu
-    🔥 V5.1: Thundering Herd fix - Cache boşsa 503!
-    """
-    # Bot kontrolü
     check_user_agent()
-    
-    # Kullanıcıyı işaretle (gelişmiş tracking)
     track_online_user()
     
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
         
-        # 🔥 V5.1 FIX: Cache boşsa 503 dön (API çağırma!)
         if not result:
             return create_response(
                 [], 
@@ -237,30 +144,26 @@ def get_all_currencies():
                 "Veriler hazırlanıyor, lütfen 1-2 dakika sonra tekrar deneyin."
             )
 
-        # Veri formatı kontrolü
         data_list = result.get('data', [])
         update_date = result.get('update_date')
         status = result.get('status', 'OPEN')
         market_msg = result.get('market_msg')
         
-        # 🤖 AKILLI BANNER SISTEMI
         banner_msg = get_smart_banner()
         
-        # Eğer banner yoksa market durumuyla ilgili msg göster
         if not banner_msg:
             if status in ['MAINTENANCE', 'MAINTENANCE_FULL']:
                 banner_msg = market_msg or "🚧 Sistem şu an bakımda. Lütfen daha sonra tekrar deneyin."
             elif status == 'CLOSED':
                 banner_msg = market_msg or "🌙 Piyasalar kapalı, iyi hafta sonları!"
         
-        # Meta verisine banner'ı ekle
         meta_data = {
             'count': len(data_list),
             'last_update': update_date,
             'source': result.get('source'),
             'status': status,
             'market_msg': market_msg,
-            'banner': banner_msg  # 🎯 BANNER EKLEME - MOBİL İÇİN KRİTİK
+            'banner': banner_msg
         }
         
         return create_response(
@@ -277,18 +180,12 @@ def get_all_currencies():
 @api_bp.route('/currency/gold/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_golds():
-    """
-    Tüm Altın Fiyatları (6 Adet)
-    🛡️ Rate limit: 60/dakika
-    🔥 V5.1: Thundering Herd fix
-    """
     check_user_agent()
     track_online_user()
     
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['golds_all'])
         
-        # 🔥 V5.1 FIX: Cache boşsa 503 dön
         if not result:
             return create_response(
                 [], 
@@ -315,18 +212,12 @@ def get_all_golds():
 @api_bp.route('/currency/silver/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_silvers():
-    """
-    Gümüş Fiyatları
-    🛡️ Rate limit: 60/dakika
-    🔥 V5.1: Thundering Herd fix
-    """
     check_user_agent()
     track_online_user()
     
     try:
         result = get_data_guaranteed(Config.CACHE_KEYS['silvers_all'])
         
-        # 🔥 V5.1 FIX: Cache boşsa 503 dön
         if not result:
             return create_response(
                 [], 
@@ -344,21 +235,14 @@ def get_all_silvers():
 
 
 @api_bp.route('/currency/regional', methods=['GET'])
-@limiter.limit("30 per minute")  # Daha az kullanılan endpoint
+@limiter.limit("30 per minute")
 def get_regional_currencies():
-    """
-    Bölgesel Filtrelenmiş Dövizler
-    🛡️ Rate limit: 30/dakika
-    🔥 V5.1: Thundering Herd fix
-    """
     check_user_agent()
     track_online_user()
     
     try:
-        # Ana veriyi çek
         result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
         
-        # 🔥 V5.1 FIX: Cache boşsa 503 dön
         if not result:
             return create_response(
                 {}, 
@@ -369,10 +253,8 @@ def get_regional_currencies():
         all_currencies = result.get('data', [])
         regional_data = {}
         
-        # Config'den bölge haritasını al
         regions = Config.REGIONAL_CURRENCIES
         
-        # Veriyi hızlı erişim için dictionary yap
         curr_map = {item['code']: item for item in all_currencies}
         
         for region_name, codes in regions.items():
@@ -392,48 +274,18 @@ def get_regional_currencies():
         return create_response({}, 500, "Sunucu hatası")
 
 
-# ======================================
-# 🤖 AKILLI BANNER ENDPOINT
-# ======================================
-
 @api_bp.route('/banner/today', methods=['GET'])
-@limiter.limit("120 per minute")  # Sık istenen endpoint
+@limiter.limit("120 per minute")
 def get_todays_event_banner():
-    """
-    Bugünün Etkinlik Bazlı Banner'ı
-    
-    🤖 Event Manager'dan gelen akıllı banner
-    - TCMB Faiz Kararları
-    - Enflasyon Raporları
-    - Finansal İstikrar Raporları
-    - 🔴 Gemini AI: Event geçince otomatik sonuç çekme
-    
-    Response:
-    {
-        "success": true,
-        "data": {
-            "banner": "⚠️ Bugün TCMB faiz kararı günü" veya null
-        },
-        "meta": {
-            "banner_type": "ai_result" | "macro" | "bayram" | "inflation" | null,
-            "priority": 90,
-            "valid_until": "15:00"
-        }
-    }
-    
-    🛡️ Rate limit: 120/dakika
-    """
     check_user_agent()
     track_online_user()
     
     try:
         from utils.event_manager import get_todays_events
         
-        # Bugünün tüm etkinliklerini al (Priority sıralı)
         events = get_todays_events()
         
         if events:
-            # En yüksek priority'li event
             top_event = events[0]
             
             return create_response(
@@ -475,29 +327,10 @@ def get_todays_event_banner():
         )
 
 
-# ======================================
-# 🔥 FIREBASE PUSH NOTIFICATION ENDPOINTS
-# ======================================
-
 @api_bp.route('/fcm/register', methods=['POST'])
-@limiter.limit("10 per minute")  # Dakikada 10 kayıt (Spam önleme)
+@limiter.limit("10 per minute")
 def register_fcm_token_endpoint():
-    """
-    Firebase Cloud Messaging Token Kayıt
-    
-    Request Body:
-    {
-        "token": "FCM_TOKEN_HERE"
-    }
-    
-    Response:
-    {
-        "success": true,
-        "message": "Token başarıyla kaydedildi"
-    }
-    """
     try:
-        # Request body'den token al
         data = request.get_json()
         
         if not data or 'token' not in data:
@@ -509,7 +342,6 @@ def register_fcm_token_endpoint():
         
         token = data['token'].strip()
         
-        # Token validasyonu (Firebase token'ları genelde 150+ karakter)
         if len(token) < 100:
             return create_response(
                 None,
@@ -517,7 +349,6 @@ def register_fcm_token_endpoint():
                 "Geçersiz token formatı"
             )
         
-        # 🔥 Token'ı kaydet
         success = register_fcm_token(token)
         
         if success:
@@ -547,22 +378,7 @@ def register_fcm_token_endpoint():
 @api_bp.route('/fcm/unregister', methods=['POST'])
 @limiter.limit("10 per minute")
 def unregister_fcm_token_endpoint():
-    """
-    Firebase Cloud Messaging Token Silme
-    
-    Request Body:
-    {
-        "token": "FCM_TOKEN_HERE"
-    }
-    
-    Response:
-    {
-        "success": true,
-        "message": "Token başarıyla silindi"
-    }
-    """
     try:
-        # Request body'den token al
         data = request.get_json()
         
         if not data or 'token' not in data:
@@ -574,7 +390,6 @@ def unregister_fcm_token_endpoint():
         
         token = data['token'].strip()
         
-        # 🔥 Token'ı sil
         success = unregister_fcm_token(token)
         
         if success:
@@ -604,23 +419,9 @@ def unregister_fcm_token_endpoint():
 @api_bp.route('/fcm/status', methods=['GET'])
 @limiter.limit("30 per minute")
 def fcm_status():
-    """
-    Firebase Bildirim Sistemi Durumu
-    
-    Response:
-    {
-        "success": true,
-        "data": {
-            "total_tokens": 150,
-            "last_notification": "2025-01-22T10:30:00"
-        }
-    }
-    """
     try:
-        # Token sayısını al
         token_count = get_token_count()
         
-        # Son bildirim zamanını al
         last_notification = get_cache(Config.CACHE_KEYS['fcm_last_notification'])
         
         if last_notification:
@@ -645,32 +446,10 @@ def fcm_status():
         )
 
 
-# ======================================
-# 📬 FEEDBACK ENDPOINT
-# ======================================
-
 @api_bp.route('/feedback/send', methods=['POST'])
-@limiter.limit("5 per hour")  # Saatte 5 mesaj (Spam önleme)
+@limiter.limit("5 per hour")
 def send_feedback():
-    """
-    Kullanıcı Geri Bildirimi
-    
-    📬 Direkt Telegram'a gönderilir, sistem kayıt tutmaz
-    🛡️ Rate limit: 5/saat (Spam önleme)
-    
-    Request Body:
-    {
-        "message": "Uygulama çok güzel!"
-    }
-    
-    Response:
-    {
-        "success": true,
-        "message": "Geri bildiriminiz alındı, teşekkürler!"
-    }
-    """
     try:
-        # Request body'den mesajı al
         data = request.get_json()
         
         if not data or 'message' not in data:
@@ -683,7 +462,6 @@ def send_feedback():
         
         user_message = data['message'].strip()
         
-        # Mesaj validasyonu
         if not user_message:
             logger.warning("⚠️ [Feedback] Boş mesaj denemesi")
             return create_response(
@@ -706,19 +484,14 @@ def send_feedback():
                 "Mesaj en fazla 500 karakter olabilir"
             )
         
-        # Kullanıcı bilgilerini topla (opsiyonel)
         user_id = request.headers.get('X-Client-Id', 'Bilinmiyor')
         device_id = request.headers.get('X-Device-Id', 'Bilinmiyor')
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        # 📬 Telegram'a gönder
-        from utils.telegram_monitor import get_telegram_monitor
+        from utils.telegram_monitor import telegram_instance
         
-        telegram = get_telegram_monitor()
-        
-        if telegram:
-            # Güzel formatlı mesaj hazırla
+        if telegram_instance:
             feedback_text = (
                 f"📬 *YENİ KULLANICI GERİ BİLDİRİMİ*\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -731,8 +504,7 @@ def send_feedback():
                 f"⏰ *Zaman:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
             )
             
-            # Telegram'a gönder (level='report' = anında gönder)
-            success = telegram.send_message(feedback_text, level='report')
+            success = telegram_instance.send_message(feedback_text, level='report')
             
             if success:
                 logger.info(f"✅ [Feedback] Mesaj Telegram'a gönderildi: {user_message[:30]}...")
@@ -742,7 +514,6 @@ def send_feedback():
                     "Geri bildiriminiz alındı, teşekkürler! 🙏"
                 )
             else:
-                # Telegram gönderimi başarısız (ama kullanıcıya başarılı de)
                 logger.warning(f"⚠️ [Feedback] Telegram devre dışı, mesaj kaydedildi ama gönderilemedi")
                 return create_response(
                     {"sent": False},
@@ -750,7 +521,6 @@ def send_feedback():
                     "Geri bildiriminiz alındı, teşekkürler! 🙏"
                 )
         else:
-            # Telegram bot yok (config hatası)
             logger.error("❌ [Feedback] Telegram bot başlatılmamış!")
             return create_response(
                 {"sent": False},
@@ -760,7 +530,6 @@ def send_feedback():
             
     except Exception as e:
         logger.error(f"❌ [Feedback] Beklenmeyen hata: {e}")
-        # Kullanıcıya hata gösterme, başarılı gibi davran
         return create_response(
             {"sent": False},
             200,
@@ -768,17 +537,9 @@ def send_feedback():
         )
 
 
-# ======================================
-# SYSTEM ENDPOINTS
-# ======================================
-
 @api_bp.route('/metrics', methods=['GET'])
-@limiter.limit("10 per minute")  # Admin endpoint - çok sıkı limit
+@limiter.limit("10 per minute")
 def get_metrics():
-    """
-    Sistem Metrikleri (Admin/Debug için)
-    🛡️ Rate limit: 10/dakika (Admin endpoint)
-    """
     try:
         from services.financial_service import get_service_metrics
         from services.maintenance_service import get_scheduler_status
@@ -795,15 +556,8 @@ def get_metrics():
         return create_response(None, 500, str(e))
 
 
-# ======================================
-# ERROR HANDLERS
-# ======================================
-
 @api_bp.errorhandler(429)
 def ratelimit_handler(e):
-    """
-    Rate limit aşıldığında kullanıcıya düzgün mesaj gönder
-    """
     logger.warning(f"⚠️ Rate limit aşıldı: IP={request.remote_addr}")
     
     return create_response(
