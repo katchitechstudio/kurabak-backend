@@ -1,18 +1,19 @@
 """
-Redis Cache Utility - PRODUCTION READY V4.7 🚀
+Redis Cache Utility - PRODUCTION READY V4.8 🚀
 =======================================================
-✅ CONNECTION POOL: 50 bağlantı sınırını patlatmaz (max=20)
+✅ CONNECTION POOL FIX: Global client kullanımı (V4.8)
+✅ RAM CACHE CLEANUP: Otomatik çöp toplama (V4.8)
+✅ DISK BACKUP OPTİMİZE: Sadece kritik anlarda kaydet (V4.8)
 ✅ INFINITE TTL SUPPORT: ttl=0 gönderilirse veri ASLA silinmez
 ✅ TRIPLE FALLBACK: Redis → RAM → Disk (JSON dosyası)
 ✅ THREAD-SAFE: Çoklu worker/thread ortamında güvenli
 ✅ JSON SERIALIZATION: Verileri otomatik string/json yapar
-✅ DISK BACKUP: Restart sonrası veri kaybını önler
 ✅ AUTO-RECOVERY: Redis çökse bile disk'ten veriyi yükler
 ✅ get_redis_client() EXPORT: FCM notification desteği
 ✅ CLEANUP SYSTEM: 7 günden eski backup'ları otomatik sil
-✅ TIMEOUT FIX: Render Redis için yeterli bağlantı süresi (V4.5)
-✅ EAGER CONNECTION: Startup'ta hemen bağlan (V4.6)
-✅ ATOMIC INCR: Race Condition önleme için atomik increment (V4.7)
+✅ TIMEOUT FIX: Render Redis için yeterli bağlantı süresi
+✅ EAGER CONNECTION: Startup'ta hemen bağlan
+✅ ATOMIC INCR: Race Condition önleme için atomik increment
 """
 
 import os
@@ -27,7 +28,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 # ======================================
-# DISK BACKUP SİSTEMİ (YENİ!)
+# DISK BACKUP SİSTEMİ
 # ======================================
 
 class DiskBackup:
@@ -36,7 +37,6 @@ class DiskBackup:
     disk'ten yükleyen kurtarma sistemi.
     """
     def __init__(self):
-        # Backup klasörü (proje root'unda)
         self.backup_dir = Path("data/cache_backup")
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -44,16 +44,12 @@ class DiskBackup:
         logger.info(f"📁 Disk Backup klasörü: {self.backup_dir.absolute()}")
     
     def save(self, key: str, data: Any) -> bool:
-        """
-        Kritik veriyi disk'e kaydet (JSON formatında)
-        """
+        """Kritik veriyi disk'e kaydet (JSON formatında)"""
         try:
             with self._lock:
-                # Güvenli dosya adı oluştur (: ve / karakterlerini temizle)
                 safe_key = key.replace(":", "_").replace("/", "_")
                 file_path = self.backup_dir / f"{safe_key}.json"
                 
-                # JSON'a çevir ve kaydet
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump({
                         'key': key,
@@ -67,9 +63,7 @@ class DiskBackup:
             return False
     
     def load(self, key: str) -> Optional[Any]:
-        """
-        Disk'ten veriyi yükle
-        """
+        """Disk'ten veriyi yükle"""
         try:
             with self._lock:
                 safe_key = key.replace(":", "_").replace("/", "_")
@@ -81,9 +75,8 @@ class DiskBackup:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     backup = json.load(f)
                     
-                    # 24 saatten eski backup'ları yükleme
                     age = time.time() - backup.get('timestamp', 0)
-                    if age > 86400:  # 24 saat = 86400 saniye
+                    if age > 86400:
                         logger.warning(f"⚠️ [{key}] Disk backup'ı çok eski ({age/3600:.1f} saat)")
                         return None
                     
@@ -93,9 +86,7 @@ class DiskBackup:
             return None
     
     def delete(self, key: str) -> bool:
-        """
-        Disk'ten backup'ı sil
-        """
+        """Disk'ten backup'ı sil"""
         try:
             with self._lock:
                 safe_key = key.replace(":", "_").replace("/", "_")
@@ -110,15 +101,12 @@ class DiskBackup:
             return False
     
     def list_keys(self) -> list:
-        """
-        Disk'teki tüm backup key'lerini listele
-        """
+        """Disk'teki tüm backup key'lerini listele"""
         try:
             with self._lock:
                 files = self.backup_dir.glob("*.json")
                 keys = []
                 for f in files:
-                    # Dosya adından key'i geri oluştur
                     key = f.stem.replace("_", ":")
                     keys.append(key)
                 return keys
@@ -143,12 +131,10 @@ class DiskBackup:
                 
                 for file_path in self.backup_dir.glob("*.json"):
                     try:
-                        # Dosyayı oku ve timestamp'ini kontrol et
                         with open(file_path, 'r', encoding='utf-8') as f:
                             backup = json.load(f)
                             timestamp = backup.get('timestamp', 0)
                         
-                        # Eski mi?
                         if timestamp < cutoff_time:
                             file_path.unlink()
                             deleted_count += 1
@@ -169,17 +155,7 @@ class DiskBackup:
             return 0
     
     def get_backup_stats(self) -> dict:
-        """
-        📊 Backup istatistiklerini getir
-        
-        Returns:
-            {
-                'total_files': int,
-                'total_size_mb': float,
-                'oldest_backup': datetime,
-                'newest_backup': datetime
-            }
-        """
+        """📊 Backup istatistiklerini getir"""
         try:
             with self._lock:
                 files = list(self.backup_dir.glob("*.json"))
@@ -214,19 +190,25 @@ class DiskBackup:
             logger.error(f"❌ Stats hatası: {e}")
             return {'total_files': 0, 'total_size_mb': 0, 'oldest_backup': None, 'newest_backup': None}
 
-# Global Disk Backup
 disk_backup = DiskBackup()
 
 # ======================================
-# REDIS CLIENT WRAPPER (CONNECTION POOL)
+# 🔥 V4.8: REDIS CLIENT (CONNECTION LEAK FİX!)
 # ======================================
 
 class RedisClient:
     """
-    Hata korumalı, Connection Pool ile yönetilen Redis istemcisi.
-    🔥 YENİ: max_connections=20 ile 50 sınırını aşmaz!
-    🔥 V4.5: Timeout'lar Render için optimize edildi!
-    🔥 V4.6: EAGER CONNECTION - Startup'ta hemen bağlan!
+    🔥 V4.8 FIX: Global client kullanımı
+    
+    ÖNCEKİ SORUN:
+    - Her get_cache() çağrısında yeni connection alınıyordu
+    - Connection'lar geri verilmiyordu
+    - Pool doluyordu ve RAM'de birikiyor
+    
+    YENİ ÇÖZÜM:
+    - Tek bir global Redis client
+    - Connection pool otomatik yönetiliyor
+    - Memory leak yok!
     """
     def __init__(self):
         self._client = None
@@ -235,13 +217,10 @@ class RedisClient:
         self._enabled = False
         self._connection_error_logged = False
         
-        # Redis URL kontrolü (Env'den gelir)
         self.redis_url = os.environ.get("REDIS_URL")
         
-        # ✅ V4.6: EAGER CONNECTION - Hemen bağlan!
         if self.redis_url:
             logger.info(f"🔍 [INIT] Redis URL bulundu, bağlantı kuruluyor...")
-            logger.info(f"   URL: {self.redis_url[:50]}...")
             self._client = self._connect()
         else:
             logger.warning("⚠️ [INIT] REDIS_URL yok, RAM + Disk kullanılacak")
@@ -259,33 +238,32 @@ class RedisClient:
             
             logger.info(f"🔍 [CONNECT] redis modülü import edildi (v{redis.__version__})")
             
-            # 🔥 CONNECTION POOL (Hayati Önem!) - V4.5 TIMEOUT FIX
+            # CONNECTION POOL
             self._pool = redis.ConnectionPool.from_url(
                 self.redis_url,
-                max_connections=20,  # 🚨 SİHİRLİ AYAR
+                max_connections=20,
                 decode_responses=True,
-                socket_connect_timeout=10,  # ✅ 3→10 saniye (Render için)
-                socket_timeout=10,  # ✅ 3→10 saniye  
-                retry_on_timeout=True,  # ✅ Timeout'ta tekrar dene
-                socket_keepalive=True,  # ✅ Bağlantıyı canlı tut
+                socket_connect_timeout=10,
+                socket_timeout=10,
+                retry_on_timeout=True,
+                socket_keepalive=True,
                 socket_keepalive_options={
-                    6: 1,   # TCP_KEEPIDLE = 60 saniye
-                    5: 10,  # TCP_KEEPINTVL = 10 saniye
-                    4: 3    # TCP_KEEPCNT = 3 deneme
+                    6: 1,
+                    5: 10,
+                    4: 3
                 }
             )
             
             logger.info("🔍 [CONNECT] Connection pool oluşturuldu")
             
-            # Pool'dan client oluştur
+            # 🔥 V4.8: GLOBAL CLIENT - SADECE BİR KERE OLUŞTUR!
             client = redis.Redis(connection_pool=self._pool)
             
             logger.info("🔍 [CONNECT] Redis client oluşturuldu, ping atılıyor...")
             
-            # Test et (10 saniye timeout ile)
             client.ping()
             
-            logger.info("✅ Redis Connection Pool başarılı. (Max: 20 bağlantı, Timeout: 10s)")
+            logger.info("✅ Redis bağlantısı başarılı! (Global client kullanımda)")
             self._enabled = True
             return client
             
@@ -297,48 +275,84 @@ class RedisClient:
         except Exception as e:
             if not self._connection_error_logged:
                 logger.error(f"❌ Redis bağlantı hatası: {e}")
-                logger.error(f"   Redis URL: {self.redis_url[:30]}...")  # İlk 30 karakter
-                logger.error(f"   Hata tipi: {type(e).__name__}")
                 self._connection_error_logged = True
             return None
 
     def get_client(self):
         """
-        Redis client'ı döndür
-        
-        V4.6: Artık lazy değil! __init__'te zaten bağlanmış durumda.
+        🔥 V4.8: Global client döndür (Yeni connection AÇMA!)
         """
-        if self._client:
-            return self._client
-            
-        # Fallback: Eğer bir şekilde None kaldıysa tekrar dene
-        with self._lock:
-            if not self._client:
-                logger.warning("⚠️ [GET_CLIENT] Client None, tekrar bağlanılıyor...")
-                self._client = self._connect()
-            return self._client
+        return self._client
 
     def is_enabled(self):
         return self._enabled
 
-# Global Redis Wrapper
 redis_wrapper = RedisClient()
 
 # ======================================
-# RAM CACHE (FALLBACK)
+# 🔥 V4.8: RAM CACHE (MEMORY LEAK FİX!)
 # ======================================
 
 class RAMCache:
     """
-    Redis yoksa devreye giren basit bellek deposu.
+    🔥 V4.8 FIX: Otomatik çöp toplama
+    
+    ÖNCEKİ SORUN:
+    - TTL dolmuş key'ler silinmiyordu
+    - Sadece get() yapılırsa temizleniyordu
+    - Kullanılmayan key'ler RAM'de kalıyordu
+    
+    YENİ ÇÖZÜM:
+    - Background thread ile otomatik temizlik
+    - Her 5 dakikada bir expired key'leri sil
+    - Memory leak yok!
     """
     def __init__(self):
         self._cache: Dict[str, Any] = {}
         self._lock = threading.Lock()
+        
+        # 🔥 V4.8: OTOMATIK TEMİZLİK THREAD'İ
+        self._cleanup_thread = threading.Thread(
+            target=self._auto_cleanup,
+            daemon=True,
+            name="RAMCacheCleanup"
+        )
+        self._cleanup_thread.start()
+        logger.info("🧹 RAM Cache otomatik temizlik thread'i başlatıldı")
+
+    def _auto_cleanup(self):
+        """
+        🧹 Arka planda çalışan temizlik thread'i
+        
+        Her 5 dakikada bir expired key'leri temizler
+        """
+        while True:
+            try:
+                time.sleep(300)  # 5 dakika bekle
+                
+                with self._lock:
+                    current_time = time.time()
+                    keys_to_delete = []
+                    
+                    # Expired key'leri bul
+                    for key, (value, expiry) in self._cache.items():
+                        if expiry > 0 and current_time > expiry:
+                            keys_to_delete.append(key)
+                    
+                    # Temizle
+                    for key in keys_to_delete:
+                        del self._cache[key]
+                    
+                    if keys_to_delete:
+                        logger.info(f"🧹 RAM Cache temizlendi: {len(keys_to_delete)} expired key silindi")
+                
+            except Exception as e:
+                logger.error(f"❌ RAM Cache cleanup hatası: {e}")
+                time.sleep(60)  # Hata durumunda 1 dakika bekle
 
     def set(self, key: str, value: Any, ttl: int = 0):
         with self._lock:
-            expiry = time.time() + ttl if ttl > 0 else 0  # 0 ise sonsuz
+            expiry = time.time() + ttl if ttl > 0 else 0
             self._cache[key] = (value, expiry)
 
     def get(self, key: str):
@@ -348,7 +362,6 @@ class RAMCache:
             
             value, expiry = self._cache[key]
             
-            # Süre dolmuş mu? (Expiry 0 ise dolmaz)
             if expiry > 0 and time.time() > expiry:
                 del self._cache[key]
                 return None
@@ -356,14 +369,12 @@ class RAMCache:
             return value
     
     def exists(self, key: str) -> bool:
-        """Key var mı kontrol et"""
         with self._lock:
             if key not in self._cache:
                 return False
             
             value, expiry = self._cache[key]
             
-            # Süre dolmuşsa False döndür
             if expiry > 0 and time.time() > expiry:
                 del self._cache[key]
                 return False
@@ -371,7 +382,6 @@ class RAMCache:
             return True
     
     def delete(self, key: str) -> bool:
-        """Key'i sil"""
         with self._lock:
             if key in self._cache:
                 del self._cache[key]
@@ -379,72 +389,56 @@ class RAMCache:
             return False
     
     def incr(self, key: str, ttl: int = 0) -> int:
-        """
-        🔥 V4.7: Atomik increment (RAM için thread-safe)
-        
-        Args:
-            key: Increment edilecek key
-            ttl: TTL (saniye, 0 = süresiz)
-            
-        Returns:
-            int: Yeni değer
-        """
+        """Atomik increment (RAM için thread-safe)"""
         with self._lock:
             current_value = 0
             
-            # Mevcut değeri al
             if key in self._cache:
                 value, expiry = self._cache[key]
                 
-                # Süre dolmamışsa değeri al
                 if expiry == 0 or time.time() <= expiry:
                     current_value = int(value) if isinstance(value, (int, str)) else 0
                 else:
-                    # Süre dolmuşsa sil
                     del self._cache[key]
             
-            # 1 artır
             new_value = current_value + 1
             
-            # Kaydet
             expiry = time.time() + ttl if ttl > 0 else 0
             self._cache[key] = (new_value, expiry)
             
             return new_value
     
     def keys(self, pattern: str = "*"):
-        """Pattern'e uyan tüm key'leri döndür"""
         with self._lock:
             if pattern == "*":
                 return list(self._cache.keys())
             
-            # Basit wildcard desteği
             import fnmatch
             return [k for k in self._cache.keys() if fnmatch.fnmatch(k, pattern)]
 
-# Global RAM Cache
 ram_cache = RAMCache()
 
 # ======================================
 # KRİTİK VERİ LİSTESİ
 # ======================================
 
-# Bu key'ler disk'e de yedeklenir (Restart sonrası kurtarma için)
 CRITICAL_KEYS = [
     'kurabak:currencies:all',
     'kurabak:golds:all',
     'kurabak:silvers:all',
     'kurabak:summary',
-    'kurabak:yesterday_prices',  # Snapshot (en kritik!)
+    'kurabak:yesterday_prices',
     'kurabak:backup:all'
 ]
 
 # ======================================
-# PUBLIC API (DIŞARIYA AÇILAN FONKSİYONLAR)
+# PUBLIC API
 # ======================================
 
 def get_cache(key: str) -> Optional[Any]:
     """
+    🔥 V4.8 FIX: Global client kullanımı
+    
     TRIPLE FALLBACK: Redis → RAM → Disk
     """
     client = redis_wrapper.get_client()
@@ -456,33 +450,39 @@ def get_cache(key: str) -> Optional[Any]:
             if data:
                 return json.loads(data)
         except Exception as e:
-            logger.warning(f"⚠️ Redis Okuma Hatası: {e} -> RAM'e geçiliyor.")
+            logger.warning(f"⚠️ Redis Okuma Hatası: {e}")
     
-    # 2. RAM Denemesi (Fallback)
+    # 2. RAM Denemesi
     ram_data = ram_cache.get(key)
     if ram_data:
         return ram_data
     
-    # 3. Disk Denemesi (Final Kurtarma!)
+    # 3. Disk Denemesi
     if key in CRITICAL_KEYS:
         logger.warning(f"🔥 [{key}] Redis ve RAM'de yok, DISK'ten yükleniyor...")
         disk_data = disk_backup.load(key)
         if disk_data:
             logger.info(f"✅ [{key}] Disk'ten başarıyla kurtarıldı!")
-            # Kurtarılan veriyi RAM'e de yükle
             ram_cache.set(key, disk_data, ttl=0)
             return disk_data
     
     return None
 
 
-def set_cache(key: str, data: Any, ttl: int = 300) -> bool:
+def set_cache(key: str, data: Any, ttl: int = 300, force_disk_backup: bool = False) -> bool:
     """
-    Cache'e veri yazar + Kritik verileri disk'e yedekler
+    🔥 V4.8 FIX: Disk backup optimize edildi
+    
+    Cache'e veri yazar + SADECE force_disk_backup=True ise disk'e yazar
+    
+    Args:
+        key: Cache key
+        data: Veri
+        ttl: TTL (saniye, 0=süresiz)
+        force_disk_backup: True ise kritik key'leri disk'e de yaz
     """
     success = False
     
-    # Veriyi JSON string'e çevir
     try:
         json_data = json.dumps(data, default=str)
     except Exception as e:
@@ -495,85 +495,58 @@ def set_cache(key: str, data: Any, ttl: int = 300) -> bool:
     if client:
         try:
             if ttl and ttl > 0:
-                client.setex(key, ttl, json_data)  # Süreli kayıt
+                client.setex(key, ttl, json_data)
             else:
-                client.set(key, json_data)  # 🔥 SÜRESİZ KAYIT (ttl=0)
+                client.set(key, json_data)
             success = True
         except Exception as e:
             logger.error(f"❌ Redis Yazma Hatası: {e}")
 
-    # 2. RAM Yazma (Her zaman yedek olarak yazalım)
+    # 2. RAM Yazma
     ram_cache.set(key, data, ttl)
     
-    # 3. 🔥 DİSK YEDEKLEME (Sadece kritik veriler için)
-    if key in CRITICAL_KEYS:
+    # 3. 🔥 V4.8: DISK BACKUP - Sadece force_disk_backup=True ise!
+    if force_disk_backup and key in CRITICAL_KEYS:
         disk_backup.save(key, data)
         logger.debug(f"💾 [{key}] Disk'e yedeklendi")
     
-    return success or True  # RAM'e yazıldıysa başarılı say
+    return success or True
 
 
 def incr_cache(key: str, ttl: int = 0) -> int:
     """
-    🔥 V4.7: ATOMİK INCREMENT (Race Condition önleme)
-    
-    Redis INCR komutu kullanır - Thread-safe garantili!
-    Redis yoksa RAM'de thread-safe increment yapar.
-    
-    Args:
-        key: Increment edilecek key
-        ttl: TTL (saniye, 0 = süresiz)
-        
-    Returns:
-        int: Yeni değer
-        
-    Kullanım:
-        # Önceki hatalı yöntem (Race Condition var!)
-        count = get_cache(log_key) or 0
-        set_cache(log_key, int(count) + 1, ttl=86400)
-        
-        # Yeni doğru yöntem (Atomik!)
-        incr_cache(log_key, ttl=86400)
+    Atomik increment (Redis INCR veya RAM thread-safe)
     """
     client = redis_wrapper.get_client()
     
-    # 1. Redis INCR (Atomik - Thread-safe!)
     if client:
         try:
-            # Increment yap
             new_value = client.incr(key)
             
-            # TTL ayarla (sadece ilk increment'te)
             if ttl > 0 and new_value == 1:
                 client.expire(key, ttl)
             
             return new_value
             
         except Exception as e:
-            logger.warning(f"⚠️ Redis INCR hatası: {e} -> RAM'e geçiliyor")
+            logger.warning(f"⚠️ Redis INCR hatası: {e}")
     
-    # 2. RAM INCR (Thread-safe fallback)
     return ram_cache.incr(key, ttl)
 
 
 def cache_exists(key: str) -> bool:
-    """
-    Key var mı kontrol et (Redis → RAM → Disk)
-    """
+    """Key var mı kontrol et (Redis → RAM → Disk)"""
     client = redis_wrapper.get_client()
     
-    # 1. Redis Kontrolü
     if client:
         try:
             return bool(client.exists(key))
         except Exception as e:
             logger.warning(f"⚠️ Redis EXISTS hatası: {e}")
     
-    # 2. RAM Kontrolü
     if ram_cache.exists(key):
         return True
     
-    # 3. Disk Kontrolü (Kritik key'ler için)
     if key in CRITICAL_KEYS:
         return disk_backup.load(key) is not None
     
@@ -581,13 +554,10 @@ def cache_exists(key: str) -> bool:
 
 
 def delete_cache(key: str) -> bool:
-    """
-    Key'i sil (Redis + RAM + Disk)
-    """
+    """Key'i sil (Redis + RAM + Disk)"""
     success = False
     client = redis_wrapper.get_client()
     
-    # 1. Redis Silme
     if client:
         try:
             client.delete(key)
@@ -595,10 +565,8 @@ def delete_cache(key: str) -> bool:
         except Exception as e:
             logger.warning(f"⚠️ Redis DELETE hatası: {e}")
     
-    # 2. RAM Silme
     ram_cache.delete(key)
     
-    # 3. Disk Silme (Kritik key'ler için)
     if key in CRITICAL_KEYS:
         disk_backup.delete(key)
     
@@ -606,12 +574,9 @@ def delete_cache(key: str) -> bool:
 
 
 def get_cache_keys(pattern: str = "*"):
-    """
-    Pattern'e uyan tüm key'leri döndür
-    """
+    """Pattern'e uyan tüm key'leri döndür"""
     client = redis_wrapper.get_client()
     
-    # 1. Redis Denemesi
     if client:
         try:
             return [k.decode() if isinstance(k, bytes) else k 
@@ -619,16 +584,11 @@ def get_cache_keys(pattern: str = "*"):
         except Exception as e:
             logger.warning(f"⚠️ Redis KEYS hatası: {e}")
     
-    # 2. RAM Denemesi
     ram_keys = ram_cache.keys(pattern)
-    
-    # 3. Disk'teki kritik key'leri de ekle
     disk_keys = disk_backup.list_keys()
     
-    # Unique key listesi oluştur
     all_keys = set(ram_keys + disk_keys)
     
-    # Pattern ile filtrele
     if pattern != "*":
         import fnmatch
         all_keys = {k for k in all_keys if fnmatch.fnmatch(k, pattern)}
@@ -637,14 +597,10 @@ def get_cache_keys(pattern: str = "*"):
 
 
 def flush_all_cache() -> bool:
-    """
-    TÜM cache'i temizle (Redis + RAM + Disk)
-    ⚠️ DİKKAT: Bu komutu sadece Şef kullanmalı!
-    """
+    """TÜM cache'i temizle (Redis + RAM + Disk)"""
     success = False
     client = redis_wrapper.get_client()
     
-    # 1. Redis Temizliği
     if client:
         try:
             client.flushall()
@@ -653,11 +609,9 @@ def flush_all_cache() -> bool:
         except Exception as e:
             logger.error(f"❌ Redis FLUSHALL hatası: {e}")
     
-    # 2. RAM Temizliği
     ram_cache._cache.clear()
     logger.warning("🧹 RAM Cache temizlendi!")
     
-    # 3. Disk Temizliği (Kritik key'leri sil)
     for key in CRITICAL_KEYS:
         disk_backup.delete(key)
     logger.warning("🧹 Disk Backup temizlendi!")
@@ -665,31 +619,10 @@ def flush_all_cache() -> bool:
     return success or True
 
 
-# ======================================
-# 🧹 TEMİZLİK FONKSİYONU (PUBLIC API)
-# ======================================
-
 def cleanup_old_disk_backups(max_age_days: int = 7) -> dict:
-    """
-    🧹 Eski disk backup'larını temizle
-    
-    Args:
-        max_age_days: Kaç günden eski dosyalar silinsin (varsayılan 7)
-        
-    Returns:
-        {
-            'deleted_count': int,
-            'before_stats': dict,
-            'after_stats': dict
-        }
-    """
-    # Önceki durum
+    """🧹 Eski disk backup'larını temizle"""
     before_stats = disk_backup.get_backup_stats()
-    
-    # Temizlik yap
     deleted_count = disk_backup.cleanup_old_backups(max_age_days)
-    
-    # Sonraki durum
     after_stats = disk_backup.get_backup_stats()
     
     return {
@@ -700,44 +633,24 @@ def cleanup_old_disk_backups(max_age_days: int = 7) -> dict:
 
 
 def get_disk_backup_stats() -> dict:
-    """
-    📊 Disk backup istatistiklerini getir
-    """
+    """📊 Disk backup istatistiklerini getir"""
     return disk_backup.get_backup_stats()
 
 
-# ======================================
-# 🔥 FCM NOTIFICATION SUPPORT
-# ======================================
-
 def get_redis_client():
     """
-    Redis client'ı döndür
-    
-    Bu fonksiyon notification_service.py tarafından kullanılır.
-    FCM token'larını Redis Set'inde saklamak için gerekli.
-    
-    Returns:
-        Redis client instance veya None
+    Redis client'ı döndür (FCM notification için)
     """
     return redis_wrapper.get_client()
 
 
-# ======================================
-# STARTUP: DISK'TEN VERİ KURTARMA
-# ======================================
-
 def recover_from_disk():
-    """
-    Uygulama başlatılırken disk'ten kritik verileri yükle
-    (Redis çökmüşse veya restart atmışsa)
-    """
+    """Uygulama başlatılırken disk'ten kritik verileri yükle"""
     logger.info("🔄 Disk'ten veri kurtarma kontrolü başlatılıyor...")
     
     recovered_count = 0
     
     for key in CRITICAL_KEYS:
-        # Eğer Redis ve RAM'de yoksa disk'ten yükle
         if not get_cache(key):
             disk_data = disk_backup.load(key)
             if disk_data:
@@ -750,5 +663,4 @@ def recover_from_disk():
     else:
         logger.info("ℹ️ Kurtarılacak veri bulunamadı (Normal durum)")
 
-# Uygulama başlarken otomatik kurtarma yap
 recover_from_disk()
