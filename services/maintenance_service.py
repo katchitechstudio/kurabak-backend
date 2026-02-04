@@ -1,25 +1,30 @@
 """
-Maintenance Service - PRODUCTION READY V5.2 🚧
+Maintenance Service - PRODUCTION READY V6.0 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
 ✅ API V5: Tek kaynak sistemi
 ✅ BANNER SİSTEMİ: Uygulama tarafına özel mesaj gönderme
-✅ SCHEDULER: Worker + Snapshot + Şef + Takvim + Push Notification + ALARM + HABER 📰
+✅ SCHEDULER: Worker + Snapshot + Şef + Push Notification + ALARM + HABER
 ✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ THREAD-SAFE: Güvenli veri erişimi
 ✅ SMART RECOVERY: Sistem çökerse otomatik kurtarma
-✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
+✅ PUSH NOTIFICATION: 14:00 günlük bildirim (Bayram/Haber)
 ✅ CLEANUP SYSTEM: Her gün eski backup'ları temizle
 ✅ ALARM SYSTEM: Her 5-15 dakikada alarm kontrolü
-✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:00 + 12:00) 📰
-✅ JOB ERROR LISTENER: Job crash'lerde Telegram bildirimi (V5.1)
-✅ JOB OVERLAP PROTECTION: Çift çalışma önleme (V5.1)
-✅ SCHEDULER SINGLETON LOCK: Thread-safe başlatma (V5.2) 🔥
+✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:00 + 12:00)
+✅ JOB ERROR LISTENER: Job crash'lerde Telegram bildirimi
+✅ JOB OVERLAP PROTECTION: Çift çalışma önleme
+✅ SCHEDULER SINGLETON LOCK: Thread-safe başlatma
+
+V6.0 Değişiklikler:
+- calendar_check job'u KALDIRILDI (08:00 etkinlik kontrolü yok artık)
+- push_notification saati 12:00 → 14:00'e taşındı
+- Bayram/Haber sistemi event_manager ile entegre
 """
 
 import logging
 import time
-import threading  # 🔥 V5.2: Thread-safe lock için
+import threading
 from typing import Optional, Dict, Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -31,27 +36,11 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-# ======================================
-# 🔥 V5.2: SCHEDULER (GLOBAL + THREAD-SAFE LOCK)
-# ======================================
-
 scheduler = None
-_scheduler_lock = threading.Lock()  # 🔥 V5.2: Thread-safe başlatma için
+_scheduler_lock = threading.Lock()
 
-# ======================================
-# BAKIM MODU YÖNETİMİ
-# ======================================
 
 def check_maintenance_status() -> Dict[str, Any]:
-    """
-    Bakım modunu kontrol eder.
-    
-    Returns:
-        Dict: {
-            'is_active': bool,
-            'banner_message': str or None
-        }
-    """
     maintenance_data = get_cache(Config.CACHE_KEYS['maintenance'])
     
     if not maintenance_data:
@@ -67,15 +56,6 @@ def check_maintenance_status() -> Dict[str, Any]:
 
 
 def activate_maintenance(message: Optional[str] = None) -> bool:
-    """
-    Bakım modunu aktif eder.
-    
-    Args:
-        message: Özel bakım mesajı (opsiyonel)
-    
-    Returns:
-        bool: Başarılı mı?
-    """
     try:
         banner_msg = message or Config.MAINTENANCE_DEFAULT_MESSAGE
         
@@ -95,12 +75,6 @@ def activate_maintenance(message: Optional[str] = None) -> bool:
 
 
 def deactivate_maintenance() -> bool:
-    """
-    Bakım modunu kapatır.
-    
-    Returns:
-        bool: Başarılı mı?
-    """
     try:
         delete_cache(Config.CACHE_KEYS['maintenance'])
         logger.info("✅ Bakım modu kapatıldı")
@@ -111,21 +85,7 @@ def deactivate_maintenance() -> bool:
         return False
 
 
-# ======================================
-# BANNER YÖNETİMİ
-# ======================================
-
 def set_banner(message: str, ttl: int = 0) -> bool:
-    """
-    Banner mesajı ayarlar.
-    
-    Args:
-        message: Banner mesajı
-        ttl: Süreli mi? (0 = süresiz, >0 = saniye)
-    
-    Returns:
-        bool: Başarılı mı?
-    """
     try:
         set_cache(Config.CACHE_KEYS['banner'], message, ttl=ttl)
         logger.info(f"📢 Banner ayarlandı: {message} (TTL: {ttl}s)")
@@ -136,12 +96,6 @@ def set_banner(message: str, ttl: int = 0) -> bool:
 
 
 def clear_banner() -> bool:
-    """
-    Banner mesajını kaldırır.
-    
-    Returns:
-        bool: Başarılı mı?
-    """
     try:
         delete_cache(Config.CACHE_KEYS['banner'])
         logger.info("🔇 Banner kaldırıldı")
@@ -152,17 +106,6 @@ def clear_banner() -> bool:
 
 
 def get_current_banner() -> Optional[str]:
-    """
-    Mevcut banner mesajını getirir.
-    
-    Priority:
-    1. Bakım modu aktifse -> Bakım mesajı
-    2. Manuel banner varsa -> Manuel banner
-    3. Hiçbiri yoksa -> None
-    
-    Returns:
-        str or None: Banner mesajı
-    """
     maintenance = check_maintenance_status()
     if maintenance['is_active']:
         return maintenance['banner_message']
@@ -174,17 +117,7 @@ def get_current_banner() -> Optional[str]:
     return None
 
 
-# ======================================
-# VERİ GÜVENLİĞİ (V5 + TRADINGVIEW)
-# ======================================
-
 def fetch_all_data_safe() -> bool:
-    """
-    Acil durumda tüm verileri yeniden çeker (Aktif kaynaktan).
-    
-    Returns:
-        bool: Başarılı mı?
-    """
     try:
         active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
         logger.info(f"🔄 Acil veri çekimi başlatılıyor ({active_source.upper()})...")
@@ -206,9 +139,6 @@ def fetch_all_data_safe() -> bool:
 
 
 def force_worker_update():
-    """
-    Worker'ı manuel olarak tetikle (Telegram komutları için).
-    """
     try:
         logger.info("⚡ Worker manuel olarak tetiklendi...")
         fetch_all_data_safe()
@@ -216,21 +146,7 @@ def force_worker_update():
         logger.error(f"❌ Manuel worker tetikleme hatası: {e}")
 
 
-# ======================================
-# 🔥 V5.1: JOB ERROR LISTENER
-# ======================================
-
 def job_error_listener(event):
-    """
-    🔥 V5.1 YENİ: Job hata verdiğinde tetiklenir
-    
-    Scheduler job'larından biri crash olursa:
-    1. Detaylı log yazar
-    2. Telegram'a kritik bildirim gönderir
-    
-    Args:
-        event: APScheduler JobExecutionEvent
-    """
     if event.exception:
         job_id = event.job_id
         exception = event.exception
@@ -260,15 +176,7 @@ def job_error_listener(event):
             logger.error(f"❌ Telegram bildirim hatası: {telegram_err}")
 
 
-# ======================================
-# SCHEDULER FONKSİYONLARI
-# ======================================
-
 def worker_job():
-    """
-    👷 İŞÇİ (WORKER)
-    🔥 V5.1: 1 dakikada bir veri çeker (60 saniye)
-    """
     try:
         logger.info("👷 [WORKER] Veri güncelleme başlıyor...")
         
@@ -287,10 +195,6 @@ def worker_job():
 
 
 def snapshot_job():
-    """
-    📸 FOTOĞRAFÇI (SNAPSHOT)
-    Her gece 00:00:05'te referans fiyatlarını alır.
-    """
     try:
         logger.info("📸 [SNAPSHOT] Gece fotoğrafı çekiliyor...")
         
@@ -308,10 +212,6 @@ def snapshot_job():
 
 
 def supervisor_check():
-    """
-    👮 ŞEF (CONTROLLER)
-    Her 10 dakikada bir sistemi kontrol eder ve onarır.
-    """
     try:
         logger.info("👮 [ŞEF] Sistem kontrolü başlıyor...")
         
@@ -335,29 +235,7 @@ def supervisor_check():
         raise
 
 
-def calendar_check():
-    """
-    🗓️ TAKVİM KONTROLÜ
-    Her gün sabah 08:00'da bugünün etkinliklerini kontrol eder.
-    """
-    try:
-        logger.info("🗓️ [TAKVİM] Bugünün etkinlikleri kontrol ediliyor...")
-        
-        from utils.event_manager import check_and_notify_events
-        check_and_notify_events()
-        
-        logger.info("✅ [TAKVİM] Kontrol tamamlandı")
-        
-    except Exception as e:
-        logger.error(f"❌ [TAKVİM] Hata: {e}")
-        raise
-
-
 def daily_report():
-    """
-    📊 GÜNLÜK RAPOR
-    Her gün 09:00'da Telegram'a rapor gönderir.
-    """
     try:
         logger.info("📊 [RAPOR] Günlük rapor hazırlanıyor...")
         
@@ -377,10 +255,6 @@ def daily_report():
 
 
 def push_notification_daily():
-    """
-    🔔 GÜNLÜK PUSH NOTIFICATION
-    Her gün 12:00'de Firebase üzerinden günlük özet gönderir.
-    """
     try:
         logger.info("🔔 [PUSH] Günlük push notification hazırlanıyor...")
         
@@ -389,7 +263,7 @@ def push_notification_daily():
         result = send_daily_summary()
         
         if result.get('success'):
-            logger.info(f"✅ [PUSH] Özet gönderildi ({result.get('recipient_count', 0)} kullanıcı)")
+            logger.info(f"✅ [PUSH] {result.get('type', 'bildirim').upper()} gönderildi ({result.get('recipient_count', 0)} kullanıcı)")
         else:
             logger.warning(f"⚠️ [PUSH] Gönderim başarısız: {result.get('error')}")
         
@@ -399,10 +273,6 @@ def push_notification_daily():
 
 
 def cleanup_old_backups():
-    """
-    🧹 ESKİ BACKUP TEMİZLİĞİ
-    Her gün 7 günden eski disk backup'larını siler.
-    """
     try:
         logger.info("🧹 [CLEANUP] Eski backup temizliği başlıyor...")
         
@@ -430,10 +300,6 @@ def cleanup_old_backups():
 
 
 def alarm_check_job():
-    """
-    🔔 ALARM KONTROLCÜ
-    Her 5-15 dakikada bir alarmları kontrol eder ve tetiklenenlere bildirim gönderir.
-    """
     try:
         logger.info("🔔 [ALARM] Periyodik alarm kontrolü başlıyor...")
         
@@ -464,15 +330,7 @@ def alarm_check_job():
         raise
 
 
-# ======================================
-# 📰 HABER SİSTEMİ JOB'LARI
-# ======================================
-
 def news_morning_shift_job():
-    """
-    🌅 SABAH VARDİYASI JOB
-    Her gece 00:00'da çalışır, sabah için haberleri hazırlar.
-    """
     try:
         logger.info("🌅 [SABAH VARDİYASI] Job başlatılıyor...")
         
@@ -490,10 +348,6 @@ def news_morning_shift_job():
 
 
 def news_evening_shift_job():
-    """
-    🌆 AKŞAM VARDİYASI JOB
-    Her gün 12:00'da çalışır, akşam için haberleri hazırlar.
-    """
     try:
         logger.info("🌆 [AKŞAM VARDİYASI] Job başlatılıyor...")
         
@@ -510,28 +364,9 @@ def news_evening_shift_job():
         raise
 
 
-# ======================================
-# 🔥 V5.2: SCHEDULER YÖNETİMİ (THREAD-SAFE LOCK EKLENDİ!)
-# ======================================
-
 def start_scheduler():
-    """
-    🔥 V5.2: Zamanlayıcıyı başlat ve tüm job'ları ekle
-    
-    V5.2 YENİ:
-    - Thread-safe lock eklendi (_scheduler_lock)
-    - Aynı anda birden fazla thread başlatamaz
-    - Memory leak önleme garantisi
-    
-    V5.1 ÖZELLİKLERİ:
-    - Job Error Listener
-    - Her job için max_instances=1 (overlap önleme)
-    - Her job için coalesce=True (missed runs birleştir)
-    - Worker interval 60 saniye (1 dakika)
-    """
     global scheduler
     
-    # 🔥 V5.2: THREAD-SAFE LOCK
     with _scheduler_lock:
         if scheduler and scheduler.running:
             logger.warning("⚠️ Scheduler zaten çalışıyor!")
@@ -539,11 +374,9 @@ def start_scheduler():
         
         scheduler = BackgroundScheduler(timezone=Config.DEFAULT_TIMEZONE)
         
-        # 🔥 V5.1: ERROR LISTENER EKLE
         scheduler.add_listener(job_error_listener, EVENT_JOB_ERROR)
         logger.info("✅ Job Error Listener eklendi")
         
-        # 👷 WORKER: Her 1 dakikada bir (60 saniye)
         worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)
         
         scheduler.add_job(
@@ -556,7 +389,6 @@ def start_scheduler():
             coalesce=True
         )
         
-        # 📸 SNAPSHOT: Her gece 00:00:05
         scheduler.add_job(
             snapshot_job,
             trigger=CronTrigger(
@@ -571,7 +403,6 @@ def start_scheduler():
             coalesce=True
         )
         
-        # 👮 ŞEF: Her 10 dakikada bir
         scheduler.add_job(
             supervisor_check,
             trigger=IntervalTrigger(minutes=Config.SUPERVISOR_INTERVAL),
@@ -582,21 +413,6 @@ def start_scheduler():
             coalesce=True
         )
         
-        # 🗓️ TAKVİM: Her gün 08:00
-        scheduler.add_job(
-            calendar_check,
-            trigger=CronTrigger(
-                hour=Config.CALENDAR_CHECK_HOUR,
-                minute=Config.CALENDAR_CHECK_MINUTE
-            ),
-            id='calendar',
-            name='Takvim (Etkinlik Kontrolü)',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True
-        )
-        
-        # 📊 GÜNLÜK RAPOR: Her gün 09:00
         scheduler.add_job(
             daily_report,
             trigger=CronTrigger(hour=Config.TELEGRAM_DAILY_REPORT_HOUR),
@@ -607,21 +423,16 @@ def start_scheduler():
             coalesce=True
         )
         
-        # 🔔 PUSH NOTIFICATION: Her gün 12:00
         scheduler.add_job(
             push_notification_daily,
-            trigger=CronTrigger(
-                hour=Config.PUSH_NOTIFICATION_DAILY_HOUR,
-                minute=Config.PUSH_NOTIFICATION_DAILY_MINUTE
-            ),
+            trigger=CronTrigger(hour=14, minute=0),
             id='push_notification',
-            name='Push Notification (Günlük Özet)',
+            name='Push Notification (Bayram/Haber)',
             replace_existing=True,
             max_instances=1,
             coalesce=True
         )
         
-        # 🧹 CLEANUP: Her gün 03:00
         scheduler.add_job(
             cleanup_old_backups,
             trigger=CronTrigger(hour=3, minute=0),
@@ -632,7 +443,6 @@ def start_scheduler():
             coalesce=True
         )
         
-        # 🔔 ALARM: Her 5-15 dakikada bir
         alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)
         scheduler.add_job(
             alarm_check_job,
@@ -644,7 +454,6 @@ def start_scheduler():
             coalesce=True
         )
         
-        # 🌅 SABAH VARDİYASI: Her gece 00:00
         scheduler.add_job(
             news_morning_shift_job,
             trigger=CronTrigger(hour=0, minute=0),
@@ -655,7 +464,6 @@ def start_scheduler():
             coalesce=True
         )
         
-        # 🌆 AKŞAM VARDİYASI: Her gün 12:00
         scheduler.add_job(
             news_evening_shift_job,
             trigger=CronTrigger(hour=12, minute=0),
@@ -666,31 +474,25 @@ def start_scheduler():
             coalesce=True
         )
         
-        # Başlat
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V5.2 - Thread-Safe Lock)")
-        logger.info(f"   👷 Worker: Her {worker_interval} saniyede (1 dakika)")
+        logger.info("✅ Scheduler başlatıldı! (V6.0 - Bayram/Haber Sistemi)")
+        logger.info(f"   👷 Worker: Her {worker_interval} saniyede")
         logger.info("   📸 Snapshot: Her gece 00:00:05")
         logger.info("   👮 Şef: Her 10 dakikada")
-        logger.info("   🗓️ Takvim: Her gün 08:00")
         logger.info("   📊 Rapor: Her gün 09:00")
-        logger.info("   🔔 Push: Her gün 12:00")
+        logger.info("   🔔 Push: Her gün 14:00 (Bayram/Haber)")
         logger.info("   🧹 Cleanup: Her gün 03:00")
         logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
         logger.info("   🌅 Sabah Vardiyası: Her gece 00:00")
         logger.info("   🌆 Akşam Vardiyası: Her gün 12:00")
-        logger.info("   🚨 Error Listener: AKTİF (Telegram bildirimi)")
-        logger.info("   🛡️ Overlap Protection: AKTİF (max_instances=1)")
-        logger.info("   🔒 Thread-Safe Lock: AKTİF (V5.2)")  # 🔥 YENİ
+        logger.info("   🚨 Error Listener: AKTİF")
+        logger.info("   🛡️ Overlap Protection: AKTİF")
+        logger.info("   🔒 Thread-Safe Lock: AKTİF")
 
 
 def stop_scheduler():
-    """
-    🔥 V5.2: Zamanlayıcıyı durdur (Thread-safe)
-    """
     global scheduler
     
-    # 🔥 V5.2: THREAD-SAFE LOCK
     with _scheduler_lock:
         if scheduler and scheduler.running:
             scheduler.shutdown()
@@ -700,12 +502,6 @@ def stop_scheduler():
 
 
 def get_scheduler_status() -> Dict[str, Any]:
-    """
-    Zamanlayıcı durumunu döner.
-    
-    Returns:
-        Dict: Scheduler bilgileri
-    """
     try:
         if not scheduler:
             return {'running': False, 'jobs': []}
@@ -736,7 +532,7 @@ def get_scheduler_status() -> Dict[str, Any]:
             'maintenance_active': check_maintenance_status()['is_active'],
             'error_listener_active': True,
             'overlap_protection_active': True,
-            'thread_safe_lock_active': True  # 🔥 V5.2 YENİ
+            'thread_safe_lock_active': True
         }
         
         return status
