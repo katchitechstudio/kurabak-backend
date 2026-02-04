@@ -11,7 +11,7 @@ General Routes - PRODUCTION READY V5.1 🚀
 ✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
 ✅ FCM ENDPOINTS: Firebase token kayıt/silme
 ✅ EVENT MANAGER BANNER: Otomatik takvim bazlı banner 🤖
-✅ FEEDBACK SYSTEM FIX: telegram_instance kullanımı ile düzeltildi 📬
+✅ FEEDBACK SYSTEM FIX: get_telegram_monitor() kullanımı ile düzeltildi 📬
 """
 
 from flask import Blueprint, jsonify, request, current_app
@@ -489,9 +489,12 @@ def send_feedback():
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        from utils.telegram_monitor import telegram_instance
+        # 🔥 FİX: get_telegram_monitor() kullan
+        from utils.telegram_monitor import get_telegram_monitor
         
-        if telegram_instance:
+        telegram_bot = get_telegram_monitor()
+        
+        if telegram_bot:
             feedback_text = (
                 f"📬 *YENİ KULLANICI GERİ BİLDİRİMİ*\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -504,7 +507,7 @@ def send_feedback():
                 f"⏰ *Zaman:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
             )
             
-            success = telegram_instance.send_message(feedback_text, level='report')
+            success = telegram_bot.send_message(feedback_text, level='report')
             
             if success:
                 logger.info(f"✅ [Feedback] Mesaj Telegram'a gönderildi: {user_message[:30]}...")
