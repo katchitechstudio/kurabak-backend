@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.1 🚀
+KuraBak Backend - ENTRY POINT V5.3 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -16,6 +16,7 @@ KuraBak Backend - ENTRY POINT V5.1 🚀
 ✅ TELEGRAM SINGLETON V5.1: Global instance memory leak önleme
 ✅ FIREBASE SINGLETON V5.1: Multiple init önleme
 ✅ HEALTHZ FIX: Render health check endpoint'i eklendi
+✅ PID GUARD V5.3: Scheduler çoğalma bug'ı düzeltildi 🔥
 """
 import os
 import logging
@@ -176,59 +177,88 @@ def get_telegram_instance():
             return None
 
 # ======================================
+# 🔥 V5.3: PID GUARD (SCHEDULER ÇOĞALMA ÖNLEYİCİ)
+# ======================================
+
+_SCHEDULER_OWNER_PID = None
+_PID_LOCK = threading.Lock()
+
+# ======================================
 # ASENKRON BAŞLATICI
 # ======================================
 
 def background_initialization():
     """
-    🔥 V5.1 FIX: Singleton pattern'ler ile arka plan başlatma
+    🔥 V5.3 FIX: PID Guard ile scheduler çoğalmasını önle
     
-    Ağır işleri arka planda yapar.
-    Böylece Flask anında ayağa kalkar ve Render portu kapatmaz.
+    ÖNCEKİ SORUN:
+    - Gunicorn restart/reload → yeni scheduler instance
+    - Eski scheduler + yeni scheduler = iki scheduler çalışıyor
+    - SIGTERM sonrası bile job'lar çalışmaya devam ediyordu
+    
+    YENİ ÇÖZÜM:
+    - İlk başlatan process'in PID'sini kaydet
+    - Başka bir PID gelirse scheduler başlatmasını atla
+    - Zombie scheduler önleme garantisi
     
     BAŞLATMA SIRASI:
     1. Firebase Admin SDK (Singleton - Push Notifications)
     2. Telegram Monitor (Singleton - Komut Sistemi)
-    3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm)
+    3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm) - PID Guard ile
     4. İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
-    logger.info("⏳ [Arka Plan] Sistem servisleri başlatılıyor...")
-    time.sleep(1)
+    global _SCHEDULER_OWNER_PID
     
-    # 1. Firebase'i Başlat (SINGLETON!)
-    firebase_status = init_firebase()
-    if firebase_status:
-        logger.info("🔥 [Firebase] Push notification sistemi aktif!")
-    else:
-        logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
-    
-    # 2. Telegram Monitor'ü Başlat (SINGLETON!)
-    telegram = get_telegram_instance()
-    if telegram:
-        logger.info("📱 [Telegram] Komut sistemi aktif!")
-    else:
-        logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
-    
-    # 3. Scheduler'ı (Zamanlayıcı) Başlat
-    start_scheduler()
-    
-    # 4. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
-    logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
-    
-    try:
-        supervisor_check()
-        logger.info("✅ [İlk Kontrol] Şef kontrolü tamamlandı!")
-    except Exception as e:
-        logger.error(f"⚠️ [İlk Kontrol] Şef hatası: {e}")
-    
-    logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
-    
-    # Telegram'a başlangıç mesajı gönder (varsa)
-    if telegram:
+    with _PID_LOCK:
+        current_pid = os.getpid()
+        
+        # 🔥 V5.3: PID Guard - Eğer başka bir PID zaten scheduler başlattıysa
+        if _SCHEDULER_OWNER_PID is not None and _SCHEDULER_OWNER_PID != current_pid:
+            logger.info(f"⏭️ [PID Guard] Scheduler zaten PID {_SCHEDULER_OWNER_PID} tarafından başlatıldı")
+            logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (zombie önleme)")
+            return
+        
+        logger.info(f"⏳ [Arka Plan] Sistem servisleri başlatılıyor (PID: {current_pid})...")
+        time.sleep(1)
+        
+        # 1. Firebase'i Başlat (SINGLETON!)
+        firebase_status = init_firebase()
+        if firebase_status:
+            logger.info("🔥 [Firebase] Push notification sistemi aktif!")
+        else:
+            logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
+        
+        # 2. Telegram Monitor'ü Başlat (SINGLETON!)
+        telegram = get_telegram_instance()
+        if telegram:
+            logger.info("📱 [Telegram] Komut sistemi aktif!")
+        else:
+            logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
+        
+        # 3. Scheduler'ı (Zamanlayıcı) Başlat
+        start_scheduler()
+        
+        # 🔥 V5.3: Scheduler başarıyla başlatıldıysa PID'yi kaydet
+        _SCHEDULER_OWNER_PID = current_pid
+        logger.info(f"🔒 [PID Guard] Scheduler owner PID kaydedildi: {current_pid}")
+        
+        # 4. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
+        logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
+        
         try:
-            telegram.send_startup_message()
-        except:
-            pass
+            supervisor_check()
+            logger.info("✅ [İlk Kontrol] Şef kontrolü tamamlandı!")
+        except Exception as e:
+            logger.error(f"⚠️ [İlk Kontrol] Şef hatası: {e}")
+        
+        logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
+        
+        # Telegram'a başlangıç mesajı gönder (varsa)
+        if telegram:
+            try:
+                telegram.send_startup_message()
+            except:
+                pass
 
 # ======================================
 # 🔥 PRODUCTION FIX: Render için thread başlatma
@@ -502,9 +532,9 @@ def emergency_cleanup():
 
 def on_exit():
     """
-    🔥 V5.1: Temiz kapanış (Singleton'ları da temizle)
+    🔥 V5.3: Temiz kapanış (Singleton'ları da temizle)
     """
-    global _firebase_initialized, _telegram_instance
+    global _firebase_initialized, _telegram_instance, _SCHEDULER_OWNER_PID
     
     logger.info("🛑 Uygulama kapatılıyor...")
     stop_scheduler()
@@ -523,6 +553,13 @@ def on_exit():
         if _telegram_instance:
             _telegram_instance = None
             logger.info("📱 [Telegram] Temiz kapanış tamamlandı.")
+    except:
+        pass
+    
+    # PID Guard'ı sıfırla
+    try:
+        _SCHEDULER_OWNER_PID = None
+        logger.info("🔒 [PID Guard] Temizlendi.")
     except:
         pass
     
