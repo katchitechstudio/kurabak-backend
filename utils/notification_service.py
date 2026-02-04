@@ -1,612 +1,271 @@
 """
-Firebase Push Notification Service V4.5 🔥
-=====================================
-✅ Token Yönetimi (Kayıt/Silme)
-✅ Bildirim Gönderme (Tekil/Toplu)
-✅ 500 Token Batch Limiti (Firebase Compliant)
-✅ Özel Bildirim Tipleri (Fiyat Alarmı, Günlük Özet, vb.)
-✅ Hata Yönetimi ve Logging
-✅ GÜNLÜK ÖZET: Öğlen 12:00 otomatik gönderim
-✅ 🔥 GENERATOR PATTERN: RAM dostu token okuma (V4.5)
+Notification Service - Firebase Cloud Messaging V3.0
+====================================================
+✅ FCM Token Management
+✅ Push Notifications
+✅ Daily Summary (V3.0: Bayram/Haber sistemi)
+✅ Batch Sending
+✅ Error Handling
+
+V3.0 Değişiklikler:
+- send_daily_summary() tamamen yenilendi
+- Artık 23 döviz özeti YOK
+- event_manager.get_daily_notification_content() kullanılıyor
+- Bayram varsa bayram, yoksa haber gönderiliyor
 """
+
 import logging
-import json
-from typing import List, Dict, Optional, Generator
-from datetime import datetime
 import firebase_admin
-from firebase_admin import messaging
+from firebase_admin import credentials, messaging
+from typing import List, Dict, Optional
+import os
+
+from utils.cache import get_cache, set_cache
 from config import Config
-from utils.cache import get_cache, set_cache, get_redis_client
 
-logger = logging.getLogger("KuraBak.Notification")
+logger = logging.getLogger(__name__)
 
-# Firebase limit: send_multicast() maksimum 500 token kabul eder
-FCM_BATCH_SIZE = 500
+FIREBASE_INITIALIZED = False
 
-# ======================================
-# TOKEN YÖNETİMİ
-# ======================================
 
-def register_fcm_token(token: str) -> bool:
+def initialize_firebase():
     """
-    Yeni bir FCM token'ı kaydet
+    Firebase Admin SDK'yi başlatır.
+    """
+    global FIREBASE_INITIALIZED
     
-    Args:
-        token: Firebase Cloud Messaging token
-        
-    Returns:
-        bool: Başarılı ise True
-    """
+    if FIREBASE_INITIALIZED:
+        return True
+    
     try:
-        redis_client = get_redis_client()
-        if not redis_client:
-            logger.error("Redis bağlantısı yok!")
+        cred_path = os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json')
+        
+        if not os.path.exists(cred_path):
+            logger.error(f"❌ Firebase credentials dosyası bulunamadı: {cred_path}")
             return False
         
-        # Token'ı Redis Set'ine ekle (otomatik tekil tutar)
-        redis_client.sadd(Config.CACHE_KEYS['fcm_tokens'], token)
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
         
-        logger.info(f"✅ [FCM] Token kaydedildi: {token[:20]}...")
+        FIREBASE_INITIALIZED = True
+        logger.info("✅ Firebase Admin SDK başlatıldı")
         return True
         
     except Exception as e:
-        logger.error(f"❌ [FCM] Token kayıt hatası: {e}")
-        return False
-
-def unregister_fcm_token(token: str) -> bool:
-    """
-    FCM token'ı sil
-    
-    Args:
-        token: Silinecek token
-        
-    Returns:
-        bool: Başarılı ise True
-    """
-    try:
-        redis_client = get_redis_client()
-        if not redis_client:
-            return False
-        
-        redis_client.srem(Config.CACHE_KEYS['fcm_tokens'], token)
-        logger.info(f"🗑️ [FCM] Token silindi: {token[:20]}...")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ [FCM] Token silme hatası: {e}")
+        logger.error(f"❌ Firebase başlatma hatası: {e}")
         return False
 
 
-# ======================================
-# 🔥 V4.5: GENERATOR PATTERN (RAM DOSTU)
-# ======================================
-
-def get_tokens_generator(batch_size: int = 500) -> Generator[List[str], None, None]:
+def get_all_fcm_tokens() -> List[str]:
     """
-    🔥 YENİ: Tokenları Redis'ten parça parça okuyan Generator
-    
-    SMEMBERS sorunu: 100,000 token'ı RAM'e yükler (200-300 MB) → OOM Kill
-    SSCAN çözümü: Parça parça okur, RAM kullanımı sabit kalır
-    
-    Args:
-        batch_size: Her batch'te kaç token (varsayılan 500)
-        
-    Yields:
-        List[str]: Token batch'i
-    """
-    redis_client = get_redis_client()
-    if not redis_client:
-        return
-
-    key = Config.CACHE_KEYS['fcm_tokens']
-    cursor = 0
-    batch = []
-
-    try:
-        while True:
-            # SSCAN ile parça parça oku
-            cursor, data = redis_client.sscan(key, cursor=cursor, count=batch_size)
-            
-            for token in data:
-                # Bytes'tan string'e çevir
-                if isinstance(token, bytes):
-                    token = token.decode('utf-8')
-                batch.append(token)
-
-                # Batch dolduysa yield et ve boşalt
-                if len(batch) >= batch_size:
-                    yield batch
-                    batch = []
-            
-            # Cursor 0 ise tarama tamamlandı
-            if cursor == 0:
-                break
-        
-        # Kalan son parçayı ver
-        if batch:
-            yield batch
-            
-    except Exception as e:
-        logger.error(f"❌ [FCM] Generator hatası: {e}")
-        # Hata durumunda bile kalan batch'i ver
-        if batch:
-            yield batch
-
-
-def get_all_tokens() -> List[str]:
-    """
-    Tüm kayıtlı FCM tokenlarını getir (DEPRECATED - Geriye uyumluluk için)
-    
-    ⚠️ UYARI: Bu fonksiyon RAM dostu değildir!
-    Yeni kod için get_tokens_generator() kullanın.
+    Redis'teki tüm FCM token'ları getirir.
     
     Returns:
         List[str]: Token listesi
     """
     try:
-        redis_client = get_redis_client()
-        if not redis_client:
+        tokens_data = get_cache(Config.CACHE_KEYS['fcm_tokens'])
+        
+        if not tokens_data:
+            logger.warning("⚠️ FCM token bulunamadı")
             return []
         
-        tokens = redis_client.smembers(Config.CACHE_KEYS['fcm_tokens'])
-        return [token.decode('utf-8') if isinstance(token, bytes) else token for token in tokens]
+        tokens = list(tokens_data.keys())
+        logger.info(f"📱 {len(tokens)} FCM token bulundu")
+        return tokens
         
     except Exception as e:
-        logger.error(f"❌ [FCM] Token listesi hatası: {e}")
+        logger.error(f"❌ FCM token getirme hatası: {e}")
         return []
 
-
-def get_token_count() -> int:
-    """
-    Kayıtlı token sayısını getir
-    
-    Returns:
-        int: Token sayısı
-    """
-    try:
-        redis_client = get_redis_client()
-        if not redis_client:
-            return 0
-        
-        return redis_client.scard(Config.CACHE_KEYS['fcm_tokens'])
-        
-    except Exception as e:
-        logger.error(f"❌ [FCM] Token sayısı hatası: {e}")
-        return 0
-
-# ======================================
-# BİLDİRİM GÖNDERME (BATCH SUPPORT)
-# ======================================
 
 def send_notification(
     tokens: List[str],
     title: str,
     body: str,
-    data: Optional[Dict] = None,
-    priority: str = "high",
-    sound: str = "default"
-) -> Dict:
+    data: Optional[Dict[str, str]] = None
+) -> Dict[str, int]:
     """
-    FCM bildirimi gönder (500'lük batch'lere otomatik böler)
+    Birden fazla cihaza push notification gönderir.
     
     Args:
-        tokens: Hedef cihaz tokenları
+        tokens: FCM token listesi
         title: Bildirim başlığı
-        body: Bildirim metni
-        data: Ek veri (dict)
-        priority: Öncelik (high/normal)
-        sound: Ses (default/silent)
-        
-    Returns:
-        Dict: Sonuç bilgisi
-    """
-    try:
-        # Firebase başlatılmış mı kontrol et
-        if not firebase_admin._apps:
-            logger.warning("⚠️ [FCM] Firebase başlatılmamış, bildirim gönderilemedi!")
-            return {"success": False, "error": "Firebase not initialized"}
-        
-        if not tokens:
-            logger.warning("⚠️ [FCM] Token bulunamadı!")
-            return {"success": False, "error": "No tokens"}
-        
-        # Toplam sonuç için sayaçlar
-        total_success = 0
-        total_failure = 0
-        failed_tokens_all = []
-        
-        # 🔥 BATCH İŞLEMİ: 500'lük parçalara böl
-        total_tokens = len(tokens)
-        batch_count = (total_tokens + FCM_BATCH_SIZE - 1) // FCM_BATCH_SIZE  # Yukarı yuvarlama
-        
-        logger.info(f"📦 [FCM] {total_tokens} token, {batch_count} batch'e bölünüyor...")
-        
-        for i in range(0, total_tokens, FCM_BATCH_SIZE):
-            batch_tokens = tokens[i:i + FCM_BATCH_SIZE]
-            batch_num = (i // FCM_BATCH_SIZE) + 1
-            
-            logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
-            
-            # Bildirim mesajını hazırla
-            notification = messaging.Notification(
-                title=title,
-                body=body
-            )
-            
-            # Android ayarları
-            android_config = messaging.AndroidConfig(
-                priority=priority,
-                notification=messaging.AndroidNotification(
-                    sound=sound,
-                    channel_id='kurabak_default'
-                )
-            )
-            
-            # MulticastMessage oluştur
-            message = messaging.MulticastMessage(
-                notification=notification,
-                tokens=batch_tokens,
-                data=data or {},
-                android=android_config
-            )
-            
-            # Gönder
-            response = messaging.send_multicast(message)
-            
-            # Sayaçları güncelle
-            total_success += response.success_count
-            total_failure += response.failure_count
-            
-            # Başarısız tokenları topla
-            if response.failure_count > 0:
-                failed_tokens = [batch_tokens[idx] for idx, resp in enumerate(response.responses) if not resp.success]
-                failed_tokens_all.extend(failed_tokens)
-            
-            logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
-        
-        # Tüm başarısız tokenları temizle
-        if failed_tokens_all:
-            logger.warning(f"🗑️ [FCM] {len(failed_tokens_all)} başarısız token temizleniyor...")
-            for token in failed_tokens_all:
-                unregister_fcm_token(token)
-        
-        # Sonuç
-        result = {
-            "success": True,
-            "success_count": total_success,
-            "failure_count": total_failure,
-            "total_tokens": total_tokens,
-            "batch_count": batch_count,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        logger.info(f"🎉 [FCM] Gönderim tamamlandı!")
-        logger.info(f"   📊 Toplam: {total_tokens} token")
-        logger.info(f"   ✅ Başarılı: {total_success}")
-        logger.info(f"   ❌ Başarısız: {total_failure}")
-        logger.info(f"   📝 Başlık: {title}")
-        logger.info(f"   📄 Mesaj: {body[:50]}...")
-        
-        # Son bildirim zamanını kaydet
-        set_cache(Config.CACHE_KEYS['fcm_last_notification'], str(datetime.now().timestamp()), ttl=86400)
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"❌ [FCM] Bildirim gönderme hatası: {e}")
-        return {"success": False, "error": str(e)}
-
-
-def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
-    """
-    TÜM kayıtlı cihazlara bildirim gönder (RAM dostu - Generator ile)
+        body: Bildirim içeriği
+        data: Ek veri (opsiyonel)
     
-    🔥 V4.5: Generator pattern kullanır, RAM şişmesi olmaz
-    
-    Args:
-        title: Bildirim başlığı
-        body: Bildirim metni
-        data: Ek veri
-        
     Returns:
-        Dict: Sonuç
+        Dict: {"success": int, "failed": int}
     """
-    try:
-        logger.info("📢 [FCM] Toplu bildirim gönderiliyor (Generator modu)...")
-        
-        total_success = 0
-        total_failure = 0
-        total_tokens = 0
-        
-        # 🔥 Generator'dan 500'lük paketler halinde al
-        token_generator = get_tokens_generator(batch_size=FCM_BATCH_SIZE)
-        
-        # Bildirim mesajını hazırla
-        notification = messaging.Notification(
+    if not initialize_firebase():
+        return {"success": 0, "failed": len(tokens)}
+    
+    if not tokens:
+        logger.warning("⚠️ Gönderilecek token yok")
+        return {"success": 0, "failed": 0}
+    
+    success_count = 0
+    failed_count = 0
+    
+    message = messaging.MulticastMessage(
+        notification=messaging.Notification(
             title=title,
             body=body
+        ),
+        data=data or {},
+        tokens=tokens
+    )
+    
+    try:
+        response = messaging.send_multicast(message)
+        success_count = response.success_count
+        failed_count = response.failure_count
+        
+        logger.info(
+            f"📤 Push gönderildi: "
+            f"✅ {success_count} başarılı, "
+            f"❌ {failed_count} başarısız"
         )
         
-        # Android ayarları
-        android_config = messaging.AndroidConfig(
-            priority="high",
-            notification=messaging.AndroidNotification(
-                sound="default",
-                channel_id='kurabak_default'
-            )
-        )
+        if response.failure_count > 0:
+            for idx, resp in enumerate(response.responses):
+                if not resp.success:
+                    logger.warning(f"   Token {idx}: {resp.exception}")
         
-        batch_num = 0
-        for batch_tokens in token_generator:
-            batch_num += 1
-            
-            if not batch_tokens:
-                continue
-            
-            logger.info(f"📤 [FCM] Batch {batch_num} gönderiliyor ({len(batch_tokens)} token)...")
-            
-            try:
-                # MulticastMessage oluştur
-                message = messaging.MulticastMessage(
-                    notification=notification,
-                    tokens=batch_tokens,
-                    data=data or {},
-                    android=android_config
-                )
-                
-                # Gönder
-                response = messaging.send_multicast(message)
-                
-                # Sayaçları güncelle
-                total_success += response.success_count
-                total_failure += response.failure_count
-                total_tokens += len(batch_tokens)
-                
-                # Başarısız tokenları temizle
-                if response.failure_count > 0:
-                    failed_tokens = [batch_tokens[idx] for idx, resp in enumerate(response.responses) if not resp.success]
-                    for token in failed_tokens:
-                        unregister_fcm_token(token)
-                
-                logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
-                
-            except Exception as batch_err:
-                logger.error(f"❌ [FCM] Batch {batch_num} hatası: {batch_err}")
-                total_failure += len(batch_tokens)
-                total_tokens += len(batch_tokens)
-        
-        if total_tokens == 0:
-            logger.warning("⚠️ [FCM] Hiç kayıtlı cihaz yok!")
-            return {"success": False, "error": "No registered devices"}
-        
-        # Sonuç
-        result = {
-            "success": True,
-            "total_sent": total_tokens,
-            "success_count": total_success,
-            "failure_count": total_failure,
-            "batch_count": batch_num,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        logger.info(f"🏁 [FCM] Toplu gönderim tamamlandı!")
-        logger.info(f"   📊 Toplam: {total_tokens} token")
-        logger.info(f"   ✅ Başarılı: {total_success}")
-        logger.info(f"   ❌ Başarısız: {total_failure}")
-        
-        # Son bildirim zamanını kaydet
-        set_cache(Config.CACHE_KEYS['fcm_last_notification'], str(datetime.now().timestamp()), ttl=86400)
-        
-        return result
+        return {"success": success_count, "failed": failed_count}
         
     except Exception as e:
-        logger.error(f"❌ [FCM] Toplu gönderim hatası: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"❌ Push gönderme hatası: {e}")
+        return {"success": 0, "failed": len(tokens)}
 
-# ======================================
-# ÖZEL BİLDİRİM TİPLERİ
-# ======================================
 
-def send_price_alert(currency_code: str, price: float, change_percent: float) -> Dict:
+def send_daily_summary() -> Dict[str, any]:
     """
-    Fiyat alarm bildirimi
+    14:00'da çalışır. Bayram/Haber bildirimi gönderir.
     
-    Args:
-        currency_code: Döviz kodu (USD, EUR, vb.)
-        price: Güncel fiyat
-        change_percent: Değişim yüzdesi
-        
-    Returns:
-        Dict: Sonuç
-    """
-    # Emoji seç
-    emoji = "🔥" if abs(change_percent) >= 2.0 else "📊"
-    direction = "📈" if change_percent > 0 else "📉"
-    
-    title = f"{emoji} {currency_code} Fiyat Uyarısı!"
-    body = f"{direction} {price:.4f} TL ({change_percent:+.2f}%)"
-    
-    data = {
-        "type": "price_alert",
-        "currency": currency_code,
-        "price": str(price),
-        "change": str(change_percent)
-    }
-    
-    return send_to_all(title, body, data)
-
-def send_daily_summary() -> Dict:
-    """
-    🔔 GÜNLÜK ÖZET BİLDİRİMİ (Öğlen 12:00)
-    
-    Canlı verilerden en çok yükselen/düşen varlıkları alır ve bildirim gönderir.
+    ÖNCELİK SIRASI:
+    1. Bayram varsa → Bayram mesajı
+    2. Bayram yoksa → Günün haberi
+    3. İkisi de yoksa → Bildirim gönderilmez
     
     Returns:
         Dict: {
-            'success': bool,
-            'recipient_count': int,
-            'winner': dict,
-            'loser': dict,
-            'error': str (opsiyonel)
+            "sent": bool,
+            "type": "bayram" | "news" | None,
+            "success": int,
+            "failed": int,
+            "message": str
         }
     """
     try:
-        logger.info("📊 [PUSH] Günlük özet hazırlanıyor...")
+        logger.info("🔔 [DAILY SUMMARY] Günlük bildirim hazırlanıyor...")
         
-        # Canlı verilerden currencies'i al (summary içinde)
-        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
+        from utils.event_manager import get_daily_notification_content
         
-        if not currencies_data:
-            logger.warning("⚠️ [PUSH] Canlı veri bulunamadı!")
+        notification_content = get_daily_notification_content()
+        
+        if not notification_content:
+            logger.warning("⚠️ [DAILY SUMMARY] Gönderilecek içerik yok (Ne bayram ne haber)")
             return {
-                'success': False,
-                'error': 'No live data available',
-                'recipient_count': 0
+                "sent": False,
+                "type": None,
+                "success": 0,
+                "failed": 0,
+                "message": "Gönderilecek içerik yok"
             }
         
-        # Summary'i al
-        summary = currencies_data.get('summary', {})
+        tokens = get_all_fcm_tokens()
         
-        if not summary:
-            logger.warning("⚠️ [PUSH] Özet verisi bulunamadı!")
+        if not tokens:
+            logger.warning("⚠️ [DAILY SUMMARY] FCM token bulunamadı")
             return {
-                'success': False,
-                'error': 'No summary data',
-                'recipient_count': 0
+                "sent": False,
+                "type": notification_content['type'],
+                "success": 0,
+                "failed": 0,
+                "message": "FCM token yok"
             }
         
-        # En çok yükselen
-        winner = summary.get('winner', {})
-        winner_name = winner.get('name', 'N/A')
-        winner_code = winner.get('code', 'N/A')
-        winner_change = winner.get('change_percent', 0)
+        result = send_notification(
+            tokens=tokens,
+            title=notification_content['title'],
+            body=notification_content['body'],
+            data={
+                "type": "daily_summary",
+                "content_type": notification_content['type']
+            }
+        )
         
-        # En çok düşen
-        loser = summary.get('loser', {})
-        loser_name = loser.get('name', 'N/A')
-        loser_code = loser.get('code', 'N/A')
-        loser_change = loser.get('change_percent', 0)
+        logger.info(
+            f"✅ [DAILY SUMMARY] {notification_content['type'].upper()} bildirimi gönderildi: "
+            f"{result['success']} başarılı, {result['failed']} başarısız"
+        )
         
-        # Bildirim metni oluştur
-        title = "📊 Bugünün Özeti"
-        
-        # Body formatı
-        body_parts = []
-        
-        if winner:
-            body_parts.append(f"📈 En çok yükselen: {winner_name} ({winner_change:+.2f}%)")
-        
-        if loser:
-            body_parts.append(f"📉 En çok düşen: {loser_name} ({loser_change:+.2f}%)")
-        
-        if not body_parts:
-            body = "Bugün piyasalar sakin."
-        else:
-            body = "\n".join(body_parts)
-        
-        # Data payload
-        data = {
-            "type": "daily_summary",
-            "winner_code": winner_code,
-            "winner_change": str(winner_change),
-            "loser_code": loser_code,
-            "loser_change": str(loser_change),
-            "timestamp": str(datetime.now().timestamp())
+        return {
+            "sent": True,
+            "type": notification_content['type'],
+            "success": result['success'],
+            "failed": result['failed'],
+            "message": f"{notification_content['type']} bildirimi gönderildi"
         }
-        
-        # Gönder
-        result = send_to_all(title, body, data)
-        
-        # Sonuç bilgisi
-        if result.get('success'):
-            recipient_count = result.get('success_count', 0)
-            logger.info(f"✅ [PUSH] Günlük özet gönderildi ({recipient_count} kullanıcı)")
-            
-            return {
-                'success': True,
-                'recipient_count': recipient_count,
-                'winner': winner,
-                'loser': loser,
-                'title': title,
-                'body': body
-            }
-        else:
-            logger.error(f"❌ [PUSH] Gönderim başarısız: {result.get('error')}")
-            return {
-                'success': False,
-                'error': result.get('error'),
-                'recipient_count': 0
-            }
         
     except Exception as e:
-        logger.error(f"❌ [PUSH] Günlük özet hatası: {e}")
+        logger.error(f"❌ [DAILY SUMMARY] Hata: {e}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
+        
         return {
-            'success': False,
-            'error': str(e),
-            'recipient_count': 0
+            "sent": False,
+            "type": None,
+            "success": 0,
+            "failed": 0,
+            "message": f"Hata: {str(e)}"
         }
 
-def send_market_alert(event_title: str, event_description: str) -> Dict:
+
+def save_fcm_token(user_id: str, token: str) -> bool:
     """
-    Piyasa/Takvim etkinliği bildirimi
+    Kullanıcının FCM token'ını kaydeder.
     
     Args:
-        event_title: Etkinlik başlığı
-        event_description: Açıklama
-        
+        user_id: Kullanıcı ID
+        token: FCM token
+    
     Returns:
-        Dict: Sonuç
+        bool: Başarılı mı?
     """
-    title = f"🗓️ {event_title}"
-    body = event_description
-    
-    data = {
-        "type": "market_event",
-        "title": event_title,
-        "description": event_description
-    }
-    
-    return send_to_all(title, body, data)
+    try:
+        tokens_data = get_cache(Config.CACHE_KEYS['fcm_tokens']) or {}
+        tokens_data[token] = {
+            "user_id": user_id,
+            "registered_at": str(datetime.now())
+        }
+        set_cache(Config.CACHE_KEYS['fcm_tokens'], tokens_data)
+        logger.info(f"✅ FCM token kaydedildi: {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ FCM token kaydetme hatası: {e}")
+        return False
 
-def send_system_notification(message: str, is_critical: bool = False) -> Dict:
+
+def remove_fcm_token(token: str) -> bool:
     """
-    Sistem bildirimi (bakım, güncelleme, vb.)
+    FCM token'ı siler.
     
     Args:
-        message: Bildirim mesajı
-        is_critical: Kritik bildirim mi?
-        
-    Returns:
-        Dict: Sonuç
-    """
-    emoji = "🚨" if is_critical else "ℹ️"
-    title = f"{emoji} Sistem Bildirimi"
-    body = message
-    
-    data = {
-        "type": "system_notification",
-        "is_critical": str(is_critical)
-    }
-    
-    return send_to_all(title, body, data)
-
-# ======================================
-# TEST FONKSİYONU
-# ======================================
-
-def send_test_notification() -> Dict:
-    """
-    Test bildirimi gönder
+        token: FCM token
     
     Returns:
-        Dict: Sonuç
+        bool: Başarılı mı?
     """
-    title = "🔔 KuraBak Test Bildirimi"
-    body = f"Bildirim sistemi çalışıyor! {datetime.now().strftime('%H:%M:%S')}"
-    
-    data = {
-        "type": "test",
-        "timestamp": str(datetime.now().timestamp())
-    }
-    
-    return send_to_all(title, body, data)
+    try:
+        tokens_data = get_cache(Config.CACHE_KEYS['fcm_tokens']) or {}
+        if token in tokens_data:
+            del tokens_data[token]
+            set_cache(Config.CACHE_KEYS['fcm_tokens'], tokens_data)
+            logger.info(f"✅ FCM token silindi: {token[:20]}...")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"❌ FCM token silme hatası: {e}")
+        return False
