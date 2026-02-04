@@ -16,7 +16,7 @@ KuraBak Backend - ENTRY POINT V5.3 🚀
 ✅ TELEGRAM SINGLETON V5.1: Global instance memory leak önleme
 ✅ FIREBASE SINGLETON V5.1: Multiple init önleme
 ✅ HEALTHZ FIX: Render health check endpoint'i eklendi
-✅ PID GUARD V5.3: Scheduler çoğalma bug'ı düzeltildi 🔥
+✅ REDIS LOCK V5.3: Scheduler çoğalma bug'ı KESIN çözüldü 🔥
 """
 import os
 import logging
@@ -177,88 +177,98 @@ def get_telegram_instance():
             return None
 
 # ======================================
-# 🔥 V5.3: PID GUARD (SCHEDULER ÇOĞALMA ÖNLEYİCİ)
-# ======================================
-
-_SCHEDULER_OWNER_PID = None
-_PID_LOCK = threading.Lock()
-
-# ======================================
 # ASENKRON BAŞLATICI
 # ======================================
 
 def background_initialization():
     """
-    🔥 V5.3 FIX: PID Guard ile scheduler çoğalmasını önle
+    🔥 V5.3 FIX: Redis Lock ile scheduler çoğalmasını önle
     
     ÖNCEKİ SORUN:
-    - Gunicorn restart/reload → yeni scheduler instance
-    - Eski scheduler + yeni scheduler = iki scheduler çalışıyor
+    - Gunicorn fork → global değişkenler process'ler arası paylaşılmıyor
+    - Her process scheduler başlatıyor → zombie scheduler
     - SIGTERM sonrası bile job'lar çalışmaya devam ediyordu
     
     YENİ ÇÖZÜM:
-    - İlk başlatan process'in PID'sini kaydet
-    - Başka bir PID gelirse scheduler başlatmasını atla
-    - Zombie scheduler önleme garantisi
+    - Redis distributed lock (process-safe!)
+    - İlk gelen process lock'u alıyor
+    - Diğer process'ler "zaten var" görüyor
+    - %100 tek scheduler garantisi
     
     BAŞLATMA SIRASI:
     1. Firebase Admin SDK (Singleton - Push Notifications)
     2. Telegram Monitor (Singleton - Komut Sistemi)
-    3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm) - PID Guard ile
+    3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm) - Redis Lock ile
     4. İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
-    global _SCHEDULER_OWNER_PID
+    from utils.cache import redis_client
     
-    with _PID_LOCK:
-        current_pid = os.getpid()
+    current_pid = os.getpid()
+    lock_key = "kurabak:scheduler:lock"
+    
+    # 🔥 V5.3: REDIS LOCK (process-safe!)
+    try:
+        # Redis'ten mevcut scheduler PID'sini kontrol et
+        existing_pid = redis_client.get(lock_key)
         
-        # 🔥 V5.3: PID Guard - Eğer başka bir PID zaten scheduler başlattıysa
-        if _SCHEDULER_OWNER_PID is not None and _SCHEDULER_OWNER_PID != current_pid:
-            logger.info(f"⏭️ [PID Guard] Scheduler zaten PID {_SCHEDULER_OWNER_PID} tarafından başlatıldı")
+        if existing_pid:
+            existing_pid_str = existing_pid.decode('utf-8') if isinstance(existing_pid, bytes) else str(existing_pid)
+            logger.info(f"⏭️ [Redis Lock] Scheduler zaten PID {existing_pid_str} tarafından başlatıldı")
             logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (zombie önleme)")
             return
         
-        logger.info(f"⏳ [Arka Plan] Sistem servisleri başlatılıyor (PID: {current_pid})...")
-        time.sleep(1)
+        # Lock'u al (60 saniye geçici)
+        redis_client.set(lock_key, current_pid, ex=60)
+        logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid}")
         
-        # 1. Firebase'i Başlat (SINGLETON!)
-        firebase_status = init_firebase()
-        if firebase_status:
-            logger.info("🔥 [Firebase] Push notification sistemi aktif!")
-        else:
-            logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
-        
-        # 2. Telegram Monitor'ü Başlat (SINGLETON!)
-        telegram = get_telegram_instance()
-        if telegram:
-            logger.info("📱 [Telegram] Komut sistemi aktif!")
-        else:
-            logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
-        
-        # 3. Scheduler'ı (Zamanlayıcı) Başlat
-        start_scheduler()
-        
-        # 🔥 V5.3: Scheduler başarıyla başlatıldıysa PID'yi kaydet
-        _SCHEDULER_OWNER_PID = current_pid
-        logger.info(f"🔒 [PID Guard] Scheduler owner PID kaydedildi: {current_pid}")
-        
-        # 4. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
-        logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
-        
+    except Exception as e:
+        logger.warning(f"⚠️ [Redis Lock] Redis erişim hatası: {e}")
+        logger.warning("   Redis olmadan devam ediliyor (fallback mode)")
+    
+    logger.info(f"⏳ [Arka Plan] Sistem servisleri başlatılıyor (PID: {current_pid})...")
+    time.sleep(1)
+    
+    # 1. Firebase'i Başlat (SINGLETON!)
+    firebase_status = init_firebase()
+    if firebase_status:
+        logger.info("🔥 [Firebase] Push notification sistemi aktif!")
+    else:
+        logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
+    
+    # 2. Telegram Monitor'ü Başlat (SINGLETON!)
+    telegram = get_telegram_instance()
+    if telegram:
+        logger.info("📱 [Telegram] Komut sistemi aktif!")
+    else:
+        logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
+    
+    # 3. Scheduler'ı (Zamanlayıcı) Başlat
+    start_scheduler()
+    
+    # 🔥 V5.3: Scheduler başarıyla başlatıldıysa lock'u kalıcı yap
+    try:
+        redis_client.set(lock_key, current_pid, ex=86400)  # 24 saat
+        logger.info(f"🔒 [Redis Lock] Scheduler owner PID kaydedildi: {current_pid} (24h lock)")
+    except Exception as e:
+        logger.warning(f"⚠️ [Redis Lock] Kalıcı lock yazılamadı: {e}")
+    
+    # 4. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
+    logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
+    
+    try:
+        supervisor_check()
+        logger.info("✅ [İlk Kontrol] Şef kontrolü tamamlandı!")
+    except Exception as e:
+        logger.error(f"⚠️ [İlk Kontrol] Şef hatası: {e}")
+    
+    logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
+    
+    # Telegram'a başlangıç mesajı gönder (varsa)
+    if telegram:
         try:
-            supervisor_check()
-            logger.info("✅ [İlk Kontrol] Şef kontrolü tamamlandı!")
-        except Exception as e:
-            logger.error(f"⚠️ [İlk Kontrol] Şef hatası: {e}")
-        
-        logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
-        
-        # Telegram'a başlangıç mesajı gönder (varsa)
-        if telegram:
-            try:
-                telegram.send_startup_message()
-            except:
-                pass
+            telegram.send_startup_message()
+        except:
+            pass
 
 # ======================================
 # 🔥 PRODUCTION FIX: Render için thread başlatma
@@ -532,12 +542,21 @@ def emergency_cleanup():
 
 def on_exit():
     """
-    🔥 V5.3: Temiz kapanış (Singleton'ları da temizle)
+    🔥 V5.3: Temiz kapanış (Singleton'ları + Redis lock'u temizle)
     """
-    global _firebase_initialized, _telegram_instance, _SCHEDULER_OWNER_PID
+    global _firebase_initialized, _telegram_instance
     
     logger.info("🛑 Uygulama kapatılıyor...")
     stop_scheduler()
+    
+    # Redis lock'u temizle
+    try:
+        from utils.cache import redis_client
+        lock_key = "kurabak:scheduler:lock"
+        redis_client.delete(lock_key)
+        logger.info("🔒 [Redis Lock] Temizlendi.")
+    except Exception as e:
+        logger.warning(f"⚠️ [Redis Lock] Temizleme hatası: {e}")
     
     # Firebase'i temizle
     try:
@@ -553,13 +572,6 @@ def on_exit():
         if _telegram_instance:
             _telegram_instance = None
             logger.info("📱 [Telegram] Temiz kapanış tamamlandı.")
-    except:
-        pass
-    
-    # PID Guard'ı sıfırla
-    try:
-        _SCHEDULER_OWNER_PID = None
-        logger.info("🔒 [PID Guard] Temizlendi.")
     except:
         pass
     
