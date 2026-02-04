@@ -1,5 +1,5 @@
 """
-Maintenance Service - PRODUCTION READY V5.1 🚧
+Maintenance Service - PRODUCTION READY V5.2 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
 ✅ API V5: Tek kaynak sistemi
@@ -14,15 +14,17 @@ Maintenance Service - PRODUCTION READY V5.1 🚧
 ✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:00 + 12:00) 📰
 ✅ JOB ERROR LISTENER: Job crash'lerde Telegram bildirimi (V5.1)
 ✅ JOB OVERLAP PROTECTION: Çift çalışma önleme (V5.1)
+✅ SCHEDULER SINGLETON LOCK: Thread-safe başlatma (V5.2) 🔥
 """
 
 import logging
 import time
+import threading  # 🔥 V5.2: Thread-safe lock için
 from typing import Optional, Dict, Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.events import EVENT_JOB_ERROR  # 🔥 V5.1: Error listener için
+from apscheduler.events import EVENT_JOB_ERROR
 
 from utils.cache import get_cache, set_cache, delete_cache
 from config import Config
@@ -30,10 +32,11 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 # ======================================
-# SCHEDULER (GLOBAL)
+# 🔥 V5.2: SCHEDULER (GLOBAL + THREAD-SAFE LOCK)
 # ======================================
 
 scheduler = None
+_scheduler_lock = threading.Lock()  # 🔥 V5.2: Thread-safe başlatma için
 
 # ======================================
 # BAKIM MODU YÖNETİMİ
@@ -81,7 +84,6 @@ def activate_maintenance(message: Optional[str] = None) -> bool:
             'activated_at': time.time()
         }
         
-        # Süresiz kaydet (ttl=0)
         set_cache(Config.CACHE_KEYS['maintenance'], maintenance_data, ttl=0)
         
         logger.info(f"🚧 Bakım modu aktif edildi: {banner_msg}")
@@ -161,17 +163,14 @@ def get_current_banner() -> Optional[str]:
     Returns:
         str or None: Banner mesajı
     """
-    # 1. Bakım modu kontrolü (öncelik #1)
     maintenance = check_maintenance_status()
     if maintenance['is_active']:
         return maintenance['banner_message']
     
-    # 2. Manuel banner kontrolü
     banner = get_cache(Config.CACHE_KEYS['banner'])
     if banner:
         return banner
     
-    # 3. Banner yok
     return None
 
 
@@ -190,7 +189,6 @@ def fetch_all_data_safe() -> bool:
         active_source = get_cache(Config.CACHE_KEYS['active_source']) or "v5"
         logger.info(f"🔄 Acil veri çekimi başlatılıyor ({active_source.upper()})...")
         
-        # financial_service'den veri çek
         from services.financial_service import update_financial_data
         
         success = update_financial_data()
@@ -237,13 +235,11 @@ def job_error_listener(event):
         job_id = event.job_id
         exception = event.exception
         
-        # Detaylı log
         logger.critical(f"💣 SCHEDULER JOB HATASI!")
         logger.critical(f"   Job ID: {job_id}")
         logger.critical(f"   Hata: {exception}")
         logger.critical(f"   Hata Tipi: {type(exception).__name__}")
         
-        # Telegram'a bildir
         try:
             from utils.telegram_monitor import get_telegram_monitor
             
@@ -280,7 +276,6 @@ def worker_job():
         success = update_financial_data()
         
         if success:
-            # Son çalışma zamanını kaydet
             set_cache(Config.CACHE_KEYS['last_worker_run'], str(time.time()), ttl=0)
             logger.info("✅ [WORKER] Veri başarıyla güncellendi")
         else:
@@ -288,7 +283,7 @@ def worker_job():
             
     except Exception as e:
         logger.error(f"❌ [WORKER] Hata: {e}")
-        raise  # 🔥 Error listener'ın yakalaması için raise et
+        raise
 
 
 def snapshot_job():
@@ -320,14 +315,12 @@ def supervisor_check():
     try:
         logger.info("👮 [ŞEF] Sistem kontrolü başlıyor...")
         
-        # 1. Snapshot kontrolü
         snapshot_exists = bool(get_cache(Config.CACHE_KEYS['yesterday_prices']))
         if not snapshot_exists:
             logger.warning("⚠️ [ŞEF] Snapshot kayıp! Acil snapshot alınıyor...")
             from services.financial_service import take_snapshot
             take_snapshot()
         
-        # 2. Worker kontrolü
         last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
         if last_worker_run:
             time_diff = time.time() - float(last_worker_run)
@@ -393,7 +386,6 @@ def push_notification_daily():
         
         from utils.notification_service import send_daily_summary
         
-        # Günlük özeti gönder
         result = send_daily_summary()
         
         if result.get('success'):
@@ -416,10 +408,8 @@ def cleanup_old_backups():
         
         from utils.cache import cleanup_old_disk_backups, get_disk_backup_stats
         
-        # Önceki durum
         before_stats = get_disk_backup_stats()
         
-        # Temizlik yap
         result = cleanup_old_disk_backups(max_age_days=Config.CLEANUP_BACKUP_AGE_DAYS)
         
         deleted_count = result.get('deleted_count', 0)
@@ -432,7 +422,6 @@ def cleanup_old_backups():
         else:
             logger.info("✅ [CLEANUP] Silinecek eski backup bulunamadı")
         
-        # Son temizlik zamanını kaydet
         set_cache(Config.CACHE_KEYS['cleanup_last_run'], str(time.time()), ttl=0)
         
     except Exception as e:
@@ -450,7 +439,6 @@ def alarm_check_job():
         
         from services.alarm_service import check_all_alarms
         
-        # Tüm alarmları kontrol et
         result = check_all_alarms()
         
         total = result.get('total_alarms', 0)
@@ -469,7 +457,6 @@ def alarm_check_job():
                 f"{failed} hata ({duration_ms:.2f}ms)"
             )
         
-        # Son kontrol zamanını kaydet
         set_cache(Config.CACHE_KEYS['alarm_last_check'], str(time.time()), ttl=0)
         
     except Exception as e:
@@ -524,182 +511,192 @@ def news_evening_shift_job():
 
 
 # ======================================
-# 🔥 V5.1: SCHEDULER YÖNETİMİ
+# 🔥 V5.2: SCHEDULER YÖNETİMİ (THREAD-SAFE LOCK EKLENDİ!)
 # ======================================
 
 def start_scheduler():
     """
-    🔥 V5.1: Zamanlayıcıyı başlat ve tüm job'ları ekle
+    🔥 V5.2: Zamanlayıcıyı başlat ve tüm job'ları ekle
     
-    YENİ:
-    - Job Error Listener eklendi
+    V5.2 YENİ:
+    - Thread-safe lock eklendi (_scheduler_lock)
+    - Aynı anda birden fazla thread başlatamaz
+    - Memory leak önleme garantisi
+    
+    V5.1 ÖZELLİKLERİ:
+    - Job Error Listener
     - Her job için max_instances=1 (overlap önleme)
     - Her job için coalesce=True (missed runs birleştir)
     - Worker interval 60 saniye (1 dakika)
     """
     global scheduler
     
-    if scheduler and scheduler.running:
-        logger.warning("⚠️ Scheduler zaten çalışıyor!")
-        return
-    
-    scheduler = BackgroundScheduler(timezone=Config.DEFAULT_TIMEZONE)
-    
-    # 🔥 V5.1: ERROR LISTENER EKLE (Scheduler'ı start'dan ÖNCE!)
-    scheduler.add_listener(job_error_listener, EVENT_JOB_ERROR)
-    logger.info("✅ Job Error Listener eklendi")
-    
-    # 👷 WORKER: 🔥 V5.1: Her 1 dakikada bir (60 saniye)
-    worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)  # Default: 60 saniye
-    
-    scheduler.add_job(
-        worker_job,
-        trigger=IntervalTrigger(seconds=worker_interval),
-        id='worker',
-        name='Worker (Veri Güncelleyici)',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1: Overlap önleme
-        coalesce=True     # 🔥 V5.1: Missed runs birleştir
-    )
-    
-    # 📸 SNAPSHOT: Her gece 00:00:05
-    scheduler.add_job(
-        snapshot_job,
-        trigger=CronTrigger(
-            hour=Config.SNAPSHOT_HOUR,
-            minute=Config.SNAPSHOT_MINUTE,
-            second=Config.SNAPSHOT_SECOND
-        ),
-        id='snapshot',
-        name='Snapshot (Referans Fiyatları)',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 👮 ŞEF: Her 10 dakikada bir
-    scheduler.add_job(
-        supervisor_check,
-        trigger=IntervalTrigger(minutes=Config.SUPERVISOR_INTERVAL),
-        id='supervisor',
-        name='Şef (Sistem Kontrolü)',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 🗓️ TAKVİM: Her gün 08:00
-    scheduler.add_job(
-        calendar_check,
-        trigger=CronTrigger(
-            hour=Config.CALENDAR_CHECK_HOUR,
-            minute=Config.CALENDAR_CHECK_MINUTE
-        ),
-        id='calendar',
-        name='Takvim (Etkinlik Kontrolü)',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 📊 GÜNLÜK RAPOR: Her gün 09:00
-    scheduler.add_job(
-        daily_report,
-        trigger=CronTrigger(hour=Config.TELEGRAM_DAILY_REPORT_HOUR),
-        id='daily_report',
-        name='Günlük Rapor',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 🔔 PUSH NOTIFICATION: Her gün 12:00
-    scheduler.add_job(
-        push_notification_daily,
-        trigger=CronTrigger(
-            hour=Config.PUSH_NOTIFICATION_DAILY_HOUR,
-            minute=Config.PUSH_NOTIFICATION_DAILY_MINUTE
-        ),
-        id='push_notification',
-        name='Push Notification (Günlük Özet)',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 🧹 CLEANUP: Her gün 03:00 (Gece saatlerinde)
-    scheduler.add_job(
-        cleanup_old_backups,
-        trigger=CronTrigger(hour=3, minute=0),
-        id='cleanup',
-        name='Cleanup (Eski Backup Temizliği)',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 🔔 ALARM: Her 5-15 dakikada bir (Config'den okunuyor)
-    alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)  # Default: 10 dakika
-    scheduler.add_job(
-        alarm_check_job,
-        trigger=IntervalTrigger(minutes=alarm_interval_minutes),
-        id='alarm_check',
-        name='Alarm Check (Fiyat Alarmları)',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 🌅 SABAH VARDİYASI: Her gece 00:00
-    scheduler.add_job(
-        news_morning_shift_job,
-        trigger=CronTrigger(hour=0, minute=0),
-        id='news_morning',
-        name='Haber Sabah Vardiyası',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # 🌆 AKŞAM VARDİYASI: Her gün 12:00
-    scheduler.add_job(
-        news_evening_shift_job,
-        trigger=CronTrigger(hour=12, minute=0),
-        id='news_evening',
-        name='Haber Akşam Vardiyası',
-        replace_existing=True,
-        max_instances=1,  # 🔥 V5.1
-        coalesce=True     # 🔥 V5.1
-    )
-    
-    # Başlat
-    scheduler.start()
-    logger.info("✅ Scheduler başlatıldı! (V5.1 - Error Listener + Overlap Protection)")
-    logger.info(f"   👷 Worker: Her {worker_interval} saniyede (1 dakika)")
-    logger.info("   📸 Snapshot: Her gece 00:00:05")
-    logger.info("   👮 Şef: Her 10 dakikada")
-    logger.info("   🗓️ Takvim: Her gün 08:00")
-    logger.info("   📊 Rapor: Her gün 09:00")
-    logger.info("   🔔 Push: Her gün 12:00")
-    logger.info("   🧹 Cleanup: Her gün 03:00")
-    logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
-    logger.info("   🌅 Sabah Vardiyası: Her gece 00:00")
-    logger.info("   🌆 Akşam Vardiyası: Her gün 12:00")
-    logger.info("   🚨 Error Listener: AKTİF (Telegram bildirimi)")
-    logger.info("   🛡️ Overlap Protection: AKTİF (max_instances=1)")
+    # 🔥 V5.2: THREAD-SAFE LOCK
+    with _scheduler_lock:
+        if scheduler and scheduler.running:
+            logger.warning("⚠️ Scheduler zaten çalışıyor!")
+            return
+        
+        scheduler = BackgroundScheduler(timezone=Config.DEFAULT_TIMEZONE)
+        
+        # 🔥 V5.1: ERROR LISTENER EKLE
+        scheduler.add_listener(job_error_listener, EVENT_JOB_ERROR)
+        logger.info("✅ Job Error Listener eklendi")
+        
+        # 👷 WORKER: Her 1 dakikada bir (60 saniye)
+        worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)
+        
+        scheduler.add_job(
+            worker_job,
+            trigger=IntervalTrigger(seconds=worker_interval),
+            id='worker',
+            name='Worker (Veri Güncelleyici)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 📸 SNAPSHOT: Her gece 00:00:05
+        scheduler.add_job(
+            snapshot_job,
+            trigger=CronTrigger(
+                hour=Config.SNAPSHOT_HOUR,
+                minute=Config.SNAPSHOT_MINUTE,
+                second=Config.SNAPSHOT_SECOND
+            ),
+            id='snapshot',
+            name='Snapshot (Referans Fiyatları)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 👮 ŞEF: Her 10 dakikada bir
+        scheduler.add_job(
+            supervisor_check,
+            trigger=IntervalTrigger(minutes=Config.SUPERVISOR_INTERVAL),
+            id='supervisor',
+            name='Şef (Sistem Kontrolü)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 🗓️ TAKVİM: Her gün 08:00
+        scheduler.add_job(
+            calendar_check,
+            trigger=CronTrigger(
+                hour=Config.CALENDAR_CHECK_HOUR,
+                minute=Config.CALENDAR_CHECK_MINUTE
+            ),
+            id='calendar',
+            name='Takvim (Etkinlik Kontrolü)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 📊 GÜNLÜK RAPOR: Her gün 09:00
+        scheduler.add_job(
+            daily_report,
+            trigger=CronTrigger(hour=Config.TELEGRAM_DAILY_REPORT_HOUR),
+            id='daily_report',
+            name='Günlük Rapor',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 🔔 PUSH NOTIFICATION: Her gün 12:00
+        scheduler.add_job(
+            push_notification_daily,
+            trigger=CronTrigger(
+                hour=Config.PUSH_NOTIFICATION_DAILY_HOUR,
+                minute=Config.PUSH_NOTIFICATION_DAILY_MINUTE
+            ),
+            id='push_notification',
+            name='Push Notification (Günlük Özet)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 🧹 CLEANUP: Her gün 03:00
+        scheduler.add_job(
+            cleanup_old_backups,
+            trigger=CronTrigger(hour=3, minute=0),
+            id='cleanup',
+            name='Cleanup (Eski Backup Temizliği)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 🔔 ALARM: Her 5-15 dakikada bir
+        alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)
+        scheduler.add_job(
+            alarm_check_job,
+            trigger=IntervalTrigger(minutes=alarm_interval_minutes),
+            id='alarm_check',
+            name='Alarm Check (Fiyat Alarmları)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 🌅 SABAH VARDİYASI: Her gece 00:00
+        scheduler.add_job(
+            news_morning_shift_job,
+            trigger=CronTrigger(hour=0, minute=0),
+            id='news_morning',
+            name='Haber Sabah Vardiyası',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 🌆 AKŞAM VARDİYASI: Her gün 12:00
+        scheduler.add_job(
+            news_evening_shift_job,
+            trigger=CronTrigger(hour=12, minute=0),
+            id='news_evening',
+            name='Haber Akşam Vardiyası',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # Başlat
+        scheduler.start()
+        logger.info("✅ Scheduler başlatıldı! (V5.2 - Thread-Safe Lock)")
+        logger.info(f"   👷 Worker: Her {worker_interval} saniyede (1 dakika)")
+        logger.info("   📸 Snapshot: Her gece 00:00:05")
+        logger.info("   👮 Şef: Her 10 dakikada")
+        logger.info("   🗓️ Takvim: Her gün 08:00")
+        logger.info("   📊 Rapor: Her gün 09:00")
+        logger.info("   🔔 Push: Her gün 12:00")
+        logger.info("   🧹 Cleanup: Her gün 03:00")
+        logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
+        logger.info("   🌅 Sabah Vardiyası: Her gece 00:00")
+        logger.info("   🌆 Akşam Vardiyası: Her gün 12:00")
+        logger.info("   🚨 Error Listener: AKTİF (Telegram bildirimi)")
+        logger.info("   🛡️ Overlap Protection: AKTİF (max_instances=1)")
+        logger.info("   🔒 Thread-Safe Lock: AKTİF (V5.2)")  # 🔥 YENİ
 
 
 def stop_scheduler():
     """
-    Zamanlayıcıyı durdur.
+    🔥 V5.2: Zamanlayıcıyı durdur (Thread-safe)
     """
     global scheduler
     
-    if scheduler and scheduler.running:
-        scheduler.shutdown()
-        logger.info("🛑 Scheduler durduruldu")
-    else:
-        logger.warning("⚠️ Scheduler zaten durmuş")
+    # 🔥 V5.2: THREAD-SAFE LOCK
+    with _scheduler_lock:
+        if scheduler and scheduler.running:
+            scheduler.shutdown()
+            logger.info("🛑 Scheduler durduruldu")
+        else:
+            logger.warning("⚠️ Scheduler zaten durmuş")
 
 
 def get_scheduler_status() -> Dict[str, Any]:
@@ -725,7 +722,6 @@ def get_scheduler_status() -> Dict[str, Any]:
         last_cleanup_run = get_cache(Config.CACHE_KEYS['cleanup_last_run'])
         last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
         
-        # 🔥 V5.1: Worker interval'i config'den al
         worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)
         
         status = {
@@ -734,12 +730,13 @@ def get_scheduler_status() -> Dict[str, Any]:
             'last_worker_run': last_worker_run,
             'last_cleanup_run': last_cleanup_run,
             'last_alarm_check': last_alarm_check,
-            'worker_interval': worker_interval,  # 🔥 V5.1: Gerçek interval
+            'worker_interval': worker_interval,
             'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'error_listener_active': True,  # 🔥 V5.1
-            'overlap_protection_active': True  # 🔥 V5.1
+            'error_listener_active': True,
+            'overlap_protection_active': True,
+            'thread_safe_lock_active': True  # 🔥 V5.2 YENİ
         }
         
         return status
