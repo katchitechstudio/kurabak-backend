@@ -201,25 +201,31 @@ def background_initialization():
     3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm) - Redis Lock ile
     4. İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
-    from utils.cache import redis_client
+    from utils.cache import get_redis_client
     
     current_pid = os.getpid()
     lock_key = "kurabak:scheduler:lock"
     
     # 🔥 V5.3: REDIS LOCK (process-safe!)
     try:
-        # Redis'ten mevcut scheduler PID'sini kontrol et
-        existing_pid = redis_client.get(lock_key)
+        # Redis client'ı al
+        redis_client = get_redis_client()
         
-        if existing_pid:
-            existing_pid_str = existing_pid.decode('utf-8') if isinstance(existing_pid, bytes) else str(existing_pid)
-            logger.info(f"⏭️ [Redis Lock] Scheduler zaten PID {existing_pid_str} tarafından başlatıldı")
-            logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (zombie önleme)")
-            return
-        
-        # Lock'u al (60 saniye geçici)
-        redis_client.set(lock_key, current_pid, ex=60)
-        logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid}")
+        if not redis_client:
+            logger.warning("⚠️ [Redis Lock] Redis bağlantısı yok, fallback mode")
+        else:
+            # Redis'ten mevcut scheduler PID'sini kontrol et
+            existing_pid = redis_client.get(lock_key)
+            
+            if existing_pid:
+                existing_pid_str = existing_pid if isinstance(existing_pid, str) else str(existing_pid)
+                logger.info(f"⏭️ [Redis Lock] Scheduler zaten PID {existing_pid_str} tarafından başlatıldı")
+                logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (zombie önleme)")
+                return
+            
+            # Lock'u al (60 saniye geçici)
+            redis_client.set(lock_key, current_pid, ex=60)
+            logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid}")
         
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Redis erişim hatası: {e}")
@@ -247,8 +253,10 @@ def background_initialization():
     
     # 🔥 V5.3: Scheduler başarıyla başlatıldıysa lock'u kalıcı yap
     try:
-        redis_client.set(lock_key, current_pid, ex=86400)  # 24 saat
-        logger.info(f"🔒 [Redis Lock] Scheduler owner PID kaydedildi: {current_pid} (24h lock)")
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.set(lock_key, current_pid, ex=86400)  # 24 saat
+            logger.info(f"🔒 [Redis Lock] Scheduler owner PID kaydedildi: {current_pid} (24h lock)")
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Kalıcı lock yazılamadı: {e}")
     
@@ -551,10 +559,12 @@ def on_exit():
     
     # Redis lock'u temizle
     try:
-        from utils.cache import redis_client
-        lock_key = "kurabak:scheduler:lock"
-        redis_client.delete(lock_key)
-        logger.info("🔒 [Redis Lock] Temizlendi.")
+        from utils.cache import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            lock_key = "kurabak:scheduler:lock"
+            redis_client.delete(lock_key)
+            logger.info("🔒 [Redis Lock] Temizlendi.")
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Temizleme hatası: {e}")
     
