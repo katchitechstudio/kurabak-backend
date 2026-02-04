@@ -210,7 +210,7 @@ def check_and_notify_events():
             message = "\n".join(message_parts)
             
             # Telegram'a gönder
-            telegram.send_message(message, level='info')
+            telegram.send_message(message, level='report')
             logger.info(f"✅ [CALENDAR CHECK] {len(events)} etkinlik Telegram'a bildirildi")
             
         except Exception as telegram_err:
