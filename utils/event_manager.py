@@ -242,4 +242,3 @@ def test_event_manager():
 
 if __name__ == "__main__":
     test_event_manager()
-        └─ Push gönderilir! 🔔
