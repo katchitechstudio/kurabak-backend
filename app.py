@@ -15,6 +15,7 @@ KuraBak Backend - ENTRY POINT V5.1 🚀
 ✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü
 ✅ TELEGRAM SINGLETON V5.1: Global instance memory leak önleme
 ✅ FIREBASE SINGLETON V5.1: Multiple init önleme
+✅ HEALTHZ FIX: Render health check endpoint'i eklendi
 """
 import os
 import logging
@@ -261,6 +262,7 @@ def index():
     }), 200
 
 @app.route('/health', methods=['GET'])
+@app.route('/healthz', methods=['GET'])  # 🔥 RENDER HEALTH CHECK FIX!
 def health():
     """Basit Sağlık Kontrolü (Load Balancer için)"""
     return jsonify({"status": "ok"}), 200
@@ -434,7 +436,7 @@ def trigger_test_push():
         return jsonify({"success": False, "error": str(e)}), 500
 
 # ======================================
-# 🧹 ACİL TEMİZLİK ENDPOİNTİ (YENİ!)
+# 🧹 ACİL TEMİZLİK ENDPOİNTİ
 # ======================================
 
 @app.route('/api/admin/cleanup', methods=['POST'])
