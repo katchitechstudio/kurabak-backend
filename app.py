@@ -1,20 +1,20 @@
 """
-KuraBak Backend - ENTRY POINT V5.0 🚀
+KuraBak Backend - ENTRY POINT V5.1 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
-✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları (FIX)
+✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
 ✅ CİHAZ KAYIT SİSTEMİ: FCM Token yönetimi
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
-✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler (404 FIX!)
+✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
 ✅ ALARM SİSTEMİ: Redis tabanlı fiyat alarmları
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
 ✅ SUMMARY SYNC FIX: Sterlin sorunu çözüldü
 ✅ SCHEDULER STATUS FIX: Scheduler durumu artık doğru gösteriliyor
 ✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü
-✅ TELEGRAM INSTANCE FIX: Global instance kullanımı
-✅ FIREBASE PROJECT ID FIX: 404 hatası çözüldü!
+✅ TELEGRAM SINGLETON V5.1: Global instance memory leak önleme
+✅ FIREBASE SINGLETON V5.1: Multiple init önleme
 """
 import os
 import logging
@@ -26,58 +26,90 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from config import Config
 
-# Route'lar
 from routes.general_routes import api_bp
 from routes.alarm_routes import alarm_bp
 
-# Servisler
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
 
-# Utilities
-from utils.telegram_monitor import init_telegram_monitor
 from utils.notification_service import register_fcm_token, send_test_notification
 
 # ======================================
-# 🔥 FIREBASE INITIALIZATION (FIX!)
+# 🔥 V5.1: FIREBASE SINGLETON (MEMORY LEAK FİX!)
 # ======================================
+
 import firebase_admin
 from firebase_admin import credentials
 
+# Global Firebase durumu
+_firebase_initialized = False
+_firebase_lock = threading.Lock()
+
 def init_firebase():
-    """Firebase Admin SDK'yı başlatır"""
-    try:
-        # Eğer zaten başlatılmışsa tekrar başlatma
-        if firebase_admin._apps:
-            logger.info("🔥 [Firebase] Zaten başlatılmış, geçiliyor...")
+    """
+    🔥 V5.1 FIX: Firebase Admin SDK'yı singleton pattern ile başlatır
+    
+    ÖNCEKİ SORUN:
+    - Her restart'ta yeni Firebase instance oluşuyordu
+    - Eski instance'lar garbage collect edilmiyordu
+    
+    YENİ ÇÖZÜM:
+    - Global flag ile kontrol
+    - Thread-safe initialization
+    - Tek bir instance garantisi
+    """
+    global _firebase_initialized
+    
+    # Double-checked locking
+    if _firebase_initialized:
+        logger.info("🔥 [Firebase] Zaten başlatılmış (global flag)")
+        return True
+    
+    with _firebase_lock:
+        # Tekrar kontrol et (thread-safe)
+        if _firebase_initialized:
             return True
         
-        # Credentials dosyasının varlığını kontrol et
-        cred_path = Config.FIREBASE_CREDENTIALS_PATH
-        
-        # Render ortamı için özel kontrol
-        if os.environ.get("RENDER"):
-            cred_path = "/etc/secrets/firebase_credentials.json"
-        
-        if not os.path.exists(cred_path):
-            logger.warning(f"⚠️ [Firebase] Credentials dosyası bulunamadı: {cred_path}")
+        try:
+            # firebase_admin._apps kontrolü (fallback)
+            if firebase_admin._apps:
+                logger.info("🔥 [Firebase] firebase_admin._apps dolu, başlatılmış kabul ediliyor")
+                _firebase_initialized = True
+                return True
+            
+            cred_path = Config.FIREBASE_CREDENTIALS_PATH
+            
+            if os.environ.get("RENDER"):
+                cred_path = "/etc/secrets/firebase_credentials.json"
+            
+            if not os.path.exists(cred_path):
+                logger.warning(f"⚠️ [Firebase] Credentials dosyası bulunamadı: {cred_path}")
+                logger.warning("   Push notification özellikleri devre dışı!")
+                return False
+            
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred, {
+                'projectId': 'kurabak-f1950'
+            })
+            
+            _firebase_initialized = True
+            logger.info("✅ [Firebase] Admin SDK başarıyla başlatıldı! (Singleton)")
+            logger.info(f"   📁 Credentials: {cred_path}")
+            logger.info(f"   🎯 Project ID: kurabak-f1950")
+            return True
+            
+        except ValueError as ve:
+            # Firebase zaten başlatılmışsa bu hatayı alırız
+            if "already exists" in str(ve).lower():
+                logger.info("🔥 [Firebase] Zaten başlatılmış (ValueError yakalandı)")
+                _firebase_initialized = True
+                return True
+            else:
+                logger.error(f"❌ [Firebase] Başlatma hatası: {ve}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ [Firebase] Başlatma hatası: {e}")
             logger.warning("   Push notification özellikleri devre dışı!")
             return False
-        
-        # 🔥 Firebase'i başlat (PROJECT ID İLE - 404 HATASI ÇÖZÜLDÜ!)
-        cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(cred, {
-            'projectId': 'kurabak-f1950'  # 🔥 404 HATASINI ÇÖZEN SATIR!
-        })
-        
-        logger.info("✅ [Firebase] Admin SDK başarıyla başlatıldı!")
-        logger.info(f"   📁 Credentials: {cred_path}")
-        logger.info(f"   🎯 Project ID: kurabak-f1950")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ [Firebase] Başlatma hatası: {e}")
-        logger.warning("   Push notification özellikleri devre dışı!")
-        return False
 
 # ======================================
 # LOGGING AYARLARI
@@ -97,40 +129,84 @@ logger = logging.getLogger("KuraBak")
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# CORS (Çapraz Platform İzinleri)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# Blueprint'leri Kaydet (API Rotaları)
 app.register_blueprint(api_bp)
-app.register_blueprint(alarm_bp)  # 🔔 ALARM ROUTES
+app.register_blueprint(alarm_bp)
 
 # ======================================
-# ASENKRON BAŞLATICI (CRITICAL)
+# 🔥 V5.1: TELEGRAM SINGLETON (MEMORY LEAK FİX!)
+# ======================================
+
+# Global Telegram instance
+_telegram_instance = None
+_telegram_lock = threading.Lock()
+
+def get_telegram_instance():
+    """
+    🔥 V5.1 FIX: Telegram instance'ı singleton pattern ile al
+    
+    ÖNCEKİ SORUN:
+    - Her background_initialization() çağrısında yeni instance
+    - Restart durumlarında eski instance'lar bellekte kalıyordu
+    
+    YENİ ÇÖZÜM:
+    - Global singleton instance
+    - Thread-safe initialization
+    - Memory leak yok!
+    """
+    global _telegram_instance
+    
+    if _telegram_instance is not None:
+        return _telegram_instance
+    
+    with _telegram_lock:
+        # Double-checked locking
+        if _telegram_instance is not None:
+            return _telegram_instance
+        
+        try:
+            from utils.telegram_monitor import init_telegram_monitor
+            _telegram_instance = init_telegram_monitor()
+            logger.info("✅ [Telegram] Singleton instance oluşturuldu")
+            return _telegram_instance
+        except Exception as e:
+            logger.error(f"❌ [Telegram] Instance oluşturma hatası: {e}")
+            return None
+
+# ======================================
+# ASENKRON BAŞLATICI
 # ======================================
 
 def background_initialization():
     """
+    🔥 V5.1 FIX: Singleton pattern'ler ile arka plan başlatma
+    
     Ağır işleri arka planda yapar.
     Böylece Flask anında ayağa kalkar ve Render portu kapatmaz.
     
     BAŞLATMA SIRASI:
-    1. Firebase Admin SDK (Push Notifications)
-    2. Telegram Monitor (Sessiz Mod + Komut Sistemi)
+    1. Firebase Admin SDK (Singleton - Push Notifications)
+    2. Telegram Monitor (Singleton - Komut Sistemi)
     3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm)
     4. İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
     logger.info("⏳ [Arka Plan] Sistem servisleri başlatılıyor...")
-    time.sleep(1)  # Kısa bir nefes alma payı
+    time.sleep(1)
     
-    # 1. Firebase'i Başlat (PROJECT ID İLE!)
+    # 1. Firebase'i Başlat (SINGLETON!)
     firebase_status = init_firebase()
     if firebase_status:
         logger.info("🔥 [Firebase] Push notification sistemi aktif!")
     else:
         logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
     
-    # 2. Telegram Monitor'ü Başlat (Komut Sistemi Aktif)
-    telegram = init_telegram_monitor()
+    # 2. Telegram Monitor'ü Başlat (SINGLETON!)
+    telegram = get_telegram_instance()
+    if telegram:
+        logger.info("📱 [Telegram] Komut sistemi aktif!")
+    else:
+        logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
     
     # 3. Scheduler'ı (Zamanlayıcı) Başlat
     start_scheduler()
@@ -146,7 +222,7 @@ def background_initialization():
     
     logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
     
-    # Telegram'a başlangıç mesajı gönder
+    # Telegram'a başlangıç mesajı gönder (varsa)
     if telegram:
         try:
             telegram.send_startup_message()
@@ -157,16 +233,13 @@ def background_initialization():
 # 🔥 PRODUCTION FIX: Render için thread başlatma
 # ======================================
 
-# Render üzerinde mi çalışıyoruz?
 is_render = os.environ.get("RENDER") is not None
 
 if is_render:
-    # Render'da → Her zaman başlat
     logger.info("🚀 [Render] Production modda thread başlatılıyor...")
     init_thread = threading.Thread(target=background_initialization, daemon=True)
     init_thread.start()
 else:
-    # Local development → Sadece main process'te başlat
     if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         logger.info("💻 [Local] Development modda thread başlatılıyor...")
         init_thread = threading.Thread(target=background_initialization, daemon=True)
@@ -243,11 +316,9 @@ def system_status():
         else:
             alarm_status = "⚪ Henüz Çalışmadı"
         
-        firebase_status = "🟢 Aktif" if firebase_admin._apps else "🔴 Devre Dışı"
+        firebase_status = "🟢 Aktif" if _firebase_initialized else "🔴 Devre Dışı"
         
-        # Runtime import
-        from utils.telegram_monitor import telegram_instance
-        telegram_status = "🟢 Aktif" if telegram_instance else "🔴 Devre Dışı"
+        telegram_status = "🟢 Aktif" if _telegram_instance else "🔴 Devre Dışı"
         
         return jsonify({
             "success": True,
@@ -302,25 +373,24 @@ def send_feedback():
     Günde 1 mesaj sınırı Android tarafında kontrol edilir
     Maksimum 250 karakter sınırı
     
-    🔥 V5.0 FIX: Global telegram_instance kullanımı
+    🔥 V5.1: Global telegram singleton kullanımı
     """
     try:
         data = request.json
         message = data.get('message', '').strip()
         
-        # Validasyon
         if not message:
             return jsonify({"success": False, "error": "Mesaj boş olamaz"}), 400
         
         if len(message) > 250:
             return jsonify({"success": False, "error": "Mesaj çok uzun (max 250 karakter)"}), 400
 
-        # Telegram'a Gönder (Runtime Import - Global Instance)
-        from utils.telegram_monitor import telegram_instance
+        # Telegram'a Gönder (Global Singleton)
+        telegram = get_telegram_instance()
         
-        if telegram_instance:
+        if telegram:
             telegram_msg = f"📩 **YENİ GERİ BİLDİRİM**\n\n{message}"
-            telegram_instance._send_raw(telegram_msg)
+            telegram._send_raw(telegram_msg)
             logger.info(f"✅ [Feedback] Anonim mesaj iletildi ({len(message)} karakter)")
         else:
             logger.warning("⚠️ [Feedback] Telegram devre dışı, mesaj kaydedildi ama gönderilemedi")
@@ -364,19 +434,93 @@ def trigger_test_push():
         return jsonify({"success": False, "error": str(e)}), 500
 
 # ======================================
+# 🧹 ACİL TEMİZLİK ENDPOİNTİ (YENİ!)
+# ======================================
+
+@app.route('/api/admin/cleanup', methods=['POST'])
+def emergency_cleanup():
+    """
+    🚨 ACİL TEMİZLİK - RAM'deki tüm çöpleri temizler
+    
+    - Redis FLUSHALL
+    - RAM Cache temizliği
+    - Disk backup temizliği (eski dosyalar)
+    - Scheduler restart
+    
+    ⚠️ DİKKAT: Bu endpoint sadece Telegram'dan çağrılmalı!
+    """
+    try:
+        from utils.cache import flush_all_cache, cleanup_old_disk_backups
+        
+        logger.warning("🚨 [CLEANUP] ACİL TEMİZLİK BAŞLADI!")
+        
+        # 1. Redis + RAM + Disk temizle
+        flush_all_cache()
+        logger.info("✅ [CLEANUP] Cache temizlendi")
+        
+        # 2. Eski disk backup'larını temizle (7+ gün)
+        cleanup_result = cleanup_old_disk_backups(max_age_days=7)
+        logger.info(f"✅ [CLEANUP] {cleanup_result['deleted_count']} eski backup silindi")
+        
+        # 3. Scheduler'ı yeniden başlat
+        stop_scheduler()
+        time.sleep(2)
+        start_scheduler()
+        logger.info("✅ [CLEANUP] Scheduler yeniden başlatıldı")
+        
+        # 4. Telegram'a bildir
+        telegram = get_telegram_instance()
+        if telegram:
+            telegram._send_raw(
+                "✅ *ACİL TEMİZLİK TAMAMLANDI!*\n\n"
+                f"🧹 Redis temizlendi\n"
+                f"🧹 RAM temizlendi\n"
+                f"🧹 {cleanup_result['deleted_count']} eski backup silindi\n"
+                f"🔄 Scheduler yeniden başlatıldı\n\n"
+                "Sistem şimdi temiz ve hazır!"
+            )
+        
+        return jsonify({
+            "success": True,
+            "message": "Sistem temizlendi ve yeniden başlatıldı",
+            "details": {
+                "cache_cleared": True,
+                "old_backups_deleted": cleanup_result['deleted_count'],
+                "scheduler_restarted": True
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ [CLEANUP] Hata: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ======================================
 # TEMİZLİK (SHUTDOWN)
 # ======================================
 
 def on_exit():
-    """Uygulama kapanırken çalışır"""
+    """
+    🔥 V5.1: Temiz kapanış (Singleton'ları da temizle)
+    """
+    global _firebase_initialized, _telegram_instance
+    
     logger.info("🛑 Uygulama kapatılıyor...")
     stop_scheduler()
     
     # Firebase'i temizle
     try:
-        if firebase_admin._apps:
+        if _firebase_initialized and firebase_admin._apps:
             firebase_admin.delete_app(firebase_admin.get_app())
+            _firebase_initialized = False
             logger.info("🔥 [Firebase] Temiz kapanış tamamlandı.")
+    except:
+        pass
+    
+    # Telegram'ı temizle
+    try:
+        if _telegram_instance:
+            _telegram_instance = None
+            logger.info("📱 [Telegram] Temiz kapanış tamamlandı.")
     except:
         pass
     
@@ -389,7 +533,6 @@ atexit.register(on_exit)
 # ======================================
 
 if __name__ == '__main__':
-    # Local Development
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"🌍 Local Sunucu Başlatılıyor: http://localhost:{port}")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
