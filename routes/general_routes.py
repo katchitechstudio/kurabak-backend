@@ -1,19 +1,3 @@
-"""
-General Routes - PRODUCTION READY V5.1 🚀
-==========================================================
-✅ RATE LIMITING: Flask-Limiter ile bot saldırılarına karşı koruma
-✅ 503 ERROR FIX: Cache boşsa 503 dön, API çağırma (Thundering Herd fix)
-✅ REGIONAL SUPPORT: 20 Döviz için Bölgesel Filtreleme
-✅ ATOMIC TRACKING: Race Condition fix - Redis INCR kullanımı
-✅ STANDARDIZED RESPONSE: Frontend (Android) için sabit format
-✅ GELİŞMİŞ TRACKING: Header bazlı kullanıcı takibi + istatistik
-✅ BANNER SYSTEM: Telegram'dan yönetilen duyuru sistemi
-✅ SECURITY: IP bazlı rate limiting + User-Agent kontrolü
-✅ FCM ENDPOINTS: Firebase token kayıt/silme
-✅ EVENT MANAGER BANNER: Otomatik takvim bazlı banner 🤖
-✅ FEEDBACK SYSTEM FIX: get_telegram_monitor() kullanımı ile düzeltildi 📬
-"""
-
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -37,7 +21,7 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["200 per hour"],
-    storage_uri="memory://",
+    storage_uri=Config.REDIS_URL or "memory://",
     strategy="fixed-window"
 )
 
@@ -489,7 +473,6 @@ def send_feedback():
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        # 🔥 FİX: get_telegram_monitor() kullan
         from utils.telegram_monitor import get_telegram_monitor
         
         telegram_bot = get_telegram_monitor()
