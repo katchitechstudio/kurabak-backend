@@ -17,7 +17,7 @@ alarm_bp = Blueprint('alarm', __name__, url_prefix='/api/alarm')
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["100 per hour"],
-    storage_uri="memory://",
+    storage_uri=Config.REDIS_URL or "memory://",
     strategy="fixed-window"
 )
 
