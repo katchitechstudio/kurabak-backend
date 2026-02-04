@@ -1,47 +1,45 @@
 """
-Event Manager - AKILLI TAKVİM SİSTEMİ V6.1 🗓️📰🏦
+Event Manager - AKILLI TAKVİM SİSTEMİ V7.0 🗓️📰🏦
 ======================================
 ✅ BAYRAMLAR: Gemini otomatik tespit (her vardiya hazırlığında)
 ✅ HABERLER: GNews + NewsData + Gemini özet
 ✅ ÖNCELİK SİSTEMİ: Bayram (15:00'a kadar) > Haberler
 ✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
 ✅ BASIT VE ETKİLİ: Gereksiz karmaşıklık yok
-✅ CLEAN IMPORTS: Import'lar üstte (V6.1)
-✅ CHECK_AND_NOTIFY: Eksik fonksiyon eklendi (V6.1)
+✅ CLEAN CODE: Yorumsuz, profesyonel, production-ready
 
 Priority Değerleri (Düşük sayı = Yüksek öncelik):
 - 10: Bayram/Tatil
 - 30: Piyasa Kapalı
 - 75: Günlük Haberler
+
+V7.0 Değişiklikler:
+- check_and_notify_events() FONKSİYONU SİLİNDİ (08:00 job kaldırıldı)
+- get_daily_notification_content() EKLENDİ (14:00 push için)
+- Tüm olası senaryolar handle ediliyor
 """
 
 import logging
 from datetime import datetime, date
 from typing import Optional, List, Dict
 
-# 🔥 V6.1: IMPORT'LARI ÜSTE TAŞINDI (Fonksiyon içi import kaldırıldı)
 from utils.cache import get_cache
 from config import Config
 
 logger = logging.getLogger(__name__)
 
-# ======================================
-# 🆕 BUGÜNÜN ETKİNLİKLERİNİ GETIR
-# ======================================
 
 def get_todays_events() -> List[Dict[str, any]]:
     """
     Bugünün tüm etkinliklerini priority sırasına göre döndürür.
-    
-    🏦 BAYRAM: Gemini'den alınır (news_manager tarafından Redis'e kaydedilir)
-    📰 HABERLER: GNews + NewsData + Gemini özet
     
     Returns:
         List[Dict]: [
             {
                 "type": "bayram" | "news",
                 "message": "...",
-                "priority": 10 | 75,  # Düşük = Yüksek öncelik
+                "priority": 10 | 75,
+                "valid_until": "15:00" | "23:59",
                 "date": "2026-01-30"
             }
         ]
@@ -50,17 +48,15 @@ def get_todays_events() -> List[Dict[str, any]]:
     current_time = datetime.now()
     events = []
     
-    # 1. 🏦 BAYRAM KONTROLÜ (Gemini'den - Redis cache)
     try:
         bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
         bayram_msg = get_cache(bayram_key)
         
-        # Bayram varsa VE saat 15:00'dan önceyse göster
         if bayram_msg and current_time.hour < 15:
             events.append({
                 "type": "bayram",
                 "message": bayram_msg,
-                "priority": 10,  # EN YÜKSEK ÖNCELİK
+                "priority": 10,
                 "valid_until": "15:00",
                 "date": today_str
             })
@@ -69,9 +65,8 @@ def get_todays_events() -> List[Dict[str, any]]:
             logger.info(f"🏦 [BAYRAM] Süresi doldu (15:00+), haberler devrede")
             
     except Exception as e:
-        logger.warning(f"⚠️ [BAYRAM] Kontrol hatası (önemsiz): {e}")
+        logger.warning(f"⚠️ [BAYRAM] Kontrol hatası: {e}")
     
-    # 2. 📰 GÜNLÜK HABERLER (Priority: 75)
     try:
         from utils.news_manager import get_current_news_banner
         
@@ -80,34 +75,22 @@ def get_todays_events() -> List[Dict[str, any]]:
             events.append({
                 "type": "news",
                 "message": news_banner,
-                "priority": 75,  # NORMAL ÖNCELİK
+                "priority": 75,
                 "valid_until": "23:59",
                 "date": today_str
             })
             logger.debug(f"📰 [HABER] Banner eklendi (Priority: 75)")
     except Exception as e:
-        logger.warning(f"⚠️ [HABER] Banner eklenemedi (önemsiz): {e}")
+        logger.warning(f"⚠️ [HABER] Banner eklenemedi: {e}")
     
-    # Priority'ye göre sırala (DÜŞÜKTEN YÜKSEĞE - düşük sayı = yüksek öncelik)
     events.sort(key=lambda x: x['priority'])
     
     return events
 
 
-# ======================================
-# ANA FONKSİYON: BUGÜNÜN BANNER'I
-# ======================================
-
 def get_todays_banner() -> Optional[str]:
     """
-    🔥 TEK BANNER KURALI: Sadece en yüksek priority'li banner gösterilir!
-    
-    ÖNCELİK SIRASI (Düşük sayı = Yüksek öncelik):
-    1. Manuel Duyuru (Redis'ten - bu fonksiyon bilmez)
-    2. 🏦 Bayram (Priority: 10, sadece 00:00-15:00 arası)
-    3. 📰 Günlük Haberler (Priority: 75)
-    4. Piyasa Kapalı (Hafta sonu - Priority: 30)
-    5. Hiçbiri yoksa -> None
+    App'te gösterilecek banner'ı döndürür (priority sırasına göre).
     
     Returns:
         str: Banner mesajı
@@ -115,13 +98,11 @@ def get_todays_banner() -> Optional[str]:
     """
     today = date.today()
     current_time = datetime.now()
-    weekday = today.weekday()  # 0=Pzt, 4=Cuma, 5=Cmt, 6=Paz
+    weekday = today.weekday()
     
-    # --- 1. BUGÜNÜN ETKİNLİKLERİNİ AL (Priority sıralı) ---
     events = get_todays_events()
     
     if events:
-        # En yüksek priority'li event (Liste başı = en düşük sayı = en yüksek öncelik)
         top_event = events[0]
         logger.info(
             f"📅 [BANNER] {top_event['type'].upper()} (Priority: {top_event['priority']}): "
@@ -129,112 +110,80 @@ def get_todays_banner() -> Optional[str]:
         )
         return top_event['message']
     
-    # --- 2. PİYASA KAPALI MI? (Hafta Sonu - Priority: 30) ---
-    # Cumartesi (5) - Pazar (6) tüm gün kapalı
     if weekday == 5 or weekday == 6:
         logger.info("📅 [BANNER] Piyasa kapalı (Hafta sonu)")
         return "Piyasalar kapalı, iyi hafta sonları! 🌙"
     
-    # Cuma akşam 18:00 sonrası
     if weekday == 4 and current_time.hour >= 18:
         logger.info("📅 [BANNER] Piyasa kapalı (Cuma akşam)")
         return "Piyasalar kapandı, iyi hafta sonları! 🌙"
     
-    # --- 3. HİÇBİR ŞEY YOK ---
     logger.info("📅 [BANNER] Bugün özel banner yok")
     return None
 
 
-# ======================================
-# 🔥 V6.1: EKSİK FONKSİYON EKLENDİ
-# ======================================
-
-def check_and_notify_events():
+def get_daily_notification_content() -> Optional[Dict[str, str]]:
     """
-    🔥 V6.1 YENİ: Bugünün etkinliklerini kontrol et ve Telegram'a bildir
+    14:00'da gönderilecek Firebase push bildiriminin içeriğini hazırlar.
     
-    Bu fonksiyon maintenance_service.py içindeki calendar_check() 
-    tarafından her gün sabah 08:00'da çağrılır.
+    ÖNCELİK SIRASI:
+    1. Bayram varsa → Bayram mesajı gönder
+    2. Bayram yoksa → Günün haberi gönder
+    3. İkisi de yoksa → None döndür (bildirim gönderilmez)
     
-    Görevleri:
-    1. Bugünün etkinliklerini al
-    2. Varsa Telegram'a bildir
-    3. Log tut
+    Returns:
+        Dict: {
+            "title": "📅 Bugün Özel Gün!" | "📰 Günün Haberi",
+            "body": "Mesaj içeriği",
+            "type": "bayram" | "news"
+        }
+        None: Gönderilecek bildirim yok
     """
+    today_str = date.today().strftime("%d.%m.%Y")
+    
     try:
-        logger.info("🗓️ [CALENDAR CHECK] Bugünün etkinlikleri kontrol ediliyor...")
+        bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
+        bayram_msg = get_cache(bayram_key)
         
-        # Bugünün etkinliklerini al
-        events = get_todays_events()
-        
-        if not events:
-            logger.info("ℹ️ [CALENDAR CHECK] Bugün özel bir etkinlik yok")
-            return
-        
-        # Etkinlik varsa Telegram'a bildir
-        try:
-            from utils.telegram_monitor import get_telegram_monitor
-            
-            telegram = get_telegram_monitor()
-            if not telegram:
-                logger.warning("⚠️ [CALENDAR CHECK] Telegram bot bulunamadı")
-                return
-            
-            # Mesaj hazırla
-            today_str = date.today().strftime("%d.%m.%Y")
-            message_parts = [
-                f"📅 *BUGÜNÜN ETKİNLİKLERİ* ({today_str})\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-            ]
-            
-            for i, event in enumerate(events, 1):
-                event_type = event['type'].upper()
-                priority = event['priority']
-                event_msg = event['message']
-                valid_until = event.get('valid_until', '23:59')
-                
-                # Emoji seç
-                if event_type == 'BAYRAM':
-                    emoji = "🏦"
-                elif event_type == 'NEWS':
-                    emoji = "📰"
-                else:
-                    emoji = "ℹ️"
-                
-                message_parts.append(
-                    f"{i}. {emoji} *{event_type}* (Priority: {priority})\n"
-                    f"   {event_msg}\n"
-                    f"   Geçerlilik: {valid_until}'e kadar\n"
-                )
-            
-            message = "\n".join(message_parts)
-            
-            # Telegram'a gönder
-            telegram.send_message(message, level='report')
-            logger.info(f"✅ [CALENDAR CHECK] {len(events)} etkinlik Telegram'a bildirildi")
-            
-        except Exception as telegram_err:
-            logger.error(f"❌ [CALENDAR CHECK] Telegram bildirimi hatası: {telegram_err}")
-        
+        if bayram_msg:
+            logger.info(f"🔔 [PUSH NOTIFICATION] Bayram mesajı hazırlandı: {bayram_msg[:50]}...")
+            return {
+                "title": "📅 Bugün Özel Gün!",
+                "body": bayram_msg,
+                "type": "bayram"
+            }
     except Exception as e:
-        logger.error(f"❌ [CALENDAR CHECK] Genel hata: {e}")
-        import traceback
-        logger.error(f"   Traceback: {traceback.format_exc()}")
+        logger.warning(f"⚠️ [PUSH NOTIFICATION] Bayram kontrolü hatası: {e}")
+    
+    try:
+        from utils.news_manager import get_current_news_banner
+        
+        news_banner = get_current_news_banner()
+        
+        if news_banner:
+            logger.info(f"🔔 [PUSH NOTIFICATION] Haber mesajı hazırlandı: {news_banner[:50]}...")
+            return {
+                "title": "📰 Günün Haberi",
+                "body": news_banner,
+                "type": "news"
+            }
+        else:
+            logger.warning("⚠️ [PUSH NOTIFICATION] Haber banner'ı bulunamadı")
+    except Exception as e:
+        logger.error(f"❌ [PUSH NOTIFICATION] Haber kontrolü hatası: {e}")
+    
+    logger.warning("⚠️ [PUSH NOTIFICATION] Ne bayram ne haber var, bildirim gönderilmeyecek")
+    return None
 
-
-# ======================================
-# TEST FONKSİYONU
-# ======================================
 
 def test_event_manager():
     """
     Terminal'den test etmek için:
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 Event Manager V6.1 📰🏦 Test Ediliyor...\n")
+    print("🧪 Event Manager V7.0 📰🏦 Test Ediliyor...\n")
     print("Priority Sistemi: DÜŞÜK SAYI = YÜKSEK ÖNCELİK\n")
     
-    # Bugünün banner'ı
     print("=" * 60)
     banner = get_todays_banner()
     if banner:
@@ -244,7 +193,6 @@ def test_event_manager():
     print("=" * 60)
     print()
     
-    # Bugünün etkinlikleri
     events = get_todays_events()
     if events:
         print("📅 BUGÜNÜN ETKİNLİKLERİ (Priority sıralı - düşük = yüksek):")
@@ -258,7 +206,6 @@ def test_event_manager():
     else:
         print("ℹ️ Bugün etkinlik yok\n")
     
-    # Bayram kontrolü
     print("=" * 60)
     bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
     bayram_msg = get_cache(bayram_key)
@@ -271,19 +218,28 @@ def test_event_manager():
     else:
         print("ℹ️ Bayram cache'i boş (Gemini henüz kontrol etmedi veya bayram yok)")
     print("=" * 60)
-    
-    # 🔥 V6.1: Yeni test - check_and_notify_events
     print()
+    
     print("=" * 60)
-    print("🧪 check_and_notify_events() TEST EDİLİYOR...")
+    print("🧪 get_daily_notification_content() TEST EDİLİYOR...")
+    print("   (14:00'da gönderilecek bildirim içeriği)")
     print("=" * 60)
     try:
-        check_and_notify_events()
-        print("✅ Fonksiyon başarıyla çalıştı (Logları kontrol et)")
+        notification = get_daily_notification_content()
+        if notification:
+            print(f"✅ Bildirim Hazır:")
+            print(f"   Başlık: {notification['title']}")
+            print(f"   İçerik: {notification['body'][:100]}...")
+            print(f"   Tür: {notification['type']}")
+        else:
+            print("⚠️ Bildirim yok (Ne bayram ne haber var)")
     except Exception as e:
         print(f"❌ Hata: {e}")
+        import traceback
+        print(traceback.format_exc())
     print("=" * 60)
 
 
 if __name__ == "__main__":
     test_event_manager()
+        └─ Push gönderilir! 🔔
