@@ -1,5 +1,5 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V3.5 PROD-READY 📰🚀
+News Manager - GÜNLÜK HABER SİSTEMİ V3.6 FINAL 📰🚀
 =============================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
@@ -8,9 +8,8 @@ News Manager - GÜNLÜK HABER SİSTEMİ V3.5 PROD-READY 📰🚀
 ✅ RATE-LIMIT KORUMA: Retry + exponential backoff
 ✅ BAYRAM MANTIKLI TTL: Gece 03:00'e kadar geçerli
 ✅ GEMİNİ 3 FLASH: Yeni model desteği
-✅ NULL SAFETY: NEWSDATA null kontrolü
 ✅ RACE CONDITION FIX: Bootstrap lock mekanizması
-✅ SON 24 SAAT FİLTRESİ: Sadece güncel haberler (V3.5)
+✅ SON 3 GÜN + TARİH FİLTRESİ: Gemini eski haberleri atar (V3.6)
 """
 
 import os
@@ -29,7 +28,6 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
-NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # 🔒 BOOTSTRAP LOCK - Race condition önleme
@@ -100,28 +98,31 @@ def fetch_with_retry(url: str, max_retries: int = 3, timeout: int = 10) -> Optio
     return None
 
 
-def fetch_gnews(max_results: int = 20) -> List[str]:
-    """GNews API'den ekonomi haberleri çeker - RETRY KORUMASLI + SON 24 SAAT"""
+def fetch_gnews(max_results: int = 30) -> List[str]:
+    """
+    GNews API'den ekonomi haberleri çeker - SON 3 GÜN + TARİH ETİKETLİ
+    🔥 V3.6: Geniş havuzdan topla, Gemini filtrelesin
+    """
     try:
         if not GNEWS_API_KEY:
             logger.warning("⚠️ GNEWS_API_KEY bulunamadı!")
             return []
         
-        # 🔥 YENİ: Son 24 saatin haberleri
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        # 🔥 SON 3 GÜN - Geniş havuzdan topla
+        three_days_ago = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%dT%H:%M:%SZ')
         
         url = (
             f"https://gnews.io/api/v4/search"
             f"?q=(\"merkez bankası\" OR \"faiz kararı\" OR \"faiz\" OR \"enflasyon\" OR \"TCMB\" OR \"FED\" OR \"ECB\" OR \"büyüme\" OR \"GSYİH\")"
             f"&lang=tr"
             f"&country=tr"
-            f"&from={yesterday}"
+            f"&from={three_days_ago}"
             f"&sortby=publishedAt"
-            f"&max=20"
+            f"&max=30"
             f"&apikey={GNEWS_API_KEY}"
         )
         
-        logger.info("📡 [GNEWS] Haberler çekiliyor (son 24 saat)...")
+        logger.info("📡 [GNEWS] Haberler çekiliyor (son 3 gün)...")
         data = fetch_with_retry(url)
         
         if not data or data.get('totalArticles', 0) == 0:
@@ -134,10 +135,13 @@ def fetch_gnews(max_results: int = 20) -> List[str]:
         for article in articles:
             title = article.get('title', '').strip()
             description = article.get('description', '').strip()
+            pub_date = article.get('publishedAt', '')
+            
             full_text = f"{title}. {description}" if description else title
             
+            # 🔥 Tarihi haber metninin sonuna ekle (Gemini görsün)
             if full_text and len(full_text) > 15:
-                news_list.append(full_text)
+                news_list.append(f"{full_text} [Tarih: {pub_date}]")
         
         logger.info(f"✅ [GNEWS] {len(news_list)} haber alındı")
         return news_list
@@ -147,77 +151,17 @@ def fetch_gnews(max_results: int = 20) -> List[str]:
         return []
 
 
-def fetch_newsdata(max_results: int = 20) -> List[str]:
-    """
-    NewsData API'den ekonomi haberleri çeker - RETRY KORUMASLI + SON 24 SAAT
-    🔥 NULL SAFETY: None kontrolü eklendi
-    """
-    try:
-        if not NEWSDATA_API_KEY:
-            logger.warning("⚠️ NEWSDATA_API_KEY bulunamadı!")
-            return []
-        
-        url = (
-            f"https://newsdata.io/api/1/news"
-            f"?apikey={NEWSDATA_API_KEY}"
-            f"&country=tr"
-            f"&language=tr"
-            f"&category=business"
-            f"&timeframe=24"
-            f"&q=(merkez AND bankası) OR faiz OR TCMB OR FED OR ECB OR enflasyon OR büyüme"
-        )
-        
-        logger.info("📡 [NEWSDATA] Haberler çekiliyor (son 24 saat)...")
-        data = fetch_with_retry(url)
-        
-        if not data or data.get('status') != 'success':
-            logger.warning("⚠️ [NEWSDATA] Hata veya haber bulunamadı")
-            return []
-        
-        results = data.get('results', [])[:max_results]
-        news_list = []
-        
-        for article in results:
-            # 🔥 NULL SAFETY: Her field için None kontrolü
-            title = article.get('title')
-            description = article.get('description')
-            
-            # Title None ise atla
-            if title is None:
-                continue
-            
-            title = title.strip()
-            
-            # Description None ise sadece title kullan
-            if description is None:
-                full_text = title
-            else:
-                description = description.strip()
-                full_text = f"{title}. {description}" if description else title
-            
-            # Son kontrol: full_text boş mu?
-            if full_text and len(full_text) > 15:
-                news_list.append(full_text)
-        
-        logger.info(f"✅ [NEWSDATA] {len(news_list)} haber alındı")
-        return news_list
-        
-    except Exception as e:
-        logger.error(f"❌ [NEWSDATA] Beklenmeyen hata: {e}")
-        return []
-
-
 def fetch_all_news() -> List[str]:
-    """Her iki API'den haberleri çeker ve GELİŞMİŞ DEDUP ile birleştirir"""
+    """
+    Tüm kaynaklardan haberleri çeker ve dedup yapar
+    🔥 V3.6: Sadece GNews kullanılıyor (NewsData production'da çalışmıyor)
+    """
     logger.info("📰 [NEWS] Tüm kaynaklardan haber toplama başlıyor...")
     
-    gnews_list = fetch_gnews(max_results=20)
-    newsdata_list = fetch_newsdata(max_results=20)
-    
-    all_news = gnews_list + newsdata_list
+    gnews_list = fetch_gnews(max_results=30)
     
     # Gelişmiş dedup
-    unique_news = deduplicate_news(all_news)
+    unique_news = deduplicate_news(gnews_list)
     
     logger.info(f"✅ [NEWS] Toplam {len(unique_news)} benzersiz haber toplandı")
     return unique_news[:30]
@@ -229,8 +173,8 @@ def fetch_all_news() -> List[str]:
 
 def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]]:
     """
-    ULTRA SIKI FİLTRE - Gemini patlarsa da sistem ayakta kalır
-    🔥 YENİ MODEL: gemini-3-flash-preview
+    ULTRA SIKI FİLTRE + TARİH FİLTRESİ - Gemini patlarsa da sistem ayakta kalır
+    🔥 V3.6: Eski haberleri (2025, 3 gün öncesi) otomatik atar
     """
     try:
         if not GEMINI_API_KEY:
@@ -243,17 +187,27 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 🔥 YENİ MODEL: gemini-3-flash-preview (ücretsiz ve güçlü!)
+        # 🔥 YENİ MODEL: gemini-3-flash-preview
         model = genai.GenerativeModel('gemini-3-flash-preview')
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
         current_time = datetime.now().strftime('%H:%M')
         
+        # 🔥 Tarih aralığı hesapla (son 48 saat)
+        two_days_ago = (datetime.now() - timedelta(days=2)).strftime('%d %B %Y')
+        
         prompt = f"""
 SEN BİR FİNANS EDİTÖRÜSÜN. Sadece PİYASAYI ETKİLEYEN kritik haberleri seç.
 
 BUGÜN: {today}, SAAT: {current_time}
+
+⚠️ ÖNEMLİ TARİH FİLTRESİ:
+- Haberlerin sonunda [Tarih: ...] etiketi var
+- SADECE SON 24-48 SAAT İÇİNDEKİ ({two_days_ago} - {today}) HABERLERİ AL
+- 2025 yılından haberler → KESINLIKLE ATLA
+- 3 gün önceki haberler → ATLA
+- Eski tarihli haberler finansal durumu yansıtmaz!
 
 ═══════════════════════════════════════════
 GÖREV 1 - BAYRAM KONTROLÜ
@@ -262,10 +216,10 @@ Bugün Türkiye'de resmi tatil/bayram var mı?
 VARSA → "BAYRAM: [tam isim]" | YOKSA → "BAYRAM: YOK"
 
 ═══════════════════════════════════════════
-GÖREV 2 - ULTRA SIKI FİLTRE
+GÖREV 2 - ULTRA SIKI FİLTRE + TARİH KONTROLÜ
 ═══════════════════════════════════════════
 
-✅ SADECE ŞU TİP HABERLERİ AL:
+✅ SADECE ŞU TİP HABERLERİ AL (VE GÜNCEL OLANLARI):
 
 1. MERKEZ BANKASI KARARLARI (Hem duyuru hem sonuç!):
    📅 DUYURU: "FED bugün saat 21:00'de faiz kararını açıklayacak"
@@ -303,6 +257,7 @@ GÖREV 2 - ULTRA SIKI FİLTRE
 - Teknik analiz/tahmin haberleri
 - "Altında yükseliş bekleniyor" gibi belirsiz ifadeler
 - Suç/mahkeme/magazin
+- ESKİ TARİHLİ HABERLER (2025 veya 3+ gün önce)
 
 ═══════════════════════════════════════════
 HAM HABERLER ({len(news_list)} adet):
@@ -322,10 +277,12 @@ KURALLAR:
 ✅ Duyuru haberlerinde SAAT belirt: "FED bugün 21:00'de faiz kararını açıklayacak"
 ✅ Sonuç haberlerinde RAKAM belirt: "FED faizi %4.5'te tuttu", "Enflasyon %64.77 açıklandı"
 ✅ Emoji YOK
+✅ [Tarih: ...] etiketini ÇIKTI'da gösterme (sadece filtreleme için kullan)
 ✅ Kritik kelimeler: açıklayacak, açıkladı, karar, rekor, kırdı, arttı, düştü (+ sayı/saat)
 
 ❌ Finansal olmayan haberi ATLA
-❌ Önemsiz/genel haberi ATLA  
+❌ Önemsiz/genel haberi ATLA
+❌ ESKİ TARİHLİ haberi ATLA  
 ❌ HİÇBİR kritik haber yoksa: "HABER: YOK"
 
 BAŞKA AÇIKLAMA YAPMA!
@@ -668,20 +625,20 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.5 PROD-READY - Test\n")
+    print("🧪 News Manager V3.6 FINAL - Test\n")
     
-    print("1️⃣ HABER TOPLAMA (SON 24 SAAT):")
+    print("1️⃣ HABER TOPLAMA (SON 3 GÜN + TARİH ETİKETLİ):")
     news_list = fetch_all_news()
     print(f"   ✅ {len(news_list)} haber toplandı\n")
     
     if news_list:
         print("   İlk 3 haber:")
         for i, news in enumerate(news_list[:3], 1):
-            print(f"   {i}. {news[:100]}...")
+            print(f"   {i}. {news[:120]}...")
         print()
     
     if news_list:
-        print("2️⃣ ULTRA SIKI FİLTRE:")
+        print("2️⃣ ULTRA SIKI FİLTRE + TARİH FİLTRESİ:")
         summaries, bayram_msg = summarize_news_batch(news_list)
         print(f"   ✅ {len(summaries)} KRİTİK haber filtrelendi\n")
         
