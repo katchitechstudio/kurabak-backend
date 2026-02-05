@@ -15,6 +15,7 @@ Telegram Monitor - ŞEF KOMUTA MERKEZİ V5.0 🤖
 ✅ /circuit KOMUTU: Circuit Breaker durumu sorgulama
 ✅ GÜVENLİ CACHE TEMİZLİĞİ: Redis bağlantısı korunur (V4.5)
 ✅ SADELEŞTİRİLMİŞ KOMUTLAR: Duyuru ve rapor komutları optimize edildi
+✅ 🔥 GELİŞMİŞ /online KOMUTU: Detaylı kullanıcı analizi (V5.1)
 """
 
 import os
@@ -452,7 +453,7 @@ class TelegramMonitor:
             "`/bakim kapat` - Bakım kapat\n\n"
             "📊 *RAPOR:*\n"
             "`/durum` - Sistem sağlık raporu\n"
-            "`/online` - Aktif kullanıcı\n"
+            "`/online` - Aktif kullanıcı (GELİŞMİŞ!) 🔥\n"
             "`/temizle` - Güvenli cache temizliği 🔐\n"
             "`/analiz` - Sistem analizi\n"
             "`/circuit` - Circuit Breaker durumu\n\n"
@@ -897,22 +898,97 @@ class TelegramMonitor:
             self._send_raw(f"❌ Durum raporu hatası: {str(e)}")
 
     def _handle_online(self):
-        """Aktif Kullanıcı Sayısı"""
+        """🔥 GELİŞMİŞ Aktif Kullanıcı Analizi V5.1"""
         try:
             from utils.cache import get_cache_keys
             
+            # 1. Tüm online key'leri çek
             online_keys = get_cache_keys("online_user:*")
             count = len(online_keys)
             
-            icon = "🔥" if count > 100 else "📊" if count > 10 else "👤"
+            if count == 0:
+                self._send_raw(
+                    "👤 *CANLI KULLANICI*\n\n"
+                    "Şu an *0* kullanıcı aktif Patron!\n\n"
+                    "_Son 5 dakika içinde API'ye istek atanlar_"
+                )
+                return
             
-            self._send_raw(
-                f"{icon} *CANLI KULLANICI*\n\n"
-                f"Şu an *{count}* kullanıcı aktif Patron!\n\n"
-                f"_Son 5 dakika içinde API'ye istek atanlar_"
-            )
+            # 2. Detaylı analiz yap
+            unique_users = set()
+            unique_devices = set()
+            unique_ips = set()
+            user_details = []
+            
+            for key in online_keys:
+                # Key formatı: "online_user:USER_ID:DEVICE_ID"
+                parts = key.replace("online_user:", "").split(":")
+                
+                if len(parts) >= 2:
+                    user_id = parts[0]
+                    device_id = parts[1]
+                    
+                    # IP adresi mi kontrol et
+                    if "." in user_id or user_id == "unknown":
+                        unique_ips.add(user_id)
+                    else:
+                        unique_users.add(user_id)
+                    
+                    if device_id != "unknown":
+                        unique_devices.add(device_id)
+                    
+                    # İlk 5 kullanıcıyı sakla
+                    if len(user_details) < 5:
+                        user_details.append({
+                            'user': user_id[:20],
+                            'device': device_id[:20]
+                        })
+            
+            # 3. İkon seç
+            if count > 100:
+                icon = "🔥"
+            elif count > 10:
+                icon = "📊"
+            else:
+                icon = "👤"
+            
+            # 4. Detaylı rapor oluştur
+            report = f"{icon} *CANLI KULLANICI*\n\n"
+            report += f"Şu an *{count}* istek aktif Patron!\n\n"
+            
+            # Unique sayılar
+            report += "📈 *DETAYLI ANALİZ:*\n"
+            report += f"• Unique Kullanıcı: `{len(unique_users)}`\n"
+            report += f"• Unique Device: `{len(unique_devices)}`\n"
+            report += f"• IP Bazlı: `{len(unique_ips)}`\n"
+            report += f"• Toplam Key: `{count}`\n\n"
+            
+            # Tahmin: Gerçek kullanıcı sayısı
+            estimated_real_users = max(len(unique_users), len(unique_devices), len(unique_ips))
+            if estimated_real_users > 0:
+                report += f"🎯 *TAHMİNİ GERÇEK KULLANICI:* `{estimated_real_users}`\n"
+                if count > estimated_real_users:
+                    report += f"   _(1 kişi ~{count // estimated_real_users} istek atmış)_\n"
+                report += "\n"
+            
+            # İlk 5 kullanıcıyı göster
+            if user_details:
+                report += "👥 *İLK 5 KULLANICI:*\n"
+                for i, detail in enumerate(user_details[:5], 1):
+                    user_preview = detail['user'][:15]
+                    device_preview = detail['device'][:15]
+                    report += f"{i}. User: `{user_preview}...`\n"
+                    report += f"   Device: `{device_preview}...`\n"
+                
+                if count > 5:
+                    report += f"\n_+{count - 5} key daha..._\n"
+            
+            report += "\n_Son 5 dakika içinde API'ye istek atanlar_"
+            
+            self._send_raw(report)
             
         except Exception as e:
+            logger.error(f"Online sayım hatası: {e}")
             self._send_raw(f"❌ Online sayım hatası: {str(e)}")
 
     def _handle_temizle(self):
