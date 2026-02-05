@@ -1,5 +1,5 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V3.4 PROD-READY 📰🚀
+News Manager - GÜNLÜK HABER SİSTEMİ V3.5 PROD-READY 📰🚀
 =============================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
@@ -10,6 +10,7 @@ News Manager - GÜNLÜK HABER SİSTEMİ V3.4 PROD-READY 📰🚀
 ✅ GEMİNİ 3 FLASH: Yeni model desteği
 ✅ NULL SAFETY: NEWSDATA null kontrolü
 ✅ RACE CONDITION FIX: Bootstrap lock mekanizması
+✅ SON 24 SAAT FİLTRESİ: Sadece güncel haberler (V3.5)
 """
 
 import os
@@ -100,23 +101,27 @@ def fetch_with_retry(url: str, max_retries: int = 3, timeout: int = 10) -> Optio
 
 
 def fetch_gnews(max_results: int = 20) -> List[str]:
-    """GNews API'den ekonomi haberleri çeker - RETRY KORUMASLI"""
+    """GNews API'den ekonomi haberleri çeker - RETRY KORUMASLI + SON 24 SAAT"""
     try:
         if not GNEWS_API_KEY:
             logger.warning("⚠️ GNEWS_API_KEY bulunamadı!")
             return []
+        
+        # 🔥 YENİ: Son 24 saatin haberleri
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
         
         url = (
             f"https://gnews.io/api/v4/search"
             f"?q=(\"merkez bankası\" OR \"faiz kararı\" OR \"faiz\" OR \"enflasyon\" OR \"TCMB\" OR \"FED\" OR \"ECB\" OR \"büyüme\" OR \"GSYİH\")"
             f"&lang=tr"
             f"&country=tr"
+            f"&from={yesterday}"
             f"&sortby=publishedAt"
             f"&max=20"
             f"&apikey={GNEWS_API_KEY}"
         )
         
-        logger.info("📡 [GNEWS] Haberler çekiliyor...")
+        logger.info("📡 [GNEWS] Haberler çekiliyor (son 24 saat)...")
         data = fetch_with_retry(url)
         
         if not data or data.get('totalArticles', 0) == 0:
@@ -144,7 +149,7 @@ def fetch_gnews(max_results: int = 20) -> List[str]:
 
 def fetch_newsdata(max_results: int = 20) -> List[str]:
     """
-    NewsData API'den ekonomi haberleri çeker - RETRY KORUMASLI
+    NewsData API'den ekonomi haberleri çeker - RETRY KORUMASLI + SON 24 SAAT
     🔥 NULL SAFETY: None kontrolü eklendi
     """
     try:
@@ -158,10 +163,11 @@ def fetch_newsdata(max_results: int = 20) -> List[str]:
             f"&country=tr"
             f"&language=tr"
             f"&category=business"
+            f"&timeframe=24"
             f"&q=(merkez AND bankası) OR faiz OR TCMB OR FED OR ECB OR enflasyon OR büyüme"
         )
         
-        logger.info("📡 [NEWSDATA] Haberler çekiliyor...")
+        logger.info("📡 [NEWSDATA] Haberler çekiliyor (son 24 saat)...")
         data = fetch_with_retry(url)
         
         if not data or data.get('status') != 'success':
@@ -662,9 +668,9 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.4 PROD-READY - Test\n")
+    print("🧪 News Manager V3.5 PROD-READY - Test\n")
     
-    print("1️⃣ HABER TOPLAMA:")
+    print("1️⃣ HABER TOPLAMA (SON 24 SAAT):")
     news_list = fetch_all_news()
     print(f"   ✅ {len(news_list)} haber toplandı\n")
     
