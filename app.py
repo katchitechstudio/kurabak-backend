@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.3 🚀
+KuraBak Backend - ENTRY POINT V5.2 🚀 (FIREBASE PATH FIX)
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -10,13 +10,12 @@ KuraBak Backend - ENTRY POINT V5.3 🚀
 ✅ ALARM SİSTEMİ: Redis tabanlı fiyat alarmları
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
-✅ SUMMARY SYNC FIX: Sterlin sorunu çözüldü
-✅ SCHEDULER STATUS FIX: Scheduler durumu artık doğru gösteriliyor
-✅ RENDER THREAD FIX: Production'da thread başlatma sorunu çözüldü
-✅ TELEGRAM SINGLETON V5.1: Global instance memory leak önleme
-✅ FIREBASE SINGLETON V5.1: Multiple init önleme
-✅ HEALTHZ FIX: Render health check endpoint'i eklendi
-✅ REDIS LOCK V5.3: Scheduler çoğalma bug'ı KESIN çözüldü 🔥
+✅ FIREBASE PATH FIX V5.2: Render Secret Files path düzeltmesi 🔥
+
+V5.2 Değişiklikler:
+- Firebase credentials path düzeltildi
+- Alternatif path kontrolü eklendi
+- Daha detaylı logging
 """
 import os
 import logging
@@ -36,7 +35,7 @@ from services.maintenance_service import start_scheduler, stop_scheduler, superv
 from utils.notification_service import register_fcm_token, send_test_notification
 
 # ======================================
-# 🔥 V5.1: FIREBASE SINGLETON (MEMORY LEAK FİX!)
+# 🔥 V5.2: FIREBASE SINGLETON (PATH FIX!)
 # ======================================
 
 import firebase_admin
@@ -48,46 +47,66 @@ _firebase_lock = threading.Lock()
 
 def init_firebase():
     """
-    🔥 V5.1 FIX: Firebase Admin SDK'yı singleton pattern ile başlatır
+    🔥 V5.2 FIX: Render Secret Files path düzeltmesi
     
-    ÖNCEKİ SORUN:
-    - Her restart'ta yeni Firebase instance oluşuyordu
-    - Eski instance'lar garbage collect edilmiyordu
-    
-    YENİ ÇÖZÜM:
-    - Global flag ile kontrol
-    - Thread-safe initialization
-    - Tek bir instance garantisi
+    Render Secret Files dosyaları otomatik olarak /etc/secrets/ altına koyar
+    Dosya adı: firebase_credentials.json
+    Erişim yolu: /etc/secrets/firebase_credentials.json
     """
     global _firebase_initialized
     
-    # Double-checked locking
     if _firebase_initialized:
         logger.info("🔥 [Firebase] Zaten başlatılmış (global flag)")
         return True
     
     with _firebase_lock:
-        # Tekrar kontrol et (thread-safe)
         if _firebase_initialized:
             return True
         
         try:
-            # firebase_admin._apps kontrolü (fallback)
             if firebase_admin._apps:
                 logger.info("🔥 [Firebase] firebase_admin._apps dolu, başlatılmış kabul ediliyor")
                 _firebase_initialized = True
                 return True
             
-            cred_path = Config.FIREBASE_CREDENTIALS_PATH
-            
+            # 🔥 V5.2 FIX: Render Secret Files path düzeltmesi
             if os.environ.get("RENDER"):
+                # Render Secret Files'da dosya adı: firebase_credentials.json
+                # Render otomatik olarak /etc/secrets/ altına koyar
                 cred_path = "/etc/secrets/firebase_credentials.json"
+            else:
+                # Local development
+                cred_path = Config.FIREBASE_CREDENTIALS_PATH or "firebase_credentials.json"
             
+            logger.info(f"🔍 [Firebase] Credentials yolu: {cred_path}")
+            
+            # Dosya var mı kontrol et
             if not os.path.exists(cred_path):
-                logger.warning(f"⚠️ [Firebase] Credentials dosyası bulunamadı: {cred_path}")
-                logger.warning("   Push notification özellikleri devre dışı!")
-                return False
+                logger.error(f"❌ [Firebase] Credentials dosyası bulunamadı: {cred_path}")
+                
+                # Alternatif yolları dene
+                alternative_paths = [
+                    "firebase_credentials.json",
+                    "./firebase_credentials.json",
+                    "/etc/secrets/firebase_credentials.json",
+                    os.path.join(os.getcwd(), "firebase_credentials.json")
+                ]
+                
+                logger.info("🔍 [Firebase] Alternatif yollar deneniyor...")
+                for alt_path in alternative_paths:
+                    logger.info(f"   Kontrol: {alt_path}")
+                    if os.path.exists(alt_path):
+                        cred_path = alt_path
+                        logger.info(f"   ✅ Bulundu: {alt_path}")
+                        break
+                else:
+                    logger.warning("⚠️ [Firebase] Hiçbir yolda dosya bulunamadı!")
+                    logger.warning("   Push notification özellikleri devre dışı!")
+                    return False
             
+            logger.info(f"✅ [Firebase] Credentials dosyası bulundu: {cred_path}")
+            
+            # Firebase'i başlat
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {
                 'projectId': 'kurabak-f1950'
@@ -100,7 +119,6 @@ def init_firebase():
             return True
             
         except ValueError as ve:
-            # Firebase zaten başlatılmışsa bu hatayı alırız
             if "already exists" in str(ve).lower():
                 logger.info("🔥 [Firebase] Zaten başlatılmış (ValueError yakalandı)")
                 _firebase_initialized = True
@@ -110,6 +128,8 @@ def init_firebase():
                 return False
         except Exception as e:
             logger.error(f"❌ [Firebase] Başlatma hatası: {e}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
             logger.warning("   Push notification özellikleri devre dışı!")
             return False
 
@@ -140,22 +160,12 @@ app.register_blueprint(alarm_bp)
 # 🔥 V5.1: TELEGRAM SINGLETON (MEMORY LEAK FİX!)
 # ======================================
 
-# Global Telegram instance
 _telegram_instance = None
 _telegram_lock = threading.Lock()
 
 def get_telegram_instance():
     """
     🔥 V5.1 FIX: Telegram instance'ı singleton pattern ile al
-    
-    ÖNCEKİ SORUN:
-    - Her background_initialization() çağrısında yeni instance
-    - Restart durumlarında eski instance'lar bellekte kalıyordu
-    
-    YENİ ÇÖZÜM:
-    - Global singleton instance
-    - Thread-safe initialization
-    - Memory leak yok!
     """
     global _telegram_instance
     
@@ -163,7 +173,6 @@ def get_telegram_instance():
         return _telegram_instance
     
     with _telegram_lock:
-        # Double-checked locking
         if _telegram_instance is not None:
             return _telegram_instance
         
@@ -183,38 +192,18 @@ def get_telegram_instance():
 def background_initialization():
     """
     🔥 V5.3 FIX: Redis Lock ile scheduler çoğalmasını önle
-    
-    ÖNCEKİ SORUN:
-    - Gunicorn fork → global değişkenler process'ler arası paylaşılmıyor
-    - Her process scheduler başlatıyor → zombie scheduler
-    - SIGTERM sonrası bile job'lar çalışmaya devam ediyordu
-    
-    YENİ ÇÖZÜM:
-    - Redis distributed lock (process-safe!)
-    - İlk gelen process lock'u alıyor
-    - Diğer process'ler "zaten var" görüyor
-    - %100 tek scheduler garantisi
-    
-    BAŞLATMA SIRASI:
-    1. Firebase Admin SDK (Singleton - Push Notifications)
-    2. Telegram Monitor (Singleton - Komut Sistemi)
-    3. Scheduler (Worker + Snapshot + Şef + Takvim + Alarm) - Redis Lock ile
-    4. İLK ŞEF KONTROLÜ (Snapshot yoksa hemen alır!)
     """
     from utils.cache import get_redis_client
     
     current_pid = os.getpid()
     lock_key = "kurabak:scheduler:lock"
     
-    # 🔥 V5.3: REDIS LOCK (process-safe!)
     try:
-        # Redis client'ı al
         redis_client = get_redis_client()
         
         if not redis_client:
             logger.warning("⚠️ [Redis Lock] Redis bağlantısı yok, fallback mode")
         else:
-            # Redis'ten mevcut scheduler PID'sini kontrol et
             existing_pid = redis_client.get(lock_key)
             
             if existing_pid:
@@ -223,7 +212,6 @@ def background_initialization():
                 logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (zombie önleme)")
                 return
             
-            # Lock'u al (60 saniye geçici)
             redis_client.set(lock_key, current_pid, ex=60)
             logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid}")
         
@@ -251,11 +239,10 @@ def background_initialization():
     # 3. Scheduler'ı (Zamanlayıcı) Başlat
     start_scheduler()
     
-    # 🔥 V5.3: Scheduler başarıyla başlatıldıysa lock'u kalıcı yap
     try:
         redis_client = get_redis_client()
         if redis_client:
-            redis_client.set(lock_key, current_pid, ex=86400)  # 24 saat
+            redis_client.set(lock_key, current_pid, ex=86400)
             logger.info(f"🔒 [Redis Lock] Scheduler owner PID kaydedildi: {current_pid} (24h lock)")
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Kalıcı lock yazılamadı: {e}")
@@ -271,7 +258,6 @@ def background_initialization():
     
     logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
     
-    # Telegram'a başlangıç mesajı gönder (varsa)
     if telegram:
         try:
             telegram.send_startup_message()
@@ -310,7 +296,7 @@ def index():
     }), 200
 
 @app.route('/health', methods=['GET'])
-@app.route('/healthz', methods=['GET'])  # 🔥 RENDER HEALTH CHECK FIX!
+@app.route('/healthz', methods=['GET'])
 def health():
     """Basit Sağlık Kontrolü (Load Balancer için)"""
     return jsonify({"status": "ok"}), 200
@@ -412,19 +398,9 @@ def system_status():
             "error": str(e)
         }), 500
 
-# ======================================
-# 🔥 GERİ BİLDİRİM & CİHAZ KAYIT SİSTEMİ
-# ======================================
-
 @app.route('/api/feedback/send', methods=['POST'])
 def send_feedback():
-    """
-    Kullanıcı geri bildirimlerini Telegram'a iletir
-    Günde 1 mesaj sınırı Android tarafında kontrol edilir
-    Maksimum 250 karakter sınırı
-    
-    🔥 V5.1: Global telegram singleton kullanımı
-    """
+    """Kullanıcı geri bildirimleri"""
     try:
         data = request.json
         message = data.get('message', '').strip()
@@ -435,7 +411,6 @@ def send_feedback():
         if len(message) > 250:
             return jsonify({"success": False, "error": "Mesaj çok uzun (max 250 karakter)"}), 400
 
-        # Telegram'a Gönder (Global Singleton)
         telegram = get_telegram_instance()
         
         if telegram:
@@ -453,7 +428,7 @@ def send_feedback():
 
 @app.route('/api/device/register', methods=['POST'])
 def register_device():
-    """FCM Token kaydı (Push Notification için)"""
+    """FCM Token kaydı"""
     try:
         data = request.json
         token = data.get('token')
@@ -483,42 +458,25 @@ def trigger_test_push():
         logger.error(f"❌ [Push Test] Hata: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ======================================
-# 🧹 ACİL TEMİZLİK ENDPOİNTİ
-# ======================================
-
 @app.route('/api/admin/cleanup', methods=['POST'])
 def emergency_cleanup():
-    """
-    🚨 ACİL TEMİZLİK - RAM'deki tüm çöpleri temizler
-    
-    - Redis FLUSHALL
-    - RAM Cache temizliği
-    - Disk backup temizliği (eski dosyalar)
-    - Scheduler restart
-    
-    ⚠️ DİKKAT: Bu endpoint sadece Telegram'dan çağrılmalı!
-    """
+    """ACİL TEMİZLİK"""
     try:
         from utils.cache import flush_all_cache, cleanup_old_disk_backups
         
         logger.warning("🚨 [CLEANUP] ACİL TEMİZLİK BAŞLADI!")
         
-        # 1. Redis + RAM + Disk temizle
         flush_all_cache()
         logger.info("✅ [CLEANUP] Cache temizlendi")
         
-        # 2. Eski disk backup'larını temizle (7+ gün)
         cleanup_result = cleanup_old_disk_backups(max_age_days=7)
         logger.info(f"✅ [CLEANUP] {cleanup_result['deleted_count']} eski backup silindi")
         
-        # 3. Scheduler'ı yeniden başlat
         stop_scheduler()
         time.sleep(2)
         start_scheduler()
         logger.info("✅ [CLEANUP] Scheduler yeniden başlatıldı")
         
-        # 4. Telegram'a bildir
         telegram = get_telegram_instance()
         if telegram:
             telegram._send_raw(
@@ -549,15 +507,12 @@ def emergency_cleanup():
 # ======================================
 
 def on_exit():
-    """
-    🔥 V5.3: Temiz kapanış (Singleton'ları + Redis lock'u temizle)
-    """
+    """Temiz kapanış"""
     global _firebase_initialized, _telegram_instance
     
     logger.info("🛑 Uygulama kapatılıyor...")
     stop_scheduler()
     
-    # Redis lock'u temizle
     try:
         from utils.cache import get_redis_client
         redis_client = get_redis_client()
@@ -568,7 +523,6 @@ def on_exit():
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Temizleme hatası: {e}")
     
-    # Firebase'i temizle
     try:
         if _firebase_initialized and firebase_admin._apps:
             firebase_admin.delete_app(firebase_admin.get_app())
@@ -577,7 +531,6 @@ def on_exit():
     except:
         pass
     
-    # Telegram'ı temizle
     try:
         if _telegram_instance:
             _telegram_instance = None
