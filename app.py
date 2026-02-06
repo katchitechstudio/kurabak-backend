@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.2 🚀 (FIREBASE PATH FIX)
+KuraBak Backend - ENTRY POINT V5.3 🚀 (GUNICORN WORKER FIX)
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -11,11 +11,12 @@ KuraBak Backend - ENTRY POINT V5.2 🚀 (FIREBASE PATH FIX)
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
 ✅ FIREBASE PATH FIX V5.2: Render Secret Files path düzeltmesi 🔥
+✅ GUNICORN WORKER FIX V5.3: Her worker'da Firebase başlatılır 🔥
 
-V5.2 Değişiklikler:
-- Firebase credentials path düzeltildi
-- Alternatif path kontrolü eklendi
-- Daha detaylı logging
+V5.3 Değişiklikler:
+- post_fork hook eklendi (Gunicorn multi-process fix)
+- Her worker kendi Firebase instance'ını alır
+- Production ortamda worker çoğalması sorunu çözüldü
 """
 import os
 import logging
@@ -47,7 +48,9 @@ _firebase_lock = threading.Lock()
 
 def init_firebase():
     """
-    🔥 V5.2 FIX: Render Secret Files path düzeltmesi
+    🔥 V5.3 FIX: Gunicorn worker-safe Firebase başlatma
+    
+    Her worker process kendi Firebase instance'ını alır.
     
     Render Secret Files dosyaları otomatik olarak /etc/secrets/ altına koyar
     Dosya adı: firebase_credentials.json
@@ -184,6 +187,41 @@ def get_telegram_instance():
         except Exception as e:
             logger.error(f"❌ [Telegram] Instance oluşturma hatası: {e}")
             return None
+
+# ======================================
+# 🔥 V5.3: GUNICORN POST_FORK HOOK
+# ======================================
+
+def post_fork(server, worker):
+    """
+    🔥 V5.3 FIX: Gunicorn her worker başlattığında çalışır
+    
+    SORUN:
+    - Master process Firebase'i başlatır
+    - Worker process'ler kendi Firebase instance'ına ihtiyaç duyar
+    - Her worker'da init_firebase() çağrılmalı
+    
+    ÇÖZÜM:
+    - post_fork hook ile her worker'da Firebase'i başlat
+    - Her worker kendi instance'ını alır
+    - 404 hatası ortadan kalkar
+    """
+    global _firebase_initialized
+    
+    logger.info(f"🔥 [Worker {worker.pid}] Post-fork hook tetiklendi")
+    
+    # Worker'da flag'i sıfırla (master'dan kalan flag'i temizle)
+    _firebase_initialized = False
+    
+    # Firebase'i worker'da başlat
+    try:
+        firebase_status = init_firebase()
+        if firebase_status:
+            logger.info(f"✅ [Worker {worker.pid}] Firebase başarıyla başlatıldı!")
+        else:
+            logger.warning(f"⚠️ [Worker {worker.pid}] Firebase başlatılamadı (devre dışı)")
+    except Exception as e:
+        logger.error(f"❌ [Worker {worker.pid}] Firebase başlatma hatası: {e}")
 
 # ======================================
 # ASENKRON BAŞLATICI
