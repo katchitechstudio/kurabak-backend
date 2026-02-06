@@ -455,7 +455,7 @@ Anlık: ₺{current_price:,.2f}
                     notification=messaging.AndroidNotification(
                         sound='default',
                         channel_id='kurabak_alarm',
-                        color='#FF5722'  # Turuncu renk
+                        color='#10B981'  # KuraBak yeşili
                     )
                 )
             )
