@@ -1,3 +1,18 @@
+"""
+General Routes - API Endpoints V5.1 (TELEGRAM FEEDBACK FIX)
+==================================================
+✅ FCM Token Registration & Unregistration
+✅ Feedback System (TELEGRAM BOT FIX!) 🔥
+✅ Currency/Gold/Silver Data Endpoints
+✅ Regional Currency Grouping
+✅ Banner Management (Event System)
+✅ Metrics & Monitoring
+✅ Rate Limiting
+
+V5.1 Changes:
+- Telegram bot import fixed: telegram_instance kullanımı
+- Feedback mesajları artık Telegram'a düzgün iletiyor
+"""
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -433,6 +448,17 @@ def fcm_status():
 @api_bp.route('/feedback/send', methods=['POST'])
 @limiter.limit("5 per hour")
 def send_feedback():
+    """
+    🔥 V5.1 FIX: Telegram bot instance düzeltildi
+    
+    ÖNCEKİ SORUN:
+    - get_telegram_monitor() fonksiyonu None dönüyordu
+    - Feedback mesajları Telegram'a gitmiyordu
+    
+    YENİ ÇÖZÜM:
+    - Global telegram_instance kullanılıyor
+    - Singleton pattern ile doğru instance alınıyor
+    """
     try:
         data = request.get_json()
         
@@ -473,9 +499,10 @@ def send_feedback():
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        from utils.telegram_monitor import get_telegram_monitor
+        # 🔥 V5.1 FIX: Global telegram instance'ı kullan
+        from utils.telegram_monitor import telegram_instance
         
-        telegram_bot = get_telegram_monitor()
+        telegram_bot = telegram_instance
         
         if telegram_bot:
             feedback_text = (
