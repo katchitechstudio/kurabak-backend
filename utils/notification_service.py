@@ -1,5 +1,5 @@
 """
-Firebase Push Notification Service V5.1 🔥 - FCM FIX
+Firebase Push Notification Service V5.2 🔥 - FIREBASE CHECK FIX
 =====================================
 ✅ HTTP v1 API Migration (send_each yerine send_all kullanımı)
 ✅ Token Yönetimi (Kayıt/Silme)
@@ -11,11 +11,12 @@ Firebase Push Notification Service V5.1 🔥 - FCM FIX
 ✅ 🔥 GENERATOR PATTERN: RAM dostu token okuma
 ✅ 🔥 V5.0: BAYRAM/HABER SİSTEMİ (event_manager entegrasyonu)
 ✅ 🔥 V5.1: FCM HTTP v1 API 404 HATASI ÇÖZÜLDÜ!
+✅ 🔥 V5.2: FIREBASE CHECK FIX - Singleton pattern uyumlu
 
-V5.1 Değişiklikler (CRITICAL FIX):
-- send_multicast() yerine send_each_for_multicast() kullanımı
-- 404 /batch hatası düzeltildi
-- Güvenilir toplu bildirim gönderimi
+V5.2 Değişiklikler (CRITICAL FIX):
+- firebase_admin._apps kontrolü kaldırıldı
+- app.py'deki singleton pattern ile uyumlu
+- Hata durumunda try-catch yakalıyor
 """
 import logging
 import json
@@ -178,18 +179,12 @@ def send_notification(
     sound: str = "default"
 ) -> Dict:
     """
-    🔥 V5.1 FIX: FCM bildirimi gönder (HTTP v1 API uyumlu)
+    🔥 V5.2 FIX: FCM bildirimi gönder (Singleton pattern uyumlu)
     
-    ÖNCEKİ SORUN:
-    - send_multicast() kullanıyordu
-    - Firebase /batch endpoint'ine istek atıyordu
-    - HTTP v1 API'de /batch yok → 404 hatası
-    
-    YENİ ÇÖZÜM:
-    - send_each_for_multicast() kullanıyor
-    - Her token için ayrı Message nesnesi oluşturuluyor
-    - HTTP v1 API uyumlu
-    - Başarı/hata takibi daha detaylı
+    V5.1 → V5.2 Değişiklik:
+    - firebase_admin._apps kontrolü KALDIRILDI
+    - app.py'deki init_firebase() singleton pattern ile başlatıyor
+    - Hata varsa try-catch yakalıyor
     
     Args:
         tokens: Hedef cihaz tokenları
@@ -203,9 +198,9 @@ def send_notification(
         Dict: Sonuç bilgisi
     """
     try:
-        if not firebase_admin._apps:
-            logger.warning("⚠️ [FCM] Firebase başlatılmamış, bildirim gönderilemedi!")
-            return {"success": False, "error": "Firebase not initialized"}
+        # 🔥 V5.2 FIX: Firebase kontrolü kaldırıldı
+        # app.py'de singleton pattern ile başlatılıyor
+        # Hata varsa try-catch yakalayacak
         
         if not tokens:
             logger.warning("⚠️ [FCM] Token bulunamadı!")
@@ -225,26 +220,6 @@ def send_notification(
             batch_num = (i // FCM_BATCH_SIZE) + 1
             
             logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
-            
-            # 🔥 V5.1 FIX: Her token için ayrı Message nesnesi oluştur
-            messages = []
-            for token in batch_tokens:
-                message = messaging.Message(
-                    notification=messaging.Notification(
-                        title=title,
-                        body=body
-                    ),
-                    token=token,
-                    data=data or {},
-                    android=messaging.AndroidConfig(
-                        priority=priority,
-                        notification=messaging.AndroidNotification(
-                            sound=sound,
-                            channel_id='kurabak_default'
-                        )
-                    )
-                )
-                messages.append(message)
             
             # 🔥 V5.1 FIX: send_each_for_multicast() kullan (HTTP v1 API uyumlu)
             try:
@@ -319,6 +294,7 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
     
     🔥 V4.5: Generator pattern kullanır, RAM şişmesi olmaz
     🔥 V5.1: HTTP v1 API uyumlu send_notification() kullanır
+    🔥 V5.2: Singleton pattern uyumlu
     
     Args:
         title: Bildirim başlığı
@@ -346,7 +322,7 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
             
             logger.info(f"📤 [FCM] Batch {batch_num} gönderiliyor ({len(batch_tokens)} token)...")
             
-            # 🔥 V5.1: send_notification() zaten HTTP v1 uyumlu
+            # 🔥 V5.2: send_notification() singleton pattern uyumlu
             result = send_notification(
                 tokens=batch_tokens,
                 title=title,
