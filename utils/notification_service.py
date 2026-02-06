@@ -1,5 +1,5 @@
 """
-Firebase Push Notification Service V5.2 🔥 - FIREBASE CHECK FIX
+Firebase Push Notification Service V5.3 🔥 - ALARM NOTIFICATION UPGRADE
 =====================================
 ✅ HTTP v1 API Migration (send_each yerine send_all kullanımı)
 ✅ Token Yönetimi (Kayıt/Silme)
@@ -12,11 +12,14 @@ Firebase Push Notification Service V5.2 🔥 - FIREBASE CHECK FIX
 ✅ 🔥 V5.0: BAYRAM/HABER SİSTEMİ (event_manager entegrasyonu)
 ✅ 🔥 V5.1: FCM HTTP v1 API 404 HATASI ÇÖZÜLDÜ!
 ✅ 🔥 V5.2: FIREBASE CHECK FIX - Singleton pattern uyumlu
+✅ 🔥 V5.3: ALARM BİLDİRİMİ YENİDEN TASARLANDI
 
-V5.2 Değişiklikler (CRITICAL FIX):
-- firebase_admin._apps kontrolü kaldırıldı
-- app.py'deki singleton pattern ile uyumlu
-- Hata durumunda try-catch yakalıyor
+V5.3 Değişiklikler (ALARM NOTIFICATION UPGRADE):
+- Alarm bildirimine detaylı bilgi eklendi
+- Varlık adı + tür (Dolar / USD)
+- Hedef fiyat, Anlık fiyat
+- Alarm tipi (Hedef ÜZERİNE çıktı / ALTINA düştü)
+- Değişim bilgisi (+0,02 TL (+0,56%))
 """
 import logging
 import json
@@ -368,9 +371,111 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
         return {"success": False, "error": str(e)}
 
 
+def send_alarm_notification(
+    fcm_token: str,
+    currency_code: str,
+    currency_name: str,
+    target_price: float,
+    current_price: float,
+    start_price: float,
+    alarm_type: str
+) -> bool:
+    """
+    🔥 V5.3: Fiyat alarmı bildirimi gönder (YENİ TASARIM)
+    
+    Bildirim İçeriği:
+    - Varlık adı + tür (Dolar / USD)
+    - Hedef fiyat
+    - Anlık fiyat
+    - Alarm tipi (Hedef ÜZERİNE çıktı / ALTINA düştü)
+    - Değişim bilgisi (+0,02 TL (+0,56%))
+    
+    Args:
+        fcm_token: FCM token
+        currency_code: Döviz kodu (USD, EUR, XAU, vb.)
+        currency_name: Döviz adı (Dolar, Euro, Gram Altın)
+        target_price: Hedef fiyat
+        current_price: Mevcut fiyat
+        start_price: Alarm kurulduğu andaki fiyat
+        alarm_type: HIGH veya LOW
+        
+    Returns:
+        bool: Başarılı ise True
+    """
+    try:
+        # Değişim hesapla
+        price_diff = current_price - target_price
+        change_from_start = current_price - start_price
+        change_percent = (change_from_start / start_price) * 100 if start_price > 0 else 0
+        
+        # Emoji ve durm metni
+        emoji = "📈" if alarm_type == "HIGH" else "📉"
+        alarm_status = "Hedef ÜZERİNE çıktı" if alarm_type == "HIGH" else "Hedef ALTINA düştü"
+        change_symbol = "+" if change_from_start >= 0 else ""
+        
+        # Başlık
+        title = f"{emoji} Fiyat Alarmı!"
+        
+        # Gövde (Detaylı bilgi)
+        body = f"""{currency_name} / {currency_code}
+
+Hedef: ₺{target_price:,.2f}
+Anlık: ₺{current_price:,.2f}
+
+{alarm_status}
+
+{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{change_percent:.2f}%)"""
+        
+        # Data payload (Android'de ekstra işlemler için)
+        data = {
+            "type": "alarm_triggered",
+            "currency_code": currency_code,
+            "currency_name": currency_name,
+            "target_price": f"{target_price:.2f}",
+            "current_price": f"{current_price:.2f}",
+            "start_price": f"{start_price:.2f}",
+            "alarm_type": alarm_type,
+            "alarm_status": alarm_status,
+            "price_diff": f"{price_diff:.2f}",
+            "change_from_start": f"{change_from_start:.2f}",
+            "change_percent": f"{change_percent:.2f}"
+        }
+        
+        # Gönder
+        response = messaging.send(
+            messaging.Message(
+                notification=messaging.Notification(
+                    title=title,
+                    body=body
+                ),
+                data=data,
+                token=fcm_token,
+                android=messaging.AndroidConfig(
+                    priority='high',
+                    notification=messaging.AndroidNotification(
+                        sound='default',
+                        channel_id='kurabak_alarm',
+                        color='#FF5722'  # Turuncu renk
+                    )
+                )
+            )
+        )
+        
+        logger.info(f"✅ [ALARM] Bildirim gönderildi: {currency_name} ({currency_code}) - {alarm_status}")
+        logger.info(f"   📊 Hedef: ₺{target_price:.2f} | Anlık: ₺{current_price:.2f} | Değişim: {change_symbol}{change_from_start:.2f} TL ({change_symbol}{change_percent:.2f}%)")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ [ALARM] Bildirim gönderme hatası: {e}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
+        return False
+
+
 def send_price_alert(currency_code: str, price: float, change_percent: float) -> Dict:
     """
-    Fiyat alarm bildirimi
+    Fiyat alarm bildirimi (Genel fiyat uyarısı - alarm sistemi değil)
     
     Args:
         currency_code: Döviz kodu (USD, EUR, vb.)
