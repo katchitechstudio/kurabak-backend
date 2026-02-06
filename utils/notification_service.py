@@ -1,6 +1,7 @@
 """
-Firebase Push Notification Service V5.0 🔥
+Firebase Push Notification Service V5.1 🔥 - FCM FIX
 =====================================
+✅ HTTP v1 API Migration (send_each yerine send_all kullanımı)
 ✅ Token Yönetimi (Kayıt/Silme)
 ✅ Bildirim Gönderme (Tekil/Toplu)
 ✅ 500 Token Batch Limiti (Firebase Compliant)
@@ -9,13 +10,12 @@ Firebase Push Notification Service V5.0 🔥
 ✅ GÜNLÜK ÖZET: 14:00 otomatik gönderim (V5.0)
 ✅ 🔥 GENERATOR PATTERN: RAM dostu token okuma
 ✅ 🔥 V5.0: BAYRAM/HABER SİSTEMİ (event_manager entegrasyonu)
+✅ 🔥 V5.1: FCM HTTP v1 API 404 HATASI ÇÖZÜLDÜ!
 
-V5.0 Değişiklikler:
-- send_daily_summary() tamamen yenilendi
-- Artık 23 döviz özeti YOK
-- event_manager.get_daily_notification_content() kullanılıyor
-- Bayram varsa bayram, yoksa haber gönderiliyor
-- Gereksiz fonksiyonlar temizlendi (send_market_alert, send_system_notification)
+V5.1 Değişiklikler (CRITICAL FIX):
+- send_multicast() yerine send_each_for_multicast() kullanımı
+- 404 /batch hatası düzeltildi
+- Güvenilir toplu bildirim gönderimi
 """
 import logging
 import json
@@ -178,7 +178,18 @@ def send_notification(
     sound: str = "default"
 ) -> Dict:
     """
-    FCM bildirimi gönder (500'lük batch'lere otomatik böler)
+    🔥 V5.1 FIX: FCM bildirimi gönder (HTTP v1 API uyumlu)
+    
+    ÖNCEKİ SORUN:
+    - send_multicast() kullanıyordu
+    - Firebase /batch endpoint'ine istek atıyordu
+    - HTTP v1 API'de /batch yok → 404 hatası
+    
+    YENİ ÇÖZÜM:
+    - send_each_for_multicast() kullanıyor
+    - Her token için ayrı Message nesnesi oluşturuluyor
+    - HTTP v1 API uyumlu
+    - Başarı/hata takibi daha detaylı
     
     Args:
         tokens: Hedef cihaz tokenları
@@ -215,37 +226,61 @@ def send_notification(
             
             logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
             
-            notification = messaging.Notification(
-                title=title,
-                body=body
-            )
-            
-            android_config = messaging.AndroidConfig(
-                priority=priority,
-                notification=messaging.AndroidNotification(
-                    sound=sound,
-                    channel_id='kurabak_default'
+            # 🔥 V5.1 FIX: Her token için ayrı Message nesnesi oluştur
+            messages = []
+            for token in batch_tokens:
+                message = messaging.Message(
+                    notification=messaging.Notification(
+                        title=title,
+                        body=body
+                    ),
+                    token=token,
+                    data=data or {},
+                    android=messaging.AndroidConfig(
+                        priority=priority,
+                        notification=messaging.AndroidNotification(
+                            sound=sound,
+                            channel_id='kurabak_default'
+                        )
+                    )
                 )
-            )
+                messages.append(message)
             
-            message = messaging.MulticastMessage(
-                notification=notification,
-                tokens=batch_tokens,
-                data=data or {},
-                android=android_config
-            )
-            
-            response = messaging.send_multicast(message)
-            
-            total_success += response.success_count
-            total_failure += response.failure_count
-            
-            if response.failure_count > 0:
-                failed_tokens = [batch_tokens[idx] for idx, resp in enumerate(response.responses) if not resp.success]
-                failed_tokens_all.extend(failed_tokens)
-            
-            logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
+            # 🔥 V5.1 FIX: send_each_for_multicast() kullan (HTTP v1 API uyumlu)
+            try:
+                response = messaging.send_each_for_multicast(
+                    messaging.MulticastMessage(
+                        notification=messaging.Notification(title=title, body=body),
+                        tokens=batch_tokens,
+                        data=data or {},
+                        android=messaging.AndroidConfig(
+                            priority=priority,
+                            notification=messaging.AndroidNotification(
+                                sound=sound,
+                                channel_id='kurabak_default'
+                            )
+                        )
+                    )
+                )
+                
+                total_success += response.success_count
+                total_failure += response.failure_count
+                
+                # Başarısız tokenları topla
+                if response.failure_count > 0:
+                    for idx, send_response in enumerate(response.responses):
+                        if not send_response.success:
+                            failed_tokens_all.append(batch_tokens[idx])
+                            logger.debug(f"   ❌ Token {idx+1}: {send_response.exception}")
+                
+                logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
+                
+            except Exception as batch_error:
+                logger.error(f"❌ [FCM] Batch {batch_num} kritik hata: {batch_error}")
+                total_failure += len(batch_tokens)
+                failed_tokens_all.extend(batch_tokens)
         
+        # Başarısız tokenları temizle
         if failed_tokens_all:
             logger.warning(f"🗑️ [FCM] {len(failed_tokens_all)} başarısız token temizleniyor...")
             for token in failed_tokens_all:
@@ -273,6 +308,8 @@ def send_notification(
         
     except Exception as e:
         logger.error(f"❌ [FCM] Bildirim gönderme hatası: {e}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         return {"success": False, "error": str(e)}
 
 
@@ -281,6 +318,7 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
     TÜM kayıtlı cihazlara bildirim gönder (RAM dostu - Generator ile)
     
     🔥 V4.5: Generator pattern kullanır, RAM şişmesi olmaz
+    🔥 V5.1: HTTP v1 API uyumlu send_notification() kullanır
     
     Args:
         title: Bildirim başlığı
@@ -299,19 +337,6 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
         
         token_generator = get_tokens_generator(batch_size=FCM_BATCH_SIZE)
         
-        notification = messaging.Notification(
-            title=title,
-            body=body
-        )
-        
-        android_config = messaging.AndroidConfig(
-            priority="high",
-            notification=messaging.AndroidNotification(
-                sound="default",
-                channel_id='kurabak_default'
-            )
-        )
-        
         batch_num = 0
         for batch_tokens in token_generator:
             batch_num += 1
@@ -321,29 +346,20 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
             
             logger.info(f"📤 [FCM] Batch {batch_num} gönderiliyor ({len(batch_tokens)} token)...")
             
-            try:
-                message = messaging.MulticastMessage(
-                    notification=notification,
-                    tokens=batch_tokens,
-                    data=data or {},
-                    android=android_config
-                )
-                
-                response = messaging.send_multicast(message)
-                
-                total_success += response.success_count
-                total_failure += response.failure_count
+            # 🔥 V5.1: send_notification() zaten HTTP v1 uyumlu
+            result = send_notification(
+                tokens=batch_tokens,
+                title=title,
+                body=body,
+                data=data
+            )
+            
+            if result.get('success'):
+                total_success += result.get('success_count', 0)
+                total_failure += result.get('failure_count', 0)
                 total_tokens += len(batch_tokens)
-                
-                if response.failure_count > 0:
-                    failed_tokens = [batch_tokens[idx] for idx, resp in enumerate(response.responses) if not resp.success]
-                    for token in failed_tokens:
-                        unregister_fcm_token(token)
-                
-                logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
-                
-            except Exception as batch_err:
-                logger.error(f"❌ [FCM] Batch {batch_num} hatası: {batch_err}")
+            else:
+                logger.error(f"❌ [FCM] Batch {batch_num} tamamen başarısız!")
                 total_failure += len(batch_tokens)
                 total_tokens += len(batch_tokens)
         
@@ -371,6 +387,8 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
         
     except Exception as e:
         logger.error(f"❌ [FCM] Toplu gönderim hatası: {e}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         return {"success": False, "error": str(e)}
 
 
