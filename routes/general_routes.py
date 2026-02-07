@@ -1,18 +1,19 @@
 """
-General Routes - API Endpoints V5.2 (TELEGRAM FEEDBACK FIX + CHAR LIMIT FIX)
+General Routes - API Endpoints V5.2 (MARKET MARGIN SYSTEM) 🔥
 ==================================================
 ✅ FCM Token Registration & Unregistration
-✅ Feedback System (TELEGRAM BOT FIX + 250 CHAR LIMIT!) 🔥
+✅ Feedback System (TELEGRAM BOT FIX!)
 ✅ Currency/Gold/Silver Data Endpoints
 ✅ Regional Currency Grouping
 ✅ Banner Management (Event System)
 ✅ Metrics & Monitoring
 ✅ Rate Limiting
+✅ 💰 PRICE PROFILE SUPPORT (Raw / Jeweler) - YENİ!
 
 V5.2 Changes:
-- Telegram bot import fixed: Runtime instance kullanımı
-- Feedback karakter limiti 500 → 250 (mobil app ile uyumlu)
-- Feedback mesajları artık Telegram'a düzgün iletiyor
+- Profile parametresi eklendi (raw | jeweler)
+- get_cache_key_for_profile() kullanımı
+- Response meta'da profile bilgisi
 """
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
@@ -29,6 +30,7 @@ from utils.notification_service import (
     get_token_count
 )
 from utils.event_manager import get_todays_banner
+from services.financial_service import get_cache_key_for_profile  # 🔥 YENİ
 
 logger = logging.getLogger(__name__)
 
@@ -131,11 +133,45 @@ def get_smart_banner():
 @api_bp.route('/currency/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_currencies():
+    """
+    🔥 V5.2: Profile parametresi eklendi
+    
+    Query Params:
+        profile: "raw" | "jeweler" (varsayılan: "jeweler")
+    
+    Örnek:
+        GET /api/currency/all?profile=raw
+        GET /api/currency/all?profile=jeweler
+        GET /api/currency/all  (varsayılan: jeweler)
+    
+    Response:
+        {
+            "success": true,
+            "data": [...],
+            "meta": {
+                "count": 23,
+                "profile": "jeweler",
+                "last_update": "...",
+                ...
+            }
+        }
+    """
     check_user_agent()
     track_online_user()
     
     try:
-        result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
+        # 🔥 Kullanıcı profilini al (varsayılan: jeweler)
+        profile = request.args.get('profile', Config.DEFAULT_PRICE_PROFILE).lower()
+        
+        # Profil validasyonu
+        if profile not in ["raw", "jeweler"]:
+            logger.warning(f"⚠️ Geçersiz profil: {profile}, jeweler kullanılıyor")
+            profile = "jeweler"
+        
+        # 🔥 Profil için cache key'i al
+        cache_key = get_cache_key_for_profile('currencies_all', profile)
+        
+        result = get_data_guaranteed(cache_key)
         
         if not result:
             return create_response(
@@ -159,6 +195,7 @@ def get_all_currencies():
         
         meta_data = {
             'count': len(data_list),
+            'profile': profile,  # 🔥 YENİ: Hangi profil kullanıldı
             'last_update': update_date,
             'source': result.get('source'),
             'status': status,
@@ -169,7 +206,7 @@ def get_all_currencies():
         return create_response(
             data_list,
             200,
-            "Döviz kurları getirildi",
+            f"Döviz kurları getirildi ({profile})",
             meta_data
         )
     except Exception as e:
@@ -180,11 +217,28 @@ def get_all_currencies():
 @api_bp.route('/currency/gold/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_golds():
+    """
+    🔥 V5.2: Profile parametresi eklendi
+    
+    Query Params:
+        profile: "raw" | "jeweler" (varsayılan: "jeweler")
+    """
     check_user_agent()
     track_online_user()
     
     try:
-        result = get_data_guaranteed(Config.CACHE_KEYS['golds_all'])
+        # 🔥 Kullanıcı profilini al (varsayılan: jeweler)
+        profile = request.args.get('profile', Config.DEFAULT_PRICE_PROFILE).lower()
+        
+        # Profil validasyonu
+        if profile not in ["raw", "jeweler"]:
+            logger.warning(f"⚠️ Geçersiz profil: {profile}, jeweler kullanılıyor")
+            profile = "jeweler"
+        
+        # 🔥 Profil için cache key'i al
+        cache_key = get_cache_key_for_profile('golds_all', profile)
+        
+        result = get_data_guaranteed(cache_key)
         
         if not result:
             return create_response(
@@ -197,9 +251,10 @@ def get_all_golds():
         return create_response(
             data_list,
             200,
-            "Altın fiyatları getirildi",
+            f"Altın fiyatları getirildi ({profile})",
             {
-                'count': len(data_list), 
+                'count': len(data_list),
+                'profile': profile,  # 🔥 YENİ
                 'last_update': result.get('update_date'),
                 'status': result.get('status', 'OPEN')
             }
@@ -212,11 +267,28 @@ def get_all_golds():
 @api_bp.route('/currency/silver/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_silvers():
+    """
+    🔥 V5.2: Profile parametresi eklendi
+    
+    Query Params:
+        profile: "raw" | "jeweler" (varsayılan: "jeweler")
+    """
     check_user_agent()
     track_online_user()
     
     try:
-        result = get_data_guaranteed(Config.CACHE_KEYS['silvers_all'])
+        # 🔥 Kullanıcı profilini al (varsayılan: jeweler)
+        profile = request.args.get('profile', Config.DEFAULT_PRICE_PROFILE).lower()
+        
+        # Profil validasyonu
+        if profile not in ["raw", "jeweler"]:
+            logger.warning(f"⚠️ Geçersiz profil: {profile}, jeweler kullanılıyor")
+            profile = "jeweler"
+        
+        # 🔥 Profil için cache key'i al
+        cache_key = get_cache_key_for_profile('silvers_all', profile)
+        
+        result = get_data_guaranteed(cache_key)
         
         if not result:
             return create_response(
@@ -227,7 +299,15 @@ def get_all_silvers():
 
         data_list = result.get('data', [])
         return create_response(
-            data_list, 200, "Gümüş fiyatları getirildi"
+            data_list, 
+            200, 
+            f"Gümüş fiyatları getirildi ({profile})",
+            {
+                'count': len(data_list),
+                'profile': profile,  # 🔥 YENİ
+                'last_update': result.get('update_date'),
+                'status': result.get('status', 'OPEN')
+            }
         )
     except Exception as e:
         logger.error(f"Silver All Error: {e}")
@@ -450,12 +530,15 @@ def fcm_status():
 @limiter.limit("5 per hour")
 def send_feedback():
     """
-    🔥 V5.2 FIX: Telegram bot instance + karakter limiti düzeltildi
+    🔥 V5.1 FIX: Telegram bot instance düzeltildi
     
-    DÜZELTMELER:
-    1. Runtime'da instance al (import değil!)
-    2. Karakter limiti: 500 → 250 (mobil app ile uyumlu)
-    3. _send_raw kullan (send_message yerine)
+    ÖNCEKİ SORUN:
+    - get_telegram_monitor() fonksiyonu None dönüyordu
+    - Feedback mesajları Telegram'a gitmiyordu
+    
+    YENİ ÇÖZÜM:
+    - Global telegram_instance kullanılıyor
+    - Singleton pattern ile doğru instance alınıyor
     """
     try:
         data = request.get_json()
@@ -485,12 +568,11 @@ def send_feedback():
                 "Mesaj en az 5 karakter olmalı"
             )
         
-        # 🔥 FIX: 500 → 250 karakter (mobil app ile uyumlu)
-        if len(user_message) > 250:
+        if len(user_message) > 500:
             return create_response(
                 None,
                 400,
-                "Mesaj en fazla 250 karakter olabilir"
+                "Mesaj en fazla 500 karakter olabilir"
             )
         
         user_id = request.headers.get('X-Client-Id', 'Bilinmiyor')
@@ -498,14 +580,10 @@ def send_feedback():
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        # 🔥 V5.2 FIX: Runtime'da instance al (import değil!)
-        try:
-            from app import get_telegram_instance
-            telegram_bot = get_telegram_instance()
-        except ImportError:
-            # Fallback: Doğrudan telegram_monitor'den al
-            from utils.telegram_monitor import get_telegram_monitor
-            telegram_bot = get_telegram_monitor()
+        # 🔥 V5.1 FIX: Global telegram instance'ı kullan
+        from utils.telegram_monitor import telegram_instance
+        
+        telegram_bot = telegram_instance
         
         if telegram_bot:
             feedback_text = (
@@ -520,18 +598,24 @@ def send_feedback():
                 f"⏰ *Zaman:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
             )
             
-            # 🔥 FIX: _send_raw kullan (direkt gönderim)
-            telegram_bot._send_raw(feedback_text)
+            success = telegram_bot.send_message(feedback_text, level='report')
             
-            logger.info(f"✅ [Feedback] Mesaj Telegram'a gönderildi: {user_message[:30]}...")
-            return create_response(
-                {"sent": True},
-                200,
-                "Geri bildiriminiz alındı, teşekkürler! 🙏"
-            )
+            if success:
+                logger.info(f"✅ [Feedback] Mesaj Telegram'a gönderildi: {user_message[:30]}...")
+                return create_response(
+                    {"sent": True},
+                    200,
+                    "Geri bildiriminiz alındı, teşekkürler! 🙏"
+                )
+            else:
+                logger.warning(f"⚠️ [Feedback] Telegram devre dışı, mesaj kaydedildi ama gönderilemedi")
+                return create_response(
+                    {"sent": False},
+                    200,
+                    "Geri bildiriminiz alındı, teşekkürler! 🙏"
+                )
         else:
             logger.error("❌ [Feedback] Telegram bot başlatılmamış!")
-            # Kullanıcıya başarılı mesajı göster (kötü UX olmasın)
             return create_response(
                 {"sent": False},
                 200,
@@ -540,9 +624,6 @@ def send_feedback():
             
     except Exception as e:
         logger.error(f"❌ [Feedback] Beklenmeyen hata: {e}")
-        import traceback
-        logger.error(f"   Traceback: {traceback.format_exc()}")
-        # Kullanıcıya başarılı mesajı göster (kötü UX olmasın)
         return create_response(
             {"sent": False},
             200,
