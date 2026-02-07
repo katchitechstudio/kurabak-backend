@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V4.5 🚀
+Financial Service - PRODUCTION READY V5.2 🚀💰
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -9,9 +9,10 @@ Financial Service - PRODUCTION READY V4.5 🚀
 ✅ NAME FIX: Tüm varlıklar Türkçe isimlerle gösteriliyor
 ✅ BANNER FIX: Takvim mesajları öncelikli
 ✅ AKILLI LOGLAMA: Piyasa kapalı spam önleme
-✅ CIRCUIT BREAKER V2: Sadece durum değişiminde kaydet (V4.5)
+✅ CIRCUIT BREAKER V2: Sadece durum değişiminde kaydet
 ✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
 ✅ SUMMARY KALDIRMA: Günün özeti artık gönderilmiyor
+✅ 💰 MARKET MARGIN SYSTEM: Dual price streams (Raw + Jeweler) - YENİ!
 """
 
 import requests
@@ -19,6 +20,7 @@ import logging
 import time
 import json
 import pytz
+import copy
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -388,6 +390,99 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     }
 
 # ======================================
+# 💰 MARKET MARGIN SYSTEM - YARDIMCI FONKSİYONLAR (YENİ!)
+# ======================================
+
+def apply_margins(raw_data: dict, profile: str = "jeweler") -> dict:
+    """
+    Ham fiyatlara marj ekleyerek kuyumcu fiyatı oluşturur
+    
+    Args:
+        raw_data: Ham veri (currencies/golds/silvers)
+        profile: "raw" veya "jeweler"
+    
+    Returns:
+        Marjlı veri (aynı format)
+    
+    Örnek:
+        raw = {"data": [{"code": "GRA", "selling": 6943.53, ...}]}
+        jeweler = apply_margins(raw, "jeweler")
+        # jeweler = {"data": [{"code": "GRA", "selling": 7443.66, ...}]}
+    """
+    if profile == "raw":
+        # Ham profilde marj yok, direkt döndür
+        return raw_data
+    
+    # Profil tanımlı değilse veya jeweler değilse, raw döndür
+    if profile not in Config.PRICE_PROFILES:
+        logger.warning(f"⚠️ [MARGIN] Bilinmeyen profil: {profile}, raw döndürülüyor")
+        return raw_data
+    
+    margin_map = Config.PRICE_PROFILES[profile]
+    
+    # Deep copy (orijinal veriyi değiştirmemek için)
+    margined_data = copy.deepcopy(raw_data)
+    
+    # Data listesindeki her item'a marj uygula
+    for item in margined_data.get("data", []):
+        code = item.get("code")
+        
+        if not code:
+            continue
+        
+        # Bu varlık için marj oranını al
+        margin = margin_map.get(code, Config.DEFAULT_MARKET_MARGIN)
+        
+        # Marj yoksa devam et
+        if margin == 0.0:
+            continue
+        
+        # Selling fiyatına marj ekle
+        original_selling = item.get("selling", 0)
+        if original_selling > 0:
+            margined_selling = original_selling * (1 + margin)
+            item["selling"] = round(margined_selling, 4)
+        
+        # Buying fiyatına da marj ekle (opsiyonel, ama tutarlılık için)
+        original_buying = item.get("buying", 0)
+        if original_buying > 0:
+            margined_buying = original_buying * (1 + margin)
+            item["buying"] = round(margined_buying, 4)
+        
+        # Rate'e de marj ekle (selling ile aynı olmalı)
+        item["rate"] = item["selling"]
+    
+    return margined_data
+
+
+def get_cache_key_for_profile(base_key: str, profile: str) -> str:
+    """
+    Profile göre cache key döner
+    
+    Args:
+        base_key: "currencies_all", "golds_all", "silvers_all"
+        profile: "raw" veya "jeweler"
+    
+    Returns:
+        Redis cache key
+    
+    Örnek:
+        get_cache_key_for_profile("currencies_all", "raw")
+        # -> "kurabak:currencies:raw"
+        
+        get_cache_key_for_profile("currencies_all", "jeweler")
+        # -> "kurabak:currencies:jeweler"
+    """
+    if profile == "raw":
+        return Config.CACHE_KEYS[base_key]
+    elif profile == "jeweler":
+        return Config.CACHE_KEYS[f"{base_key.replace('_all', '_jeweler')}"]
+    else:
+        # Bilinmeyen profil -> raw döndür
+        logger.warning(f"⚠️ [CACHE KEY] Bilinmeyen profil: {profile}, raw key döndürülüyor")
+        return Config.CACHE_KEYS[base_key]
+
+# ======================================
 # V5 FETCH (CIRCUIT BREAKER İLE)
 # ======================================
 
@@ -497,71 +592,138 @@ def determine_banner_message() -> Optional[str]:
     return None
 
 # ======================================
-# SNAPSHOT
+# SNAPSHOT (DUAL - RAW + JEWELER)
 # ======================================
 
 def take_snapshot():
     """
-    🔥 V4.5: Disk backup ile snapshot kaydet
+    🔥 V5.2: İKİ AYRI SNAPSHOT (Raw + Jeweler)
     
     Gece 00:00 snapshot + Telegram rapor
+    
+    YENİ MANTIK:
+    - Raw snapshot: Ham fiyatlar (API'den gelen)
+    - Jeweler snapshot: Kuyumcu fiyatları (marj eklenmiş)
+    - Her ikisi de ayrı ayrı kaydedilir
+    - Yüzdelik hesapları kendi snapshot'larına göre yapılır
     """
-    logger.info("📸 [SNAPSHOT] Gün sonu kapanış fiyatları alınıyor...")
+    logger.info("📸 [SNAPSHOT] Gün sonu kapanış fiyatları alınıyor (Raw + Jeweler)...")
     try:
-        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
-        golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
-        silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
+        # 1️⃣ RAW VERİLERİ AL
+        currencies_raw = get_cache(Config.CACHE_KEYS['currencies_all'])
+        golds_raw = get_cache(Config.CACHE_KEYS['golds_all'])
+        silvers_raw = get_cache(Config.CACHE_KEYS['silvers_all'])
         
-        if not currencies_data:
+        if not currencies_raw:
             logger.warning("⚠️ Canlı veri yok, snapshot alınamadı")
             return False
         
-        snapshot = {}
-        report_lines = []
+        # 2️⃣ RAW SNAPSHOT OLUŞTUR
+        snapshot_raw = {}
         
-        for item in currencies_data.get("data", []):
+        for item in currencies_raw.get("data", []):
             code, selling = item.get("code"), item.get("selling", 0)
             if code and selling > 0:
-                snapshot[code] = selling
-                if code in ["USD", "EUR", "GBP", "CHF"]:
-                    report_lines.append(f"💵 {code}: *{selling:.4f} ₺*")
+                snapshot_raw[code] = selling
         
-        if golds_data:
-            for item in golds_data.get("data", []):
-                code, name, selling = item.get("code"), item.get("name", ""), item.get("selling", 0)
-                if code and selling > 0:
-                    snapshot[code] = selling
-                    if code in ["GRA", "C22", "CUM"]:
-                        formatted = f"{selling:,.2f}".replace(",", ".")
-                        report_lines.append(f"🟡 {name}: *{formatted} ₺*")
-        
-        if silvers_data:
-            for item in silvers_data.get("data", []):
+        if golds_raw:
+            for item in golds_raw.get("data", []):
                 code, selling = item.get("code"), item.get("selling", 0)
                 if code and selling > 0:
-                    snapshot[code] = selling
-                    report_lines.append(f"⚪ Gümüş: *{selling:.2f} ₺*")
+                    snapshot_raw[code] = selling
         
-        if snapshot:
-            # 🔥 V4.5: force_disk_backup=True ile snapshot'ı disk'e de kaydet!
-            set_cache("kurabak:yesterday_prices", snapshot, ttl=0, force_disk_backup=True)
-            logger.info(f"✅ SNAPSHOT: {len(snapshot)} varlık kaydedildi (Redis + Disk)")
+        if silvers_raw:
+            for item in silvers_raw.get("data", []):
+                code, selling = item.get("code"), item.get("selling", 0)
+                if code and selling > 0:
+                    snapshot_raw[code] = selling
+        
+        # 3️⃣ JEWELER SNAPSHOT OLUŞTUR (marj ekle)
+        snapshot_jeweler = {}
+        margin_map = Config.PRICE_PROFILES.get("jeweler", {})
+        
+        for code, raw_price in snapshot_raw.items():
+            margin = margin_map.get(code, Config.DEFAULT_MARKET_MARGIN)
+            jeweler_price = raw_price * (1 + margin)
+            snapshot_jeweler[code] = jeweler_price
+        
+        # 4️⃣ HER İKİ SNAPSHOT'I KAYDET
+        if snapshot_raw:
+            # Raw snapshot
+            set_cache(
+                Config.CACHE_KEYS['yesterday_prices'], 
+                snapshot_raw, 
+                ttl=0, 
+                force_disk_backup=True
+            )
+            logger.info(f"✅ RAW SNAPSHOT: {len(snapshot_raw)} varlık kaydedildi (Redis + Disk)")
             
+            # Jeweler snapshot
+            set_cache(
+                Config.CACHE_KEYS['yesterday_prices_jeweler'], 
+                snapshot_jeweler, 
+                ttl=0, 
+                force_disk_backup=True
+            )
+            logger.info(f"✅ JEWELER SNAPSHOT: {len(snapshot_jeweler)} varlık kaydedildi (Redis + Disk)")
+            
+            # 5️⃣ TELEGRAM RAPORU (Hem raw hem jeweler fiyatlarını göster)
             try:
                 from utils.telegram_monitor import telegram_instance
                 if telegram_instance:
                     tz = pytz.timezone('Europe/Istanbul')
                     date_str = datetime.now(tz).strftime("%d.%m.%Y")
+                    
+                    report_lines = []
+                    
+                    # Önemli varlıkları raporla
+                    for code in ["USD", "EUR", "GBP", "CHF"]:
+                        if code in snapshot_raw:
+                            raw_val = snapshot_raw[code]
+                            jeweler_val = snapshot_jeweler[code]
+                            
+                            # Dövizlerde marj 0 olduğu için aynı olmalılar
+                            report_lines.append(
+                                f"💵 {code}: *{raw_val:.4f} ₺*"
+                            )
+                    
+                    for code, name in [("GRA", "Gram Altın"), ("C22", "Çeyrek Altın"), ("CUM", "Cumhuriyet")]:
+                        if code in snapshot_raw:
+                            raw_val = snapshot_raw[code]
+                            jeweler_val = snapshot_jeweler[code]
+                            
+                            # Altınlarda fark var, her ikisini göster
+                            raw_formatted = f"{raw_val:,.2f}".replace(",", ".")
+                            jeweler_formatted = f"{jeweler_val:,.2f}".replace(",", ".")
+                            
+                            report_lines.append(
+                                f"🟡 {name}:\n"
+                                f"   Ham: {raw_formatted} ₺\n"
+                                f"   Kuyumcu: {jeweler_formatted} ₺"
+                            )
+                    
+                    if "AG" in snapshot_raw:
+                        raw_val = snapshot_raw["AG"]
+                        jeweler_val = snapshot_jeweler["AG"]
+                        
+                        report_lines.append(
+                            f"⚪ Gümüş:\n"
+                            f"   Ham: {raw_val:.2f} ₺\n"
+                            f"   Kuyumcu: {jeweler_val:.2f} ₺"
+                        )
+                    
                     msg = (
                         f"📸 *REFERANS FİYATLAR ALINDI* | {date_str}\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"Patron, yarına kadar değişimler bu fiyatlara göre hesaplanacak:\n\n"
                         + "\n".join(report_lines) +
-                        f"\n\n📦 *Toplam:* {len(snapshot)} varlık kilitlendi.\n✅ Sistem yarına hazır."
+                        f"\n\n📦 *Toplam:* {len(snapshot_raw)} varlık kilitlendi.\n"
+                        f"✅ İki profil de (Raw + Kuyumcu) hazır."
                     )
                     telegram_instance._send_raw(msg)
             except Exception as tg_err:
                 logger.error(f"⚠️ Telegram rapor hatası: {tg_err}")
+            
             return True
         return False
     except Exception as e:
@@ -590,31 +752,45 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
     return False, "OPEN", None
 
 # ======================================
-# WORKER (ANA FONKSİYON)
+# WORKER (ANA FONKSİYON - DUAL STREAMS)
 # ======================================
 
 def update_financial_data():
     """
+    🔥 V5.2: İKİ PRICE STREAM (Raw + Jeweler)
+    
     Her 1 dakikada bir çalışır.
     V5 API (Tek Kaynak + Circuit Breaker) → Backup
+    
+    YENİ MANTIK:
+    - Raw veriler: API'den gelen ham fiyat
+    - Jeweler veriler: Raw'a marj eklenmiş kuyumcu fiyatı
+    - Her iki set de ayrı Redis key'lerde saklanır
+    - Yüzdelikler kendi snapshot'larına göre hesaplanır
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
     
+    # BAKIM MODU KONTROLÜ
     is_maintenance, maint_status, maint_message = check_maintenance_mode()
     if is_maintenance:
         logger.info(f"🚧 [WORKER] Bakım Modu Aktif ({maint_status})")
-        for key in [Config.CACHE_KEYS['currencies_all'], Config.CACHE_KEYS['golds_all'], 
-                    Config.CACHE_KEYS['silvers_all']]:
-            data = get_cache(key)
-            if data:
-                data['status'] = maint_status
-                data['market_msg'] = maint_message or "Sistem Bakımda"
-                data['last_update'] = now.strftime("%H:%M:%S")
-                data['banner'] = maint_message
-                set_cache(key, data, ttl=0)
+        
+        # Hem raw hem jeweler için bakım mesajı göster
+        for profile in ["raw", "jeweler"]:
+            for asset_type in ["currencies", "golds", "silvers"]:
+                cache_key = get_cache_key_for_profile(f"{asset_type}_all", profile)
+                data = get_cache(cache_key)
+                
+                if data:
+                    data['status'] = maint_status
+                    data['market_msg'] = maint_message or "Sistem Bakımda"
+                    data['last_update'] = now.strftime("%H:%M:%S")
+                    data['banner'] = maint_message
+                    set_cache(cache_key, data, ttl=0)
         return True
     
+    # HAFTA SONU KONTROLÜ
     if now.weekday() == 5 or (now.weekday() == 6 and now.hour < 23):
         if not get_cache("market_closed_logged"):
             logger.info(f"🔒 [WORKER] Piyasa Kapalı - Hafta sonu modu başladı")
@@ -622,16 +798,20 @@ def update_financial_data():
         else:
             logger.debug(f"🔒 [WORKER] Piyasa Kapalı ({now.strftime('%A %H:%M')})")
         
-        for key in [Config.CACHE_KEYS['currencies_all'], Config.CACHE_KEYS['golds_all'],
-                    Config.CACHE_KEYS['silvers_all']]:
-            data = get_cache(key)
-            if data:
-                data['status'] = "CLOSED"
-                data['market_msg'] = "Piyasalar Kapalı"
-                data['last_update'] = now.strftime("%H:%M:%S")
-                set_cache(key, data, ttl=0)
+        # Hem raw hem jeweler için kapalı mesajı
+        for profile in ["raw", "jeweler"]:
+            for asset_type in ["currencies", "golds", "silvers"]:
+                cache_key = get_cache_key_for_profile(f"{asset_type}_all", profile)
+                data = get_cache(cache_key)
+                
+                if data:
+                    data['status'] = "CLOSED"
+                    data['market_msg'] = "Piyasalar Kapalı"
+                    data['last_update'] = now.strftime("%H:%M:%S")
+                    set_cache(cache_key, data, ttl=0)
         return True
     
+    # PIYASA AÇIK - VERİ ÇEK
     if get_cache("market_closed_logged"):
         logger.info("🔓 [WORKER] Piyasa açıldı - Normal mod başladı")
         delete_cache("market_closed_logged")
@@ -647,6 +827,7 @@ def update_financial_data():
     
     was_system_down = get_cache("system_was_down") or False
     
+    # V5 API'DEN VERİ ÇEK
     data_raw = fetch_from_v5()
     source = "V5"
     
@@ -659,9 +840,19 @@ def update_financial_data():
             logger.warning("✅ Backup verisi yüklendi")
             if telegram_instance:
                 telegram_instance._send_raw("⚠️ *V5 API ÇÖKTÜ!*\n\nSistem yedeği kullanıyor.")
-            for key in ['currencies', 'golds', 'silvers']:
-                backup_data[key]['status'] = "OPEN"
-                set_cache(Config.CACHE_KEYS[f'{key}_all'], backup_data[key], ttl=0)
+            
+            # Backup'tan hem raw hem jeweler verisi yükle
+            for asset_type in ['currencies', 'golds', 'silvers']:
+                # Raw
+                backup_data[asset_type]['status'] = "OPEN"
+                raw_key = Config.CACHE_KEYS[f'{asset_type}_all']
+                set_cache(raw_key, backup_data[asset_type], ttl=0)
+                
+                # Jeweler (backup'ta varsa)
+                if f"{asset_type}_jeweler" in backup_data:
+                    jeweler_key = Config.CACHE_KEYS[f'{asset_type}_jeweler']
+                    set_cache(jeweler_key, backup_data[f"{asset_type}_jeweler"], ttl=0)
+            
             Metrics.inc('backup')
             return True
         else:
@@ -671,6 +862,7 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
     
+    # SİSTEM YENİDEN ONLINE
     if was_system_down and data_raw:
         logger.info("✅ [WORKER] Sistem tekrar online!")
         delete_cache("system_was_down")
@@ -683,6 +875,7 @@ def update_financial_data():
             )
     
     try:
+        # 1️⃣ VERİYİ PARSE ET (RAW)
         currencies, golds, silvers = process_data_mobile_optimized(data_raw)
         
         if not currencies:
@@ -690,13 +883,23 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
         
-        yesterday_prices = get_cache("kurabak:yesterday_prices") or {}
+        # 2️⃣ SNAPSHOT'LARI AL (Her profil için ayrı)
+        yesterday_prices_raw = get_cache(Config.CACHE_KEYS['yesterday_prices']) or {}
+        yesterday_prices_jeweler = get_cache(Config.CACHE_KEYS['yesterday_prices_jeweler']) or {}
         
-        def enrich_with_calculation(items):
+        def enrich_with_calculation(items, yesterday_prices):
+            """
+            Varlıklara yüzdelik değişim ve trend ekle
+            
+            Args:
+                items: Varlık listesi
+                yesterday_prices: Dünün fiyatları (profile göre)
+            """
             enriched = []
             for item in items:
                 code, current_price = item['code'], item['selling']
                 change_percent = 0.0
+                
                 if code in yesterday_prices:
                     old_price = yesterday_prices[code]
                     if old_price > 0:
@@ -714,17 +917,19 @@ def update_financial_data():
                     enriched.append(item)
             return enriched
         
-        currencies = enrich_with_calculation(currencies)
-        golds = enrich_with_calculation(golds)
-        silvers = enrich_with_calculation(silvers)
+        # 3️⃣ RAW VERİLERİ HESAPLA (raw snapshot'a göre)
+        currencies_raw = enrich_with_calculation(currencies, yesterday_prices_raw)
+        golds_raw = enrich_with_calculation(golds, yesterday_prices_raw)
+        silvers_raw = enrich_with_calculation(silvers, yesterday_prices_raw)
         
-        if not currencies:
+        if not currencies_raw:
             logger.error("❌ Tüm veriler zehirli!")
             Metrics.inc('errors')
             return False
         
         Metrics.inc('v5')
         
+        # 4️⃣ META BİLGİLER
         update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         banner_message = determine_banner_message()
         
@@ -738,37 +943,76 @@ def update_financial_data():
             "banner": banner_message
         }
         
-        set_cache(Config.CACHE_KEYS['currencies_all'], {
-            **base_meta, 
-            "data": currencies
-        }, ttl=0)
+        # 5️⃣ RAW VERİLERİ KAYDET
+        raw_currencies_payload = {**base_meta, "data": currencies_raw}
+        raw_golds_payload = {**base_meta, "data": golds_raw}
+        raw_silvers_payload = {**base_meta, "data": silvers_raw}
         
-        set_cache(Config.CACHE_KEYS['golds_all'], {**base_meta, "data": golds}, ttl=0)
-        set_cache(Config.CACHE_KEYS['silvers_all'], {**base_meta, "data": silvers}, ttl=0)
+        set_cache(Config.CACHE_KEYS['currencies_all'], raw_currencies_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['golds_all'], raw_golds_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['silvers_all'], raw_silvers_payload, ttl=0)
+        
+        # 6️⃣ JEWELER VERİLERİNİ OLUŞTUR (marj ekle)
+        jeweler_currencies_payload = apply_margins(raw_currencies_payload, "jeweler")
+        jeweler_golds_payload = apply_margins(raw_golds_payload, "jeweler")
+        jeweler_silvers_payload = apply_margins(raw_silvers_payload, "jeweler")
+        
+        # 7️⃣ JEWELER VERİLERİNİ YÜZDELİKLERLE GÜNCELLE (jeweler snapshot'a göre)
+        jeweler_currencies = enrich_with_calculation(
+            jeweler_currencies_payload['data'], 
+            yesterday_prices_jeweler
+        )
+        jeweler_golds = enrich_with_calculation(
+            jeweler_golds_payload['data'], 
+            yesterday_prices_jeweler
+        )
+        jeweler_silvers = enrich_with_calculation(
+            jeweler_silvers_payload['data'], 
+            yesterday_prices_jeweler
+        )
+        
+        jeweler_currencies_payload['data'] = jeweler_currencies
+        jeweler_golds_payload['data'] = jeweler_golds
+        jeweler_silvers_payload['data'] = jeweler_silvers
+        
+        # 8️⃣ JEWELER VERİLERİNİ KAYDET
+        set_cache(Config.CACHE_KEYS['currencies_jeweler'], jeweler_currencies_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
+        
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
         
+        # 9️⃣ BACKUP SİSTEMİ (15 dakika)
         last_backup_time = get_cache("kurabak:backup:timestamp") or 0
         current_time = time.time()
+        
         if current_time - float(last_backup_time) > 900:
-            logger.info("📦 15 Dakikalık Backup...")
+            logger.info("📦 15 Dakikalık Backup (Raw + Jeweler)...")
+            
             backup_payload = {
-                "currencies": {**base_meta, "data": currencies},
-                "golds": {**base_meta, "data": golds},
-                "silvers": {**base_meta, "data": silvers}
+                # Raw veriler
+                "currencies": raw_currencies_payload,
+                "golds": raw_golds_payload,
+                "silvers": raw_silvers_payload,
+                
+                # Jeweler veriler
+                "currencies_jeweler": jeweler_currencies_payload,
+                "golds_jeweler": jeweler_golds_payload,
+                "silvers_jeweler": jeweler_silvers_payload,
             }
-            # 🔥 V4.5: Backup'ı da disk'e kaydet!
+            
             set_cache("kurabak:backup:all", backup_payload, ttl=0, force_disk_backup=True)
             set_cache("kurabak:backup:timestamp", current_time, ttl=0)
         
+        # 🔟 LOG
         banner_info = f"Banner: {banner_message[:30]}..." if banner_message else "Banner: Yok"
-        
         cb_status = circuit_breaker.get_status()
         cb_info = f" | CB: {cb_status['state']}"
         
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
-            f"{len(currencies)} Döviz + {len(golds)} Altın + {len(silvers)} Gümüş "
-            f"({banner_info}){cb_info}"
+            f"{len(currencies_raw)} Döviz + {len(golds_raw)} Altın + {len(silvers_raw)} Gümüş "
+            f"(Raw + Jeweler) ({banner_info}){cb_info}"
         )
         return True
         
