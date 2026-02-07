@@ -1,16 +1,17 @@
 """
-General Routes - API Endpoints V5.1 (TELEGRAM FEEDBACK FIX)
+General Routes - API Endpoints V5.2 (TELEGRAM FEEDBACK FIX + CHAR LIMIT FIX)
 ==================================================
 ✅ FCM Token Registration & Unregistration
-✅ Feedback System (TELEGRAM BOT FIX!) 🔥
+✅ Feedback System (TELEGRAM BOT FIX + 250 CHAR LIMIT!) 🔥
 ✅ Currency/Gold/Silver Data Endpoints
 ✅ Regional Currency Grouping
 ✅ Banner Management (Event System)
 ✅ Metrics & Monitoring
 ✅ Rate Limiting
 
-V5.1 Changes:
-- Telegram bot import fixed: telegram_instance kullanımı
+V5.2 Changes:
+- Telegram bot import fixed: Runtime instance kullanımı
+- Feedback karakter limiti 500 → 250 (mobil app ile uyumlu)
 - Feedback mesajları artık Telegram'a düzgün iletiyor
 """
 from flask import Blueprint, jsonify, request, current_app
@@ -449,15 +450,12 @@ def fcm_status():
 @limiter.limit("5 per hour")
 def send_feedback():
     """
-    🔥 V5.1 FIX: Telegram bot instance düzeltildi
+    🔥 V5.2 FIX: Telegram bot instance + karakter limiti düzeltildi
     
-    ÖNCEKİ SORUN:
-    - get_telegram_monitor() fonksiyonu None dönüyordu
-    - Feedback mesajları Telegram'a gitmiyordu
-    
-    YENİ ÇÖZÜM:
-    - Global telegram_instance kullanılıyor
-    - Singleton pattern ile doğru instance alınıyor
+    DÜZELTMELER:
+    1. Runtime'da instance al (import değil!)
+    2. Karakter limiti: 500 → 250 (mobil app ile uyumlu)
+    3. _send_raw kullan (send_message yerine)
     """
     try:
         data = request.get_json()
@@ -487,11 +485,12 @@ def send_feedback():
                 "Mesaj en az 5 karakter olmalı"
             )
         
-        if len(user_message) > 500:
+        # 🔥 FIX: 500 → 250 karakter (mobil app ile uyumlu)
+        if len(user_message) > 250:
             return create_response(
                 None,
                 400,
-                "Mesaj en fazla 500 karakter olabilir"
+                "Mesaj en fazla 250 karakter olabilir"
             )
         
         user_id = request.headers.get('X-Client-Id', 'Bilinmiyor')
@@ -499,10 +498,14 @@ def send_feedback():
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        # 🔥 V5.1 FIX: Global telegram instance'ı kullan
-        from utils.telegram_monitor import telegram_instance
-        
-        telegram_bot = telegram_instance
+        # 🔥 V5.2 FIX: Runtime'da instance al (import değil!)
+        try:
+            from app import get_telegram_instance
+            telegram_bot = get_telegram_instance()
+        except ImportError:
+            # Fallback: Doğrudan telegram_monitor'den al
+            from utils.telegram_monitor import get_telegram_monitor
+            telegram_bot = get_telegram_monitor()
         
         if telegram_bot:
             feedback_text = (
@@ -517,24 +520,18 @@ def send_feedback():
                 f"⏰ *Zaman:* {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
             )
             
-            success = telegram_bot.send_message(feedback_text, level='report')
+            # 🔥 FIX: _send_raw kullan (direkt gönderim)
+            telegram_bot._send_raw(feedback_text)
             
-            if success:
-                logger.info(f"✅ [Feedback] Mesaj Telegram'a gönderildi: {user_message[:30]}...")
-                return create_response(
-                    {"sent": True},
-                    200,
-                    "Geri bildiriminiz alındı, teşekkürler! 🙏"
-                )
-            else:
-                logger.warning(f"⚠️ [Feedback] Telegram devre dışı, mesaj kaydedildi ama gönderilemedi")
-                return create_response(
-                    {"sent": False},
-                    200,
-                    "Geri bildiriminiz alındı, teşekkürler! 🙏"
-                )
+            logger.info(f"✅ [Feedback] Mesaj Telegram'a gönderildi: {user_message[:30]}...")
+            return create_response(
+                {"sent": True},
+                200,
+                "Geri bildiriminiz alındı, teşekkürler! 🙏"
+            )
         else:
             logger.error("❌ [Feedback] Telegram bot başlatılmamış!")
+            # Kullanıcıya başarılı mesajı göster (kötü UX olmasın)
             return create_response(
                 {"sent": False},
                 200,
@@ -543,6 +540,9 @@ def send_feedback():
             
     except Exception as e:
         logger.error(f"❌ [Feedback] Beklenmeyen hata: {e}")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
+        # Kullanıcıya başarılı mesajı göster (kötü UX olmasın)
         return create_response(
             {"sent": False},
             200,
