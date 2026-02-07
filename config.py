@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V5.1 🧠📰🏦
+Configuration - PRODUCTION READY V5.2 🧠📰🏦💰
 ===================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -17,6 +17,7 @@ Configuration - PRODUCTION READY V5.1 🧠📰🏦
 ✅ TEMİZLİK MEKANİZMASI: 7 günlük otomatik temizlik
 ✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
 ✅ 📰 GÜNLÜK HABER SİSTEMİ V2.0: Sabah + Akşam vardiyası + Gemini 2.0 + Bayram kontrolü
+✅ 💰 MARKET MARGIN SYSTEM: Ham/Kuyumcu fiyat profilleri (YENİ!)
 """
 import os
 
@@ -25,7 +26,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "5.1.0"  # 📰🏦 Günlük Haber + Bayram Sistemi V2.0
+    APP_VERSION = "5.2.0"  # 💰 Market Margin System
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -37,6 +38,85 @@ class Config:
     # V5 API (Tek ve Ana Kaynak)
     API_V5_URL = "https://finance.truncgil.com/api/today.json"
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
+    
+    # ======================================
+    # 💰 MARKET MARGIN SYSTEM (YENİ!)
+    # ======================================
+    """
+    FİYAT PROFİLLERİ:
+    - raw: Ham fiyat (API'den direk gelen, borsa/toptan fiyatı)
+    - jeweler: Kuyumcu/Fiziki piyasa fiyatı (marj eklenmiş)
+    
+    KULLANIM:
+    - Kullanıcı ayarlardan "Ham Fiyat" veya "Kuyumcu Fiyatı" seçer
+    - Backend her iki fiyat serisini de tutar (ayrı snapshot'lar)
+    - Yüzdelik değişimler kendi snapshot'larına göre hesaplanır
+    
+    MARJ ORANLARI (Gerçek piyasa verilerine göre):
+    - Altınlar: %2-7 (işçilik + KDV + kâr)
+    - Dövizler: %0 (zaten piyasa fiyatı)
+    - Gümüş: %25 (KDV %20 + işçilik + likidite düşük)
+    """
+    
+    PRICE_PROFILES = {
+        # RAW PROFILE - Ham Fiyat (API'den gelen)
+        "raw": {},  # Hiç marj yok, direkt API fiyatı
+        
+        # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı
+        "jeweler": {
+            # ALTINLAR (Yüksek marj - işçilik + KDV + kâr)
+            "GRA": 0.072,              # Gram Altın: %7.2
+            "HAS": 0.065,              # Has Altın: %6.5
+            "CEYREKALTIN": 0.025,      # Çeyrek: %2.5
+            "C22": 0.025,              # Çeyrek (alternatif kod): %2.5
+            "YARIMALTIN": 0.025,       # Yarım: %2.5
+            "YAR": 0.025,              # Yarım (alternatif kod): %2.5
+            "TAMALTIN": 0.022,         # Tam: %2.2
+            "TAM": 0.022,              # Tam (alternatif kod): %2.2
+            "CUMHURIYETALTINI": 0.015, # Cumhuriyet: %1.5
+            "CUM": 0.015,              # Cumhuriyet (alternatif kod): %1.5
+            "ATAALTIN": 0.028,         # Ata: %2.8
+            "ATA": 0.028,              # Ata (alternatif kod): %2.8
+            
+            # GÜMÜŞ (ÇOK YÜKSEK MARJ - KDV %20 + işçilik + likidite düşük)
+            "GUMUS": 0.25,             # Gümüş: %25
+            "AG": 0.25,                # Gümüş (alternatif kod): %25
+            "SILVER": 0.25,            # Gümüş (İngilizce): %25
+            
+            # DÖVİZLER (Marj yok - zaten piyasa fiyatı)
+            # API'den gelen döviz fiyatları gerçek piyasa fiyatına çok yakın
+            # Bu yüzden dövizlere marj eklemiyoruz
+            "USD": 0.0,                # Dolar: %0
+            "EUR": 0.0,                # Euro: %0
+            "GBP": 0.0,                # Sterlin: %0
+            "CHF": 0.0,                # Frank: %0
+            "CAD": 0.0,                # Kanada Doları: %0
+            "AUD": 0.0,                # Avustralya Doları: %0
+            "RUB": 0.0,                # Ruble: %0
+            "SAR": 0.0,                # Suudi Riyali: %0
+            "AED": 0.0,                # BAE Dirhemi: %0
+            "KWD": 0.0,                # Kuveyt Dinarı: %0
+            "BHD": 0.0,                # Bahreyn Dinarı: %0
+            "OMR": 0.0,                # Umman Riyali: %0
+            "QAR": 0.0,                # Katar Riyali: %0
+            "CNY": 0.0,                # Çin Yuanı: %0
+            "SEK": 0.0,                # İsveç Kronu: %0
+            "NOK": 0.0,                # Norveç Kronu: %0
+            "PLN": 0.0,                # Polonya Zlotisi: %0
+            "RON": 0.0,                # Romanya Leyi: %0
+            "CZK": 0.0,                # Çek Kronu: %0
+            "EGP": 0.0,                # Mısır Lirası: %0
+            "RSD": 0.0,                # Sırp Dinarı: %0
+            "HUF": 0.0,                # Macar Forinti: %0
+            "BAM": 0.0,                # Bosna Markı: %0
+        }
+    }
+    
+    # Varsayılan fiyat profili (uygulama ilk açıldığında)
+    DEFAULT_PRICE_PROFILE = "jeweler"  # Kuyumcu fiyatı varsayılan
+    
+    # Profil tanımlanmamış varlıklar için varsayılan marj
+    DEFAULT_MARKET_MARGIN = 0.0  # %0 (marj yok)
     
     # ======================================
     # 🔥 FIREBASE PUSH NOTIFICATIONS
@@ -155,16 +235,22 @@ class Config:
     
     # Anahtar İsimleri
     CACHE_KEYS = {
-        # Canlı veriler
-        'currencies_all': 'kurabak:currencies:all',
-        'golds_all': 'kurabak:golds:all',
-        'silvers_all': 'kurabak:silvers:all',
+        # Canlı veriler (HAM FİYAT - RAW)
+        'currencies_all': 'kurabak:currencies:raw',      # 🔥 DEĞİŞTİ
+        'golds_all': 'kurabak:golds:raw',                # 🔥 DEĞİŞTİ
+        'silvers_all': 'kurabak:silvers:raw',            # 🔥 DEĞİŞTİ
+        
+        # 💰 Kuyumcu fiyatları (JEWELER - YENİ!)
+        'currencies_jeweler': 'kurabak:currencies:jeweler',  # YENİ
+        'golds_jeweler': 'kurabak:golds:jeweler',            # YENİ
+        'silvers_jeweler': 'kurabak:silvers:jeweler',        # YENİ
         
         # Yedek sistemler
         'backup': 'kurabak:backup:all',
         
         # Worker + Snapshot + Şef sistemleri
-        'yesterday_prices': 'kurabak:yesterday_prices',
+        'yesterday_prices': 'kurabak:yesterday_prices:raw',      # 🔥 DEĞİŞTİ
+        'yesterday_prices_jeweler': 'kurabak:yesterday_prices:jeweler',  # YENİ
         'last_worker_run': 'kurabak:last_worker_run',
         'backup_timestamp': 'kurabak:backup:timestamp',
         
