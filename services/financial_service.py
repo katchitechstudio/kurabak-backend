@@ -13,6 +13,7 @@ Financial Service - PRODUCTION READY V5.2 🚀💰
 ✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
 ✅ SUMMARY KALDIRMA: Günün özeti artık gönderilmiyor
 ✅ 💰 MARKET MARGIN SYSTEM: Dual price streams (Raw + Jeweler) - YENİ!
+✅ 🔥 JEWELER CACHE FIX: Jeweler verileri düzgün kaydediliyor!
 """
 
 import requests
@@ -757,7 +758,7 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 
 def update_financial_data():
     """
-    🔥 V5.2: İKİ PRICE STREAM (Raw + Jeweler)
+    🔥 V5.2 FIX: İKİ PRICE STREAM (Raw + Jeweler) - DÜZELTME!
     
     Her 1 dakikada bir çalışır.
     V5 API (Tek Kaynak + Circuit Breaker) → Backup
@@ -767,6 +768,8 @@ def update_financial_data():
     - Jeweler veriler: Raw'a marj eklenmiş kuyumcu fiyatı
     - Her iki set de ayrı Redis key'lerde saklanır
     - Yüzdelikler kendi snapshot'larına göre hesaplanır
+    
+    🔥 FIX: Jeweler verileri düzgün kaydediliyor!
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -952,37 +955,61 @@ def update_financial_data():
         set_cache(Config.CACHE_KEYS['golds_all'], raw_golds_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_all'], raw_silvers_payload, ttl=0)
         
-        # 6️⃣ JEWELER VERİLERİNİ OLUŞTUR (marj ekle)
-        jeweler_currencies_payload = apply_margins(raw_currencies_payload, "jeweler")
-        jeweler_golds_payload = apply_margins(raw_golds_payload, "jeweler")
-        jeweler_silvers_payload = apply_margins(raw_silvers_payload, "jeweler")
+        logger.info(f"✅ RAW veriler kaydedildi: {len(currencies_raw)} döviz, {len(golds_raw)} altın, {len(silvers_raw)} gümüş")
         
-        # 7️⃣ JEWELER VERİLERİNİ YÜZDELİKLERLE GÜNCELLE (jeweler snapshot'a göre)
-        jeweler_currencies = enrich_with_calculation(
-            jeweler_currencies_payload['data'], 
-            yesterday_prices_jeweler
-        )
-        jeweler_golds = enrich_with_calculation(
-            jeweler_golds_payload['data'], 
-            yesterday_prices_jeweler
-        )
-        jeweler_silvers = enrich_with_calculation(
-            jeweler_silvers_payload['data'], 
-            yesterday_prices_jeweler
-        )
+        # 6️⃣ 🔥 FIX: JEWELER VERİLERİNİ OLUŞTUR (önce marj ekle)
+        # Deep copy ile yeni objeler oluştur
+        jeweler_currencies_items = copy.deepcopy(currencies)
+        jeweler_golds_items = copy.deepcopy(golds)
+        jeweler_silvers_items = copy.deepcopy(silvers)
         
-        jeweler_currencies_payload['data'] = jeweler_currencies
-        jeweler_golds_payload['data'] = jeweler_golds
-        jeweler_silvers_payload['data'] = jeweler_silvers
+        # Marj ekle
+        margin_map = Config.PRICE_PROFILES.get("jeweler", {})
         
-        # 8️⃣ JEWELER VERİLERİNİ KAYDET
+        for item in jeweler_currencies_items:
+            code = item.get("code")
+            margin = margin_map.get(code, Config.DEFAULT_MARKET_MARGIN)
+            if margin > 0:
+                item["selling"] = round(item["selling"] * (1 + margin), 4)
+                item["buying"] = round(item["buying"] * (1 + margin), 4)
+                item["rate"] = item["selling"]
+        
+        for item in jeweler_golds_items:
+            code = item.get("code")
+            margin = margin_map.get(code, Config.DEFAULT_MARKET_MARGIN)
+            if margin > 0:
+                item["selling"] = round(item["selling"] * (1 + margin), 4)
+                item["buying"] = round(item["buying"] * (1 + margin), 4)
+                item["rate"] = item["selling"]
+        
+        for item in jeweler_silvers_items:
+            code = item.get("code")
+            margin = margin_map.get(code, Config.DEFAULT_MARKET_MARGIN)
+            if margin > 0:
+                item["selling"] = round(item["selling"] * (1 + margin), 4)
+                item["buying"] = round(item["buying"] * (1 + margin), 4)
+                item["rate"] = item["selling"]
+        
+        # 7️⃣ 🔥 FIX: JEWELER VERİLERİNİ YÜZDELİKLERLE GÜNCELLE (jeweler snapshot'a göre)
+        jeweler_currencies = enrich_with_calculation(jeweler_currencies_items, yesterday_prices_jeweler)
+        jeweler_golds = enrich_with_calculation(jeweler_golds_items, yesterday_prices_jeweler)
+        jeweler_silvers = enrich_with_calculation(jeweler_silvers_items, yesterday_prices_jeweler)
+        
+        # 8️⃣ 🔥 FIX: JEWELER PAYLOAD'LARI OLUŞTUR
+        jeweler_currencies_payload = {**base_meta, "data": jeweler_currencies}
+        jeweler_golds_payload = {**base_meta, "data": jeweler_golds}
+        jeweler_silvers_payload = {**base_meta, "data": jeweler_silvers}
+        
+        # 9️⃣ 🔥 FIX: JEWELER VERİLERİNİ KAYDET
         set_cache(Config.CACHE_KEYS['currencies_jeweler'], jeweler_currencies_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
         
+        logger.info(f"✅ JEWELER veriler kaydedildi: {len(jeweler_currencies)} döviz, {len(jeweler_golds)} altın, {len(jeweler_silvers)} gümüş")
+        
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
         
-        # 9️⃣ BACKUP SİSTEMİ (15 dakika)
+        # 🔟 BACKUP SİSTEMİ (15 dakika)
         last_backup_time = get_cache("kurabak:backup:timestamp") or 0
         current_time = time.time()
         
@@ -1004,7 +1031,7 @@ def update_financial_data():
             set_cache("kurabak:backup:all", backup_payload, ttl=0, force_disk_backup=True)
             set_cache("kurabak:backup:timestamp", current_time, ttl=0)
         
-        # 🔟 LOG
+        # 1️⃣1️⃣ LOG
         banner_info = f"Banner: {banner_message[:30]}..." if banner_message else "Banner: Yok"
         cb_status = circuit_breaker.get_status()
         cb_info = f" | CB: {cb_status['state']}"
