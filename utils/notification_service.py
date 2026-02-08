@@ -1,5 +1,5 @@
 """
-Firebase Push Notification Service V5.3 🔥 - ALARM NOTIFICATION UPGRADE
+Firebase Push Notification Service V5.4 🔥 - ALARM NOTIFICATION ULTIMATE
 =====================================
 ✅ HTTP v1 API Migration (send_each yerine send_all kullanımı)
 ✅ Token Yönetimi (Kayıt/Silme)
@@ -13,13 +13,13 @@ Firebase Push Notification Service V5.3 🔥 - ALARM NOTIFICATION UPGRADE
 ✅ 🔥 V5.1: FCM HTTP v1 API 404 HATASI ÇÖZÜLDÜ!
 ✅ 🔥 V5.2: FIREBASE CHECK FIX - Singleton pattern uyumlu
 ✅ 🔥 V5.3: ALARM BİLDİRİMİ YENİDEN TASARLANDI
+✅ 🔥 V5.4: PERCENT ALARM DESTEĞİ EKLENDİ (YENİ!)
 
-V5.3 Değişiklikler (ALARM NOTIFICATION UPGRADE):
-- Alarm bildirimine detaylı bilgi eklendi
-- Varlık adı + tür (Dolar / USD)
-- Hedef fiyat, Anlık fiyat
-- Alarm tipi (Hedef ÜZERİNE çıktı / ALTINA düştü)
-- Değişim bilgisi (+0,02 TL (+0,56%))
+V5.4 Değişiklikler (PERCENT ALARM SUPPORT):
+- send_alarm_notification() artık hem PRICE hem PERCENT modunu destekliyor
+- alarm_mode parametresi eklendi
+- percent_value ve percent_direction parametreleri eklendi
+- Mesaj formatı alarm moduna göre dinamik oluşturuluyor
 """
 import logging
 import json
@@ -201,10 +201,6 @@ def send_notification(
         Dict: Sonuç bilgisi
     """
     try:
-        # 🔥 V5.2 FIX: Firebase kontrolü kaldırıldı
-        # app.py'de singleton pattern ile başlatılıyor
-        # Hata varsa try-catch yakalayacak
-        
         if not tokens:
             logger.warning("⚠️ [FCM] Token bulunamadı!")
             return {"success": False, "error": "No tokens"}
@@ -224,7 +220,6 @@ def send_notification(
             
             logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
             
-            # 🔥 V5.1 FIX: send_each_for_multicast() kullan (HTTP v1 API uyumlu)
             try:
                 response = messaging.send_each_for_multicast(
                     messaging.MulticastMessage(
@@ -244,7 +239,6 @@ def send_notification(
                 total_success += response.success_count
                 total_failure += response.failure_count
                 
-                # Başarısız tokenları topla
                 if response.failure_count > 0:
                     for idx, send_response in enumerate(response.responses):
                         if not send_response.success:
@@ -258,7 +252,6 @@ def send_notification(
                 total_failure += len(batch_tokens)
                 failed_tokens_all.extend(batch_tokens)
         
-        # Başarısız tokenları temizle
         if failed_tokens_all:
             logger.warning(f"🗑️ [FCM] {len(failed_tokens_all)} başarısız token temizleniyor...")
             for token in failed_tokens_all:
@@ -325,7 +318,6 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
             
             logger.info(f"📤 [FCM] Batch {batch_num} gönderiliyor ({len(batch_tokens)} token)...")
             
-            # 🔥 V5.2: send_notification() singleton pattern uyumlu
             result = send_notification(
                 tokens=batch_tokens,
                 title=title,
@@ -375,49 +367,67 @@ def send_alarm_notification(
     fcm_token: str,
     currency_code: str,
     currency_name: str,
-    target_price: float,
     current_price: float,
-    start_price: float,
-    alarm_type: str
+    alarm_mode: str = "PRICE",
+    target_price: Optional[float] = None,
+    start_price: Optional[float] = None,
+    alarm_type: Optional[str] = None,
+    percent_value: Optional[float] = None,
+    percent_direction: Optional[str] = None
 ) -> bool:
     """
-    🔥 V5.3: Fiyat alarmı bildirimi gönder (YENİ TASARIM)
+    🔥 V5.4: Fiyat alarmı bildirimi gönder (PERCENT DESTEĞI EKLENDİ!)
     
     Bildirim İçeriği:
     - Varlık adı + tür (Dolar / USD)
-    - Hedef fiyat
+    - Hedef fiyat veya yüzde değişim
     - Anlık fiyat
-    - Alarm tipi (Hedef ÜZERİNE çıktı / ALTINA düştü)
-    - Değişim bilgisi (+0,02 TL (+0,56%))
+    - Alarm durumu (Hedef ÜZERİNE çıktı / ALTINA düştü)
+    - Değişim bilgisi
     
     Args:
         fcm_token: FCM token
         currency_code: Döviz kodu (USD, EUR, XAU, vb.)
         currency_name: Döviz adı (Dolar, Euro, Gram Altın)
-        target_price: Hedef fiyat
         current_price: Mevcut fiyat
+        alarm_mode: "PRICE" veya "PERCENT" (varsayılan: PRICE)
+        
+        PRICE MODE için:
+        target_price: Hedef fiyat
         start_price: Alarm kurulduğu andaki fiyat
         alarm_type: HIGH veya LOW
+        
+        PERCENT MODE için:
+        start_price: Başlangıç fiyatı
+        percent_value: Yüzde değeri (örn: 3.0)
+        percent_direction: UP veya DOWN
         
     Returns:
         bool: Başarılı ise True
     """
     try:
-        # Değişim hesapla
-        price_diff = current_price - target_price
-        change_from_start = current_price - start_price
-        change_percent = (change_from_start / start_price) * 100 if start_price > 0 else 0
+        alarm_mode = alarm_mode.upper()
         
-        # Emoji ve durm metni
-        emoji = "📈" if alarm_type == "HIGH" else "📉"
-        alarm_status = "Hedef ÜZERİNE çıktı" if alarm_type == "HIGH" else "Hedef ALTINA düştü"
-        change_symbol = "+" if change_from_start >= 0 else ""
-        
-        # Başlık
-        title = f"{emoji} Fiyat Alarmı!"
-        
-        # Gövde (Detaylı bilgi)
-        body = f"""{currency_name} / {currency_code}
+        # Emoji ve durum metni
+        if alarm_mode == "PRICE":
+            if not target_price or not alarm_type:
+                logger.error("❌ [ALARM] PRICE modunda target_price ve alarm_type gerekli!")
+                return False
+            
+            if not start_price:
+                start_price = current_price
+            
+            price_diff = current_price - target_price
+            change_from_start = current_price - start_price
+            change_percent = (change_from_start / start_price) * 100 if start_price > 0 else 0
+            
+            emoji = "📈" if alarm_type == "HIGH" else "📉"
+            alarm_status = "Hedef ÜZERİNE çıktı" if alarm_type == "HIGH" else "Hedef ALTINA düştü"
+            change_symbol = "+" if change_from_start >= 0 else ""
+            
+            title = f"{emoji} Fiyat Alarmı!"
+            
+            body = f"""{currency_name} / {currency_code}
 
 Hedef: ₺{target_price:,.2f}
 Anlık: ₺{current_price:,.2f}
@@ -425,23 +435,63 @@ Anlık: ₺{current_price:,.2f}
 {alarm_status}
 
 {change_symbol}{change_from_start:,.2f} TL ({change_symbol}{change_percent:.2f}%)"""
+            
+            data = {
+                "type": "alarm_triggered",
+                "alarm_mode": "PRICE",
+                "currency_code": currency_code,
+                "currency_name": currency_name,
+                "target_price": f"{target_price:.2f}",
+                "current_price": f"{current_price:.2f}",
+                "start_price": f"{start_price:.2f}",
+                "alarm_type": alarm_type,
+                "alarm_status": alarm_status,
+                "price_diff": f"{price_diff:.2f}",
+                "change_from_start": f"{change_from_start:.2f}",
+                "change_percent": f"{change_percent:.2f}"
+            }
+            
+        elif alarm_mode == "PERCENT":
+            if not start_price or not percent_value or not percent_direction:
+                logger.error("❌ [ALARM] PERCENT modunda start_price, percent_value, percent_direction gerekli!")
+                return False
+            
+            change_from_start = current_price - start_price
+            actual_percent = (change_from_start / start_price) * 100 if start_price > 0 else 0
+            
+            emoji = "📈" if percent_direction == "UP" else "📉"
+            alarm_status = f"%{percent_value:.1f} YÜKSELDİ" if percent_direction == "UP" else f"%{percent_value:.1f} DÜŞTÜ"
+            change_symbol = "+" if change_from_start >= 0 else ""
+            
+            title = f"{emoji} Fiyat Alarmı!"
+            
+            body = f"""{currency_name} / {currency_code}
+
+Başlangıç: ₺{start_price:,.2f}
+Anlık: ₺{current_price:,.2f}
+
+{alarm_status}
+
+{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{actual_percent:.2f}%)"""
+            
+            data = {
+                "type": "alarm_triggered",
+                "alarm_mode": "PERCENT",
+                "currency_code": currency_code,
+                "currency_name": currency_name,
+                "start_price": f"{start_price:.2f}",
+                "current_price": f"{current_price:.2f}",
+                "percent_value": f"{percent_value:.1f}",
+                "percent_direction": percent_direction,
+                "alarm_status": alarm_status,
+                "change_from_start": f"{change_from_start:.2f}",
+                "actual_percent": f"{actual_percent:.2f}"
+            }
         
-        # Data payload (Android'de ekstra işlemler için)
-        data = {
-            "type": "alarm_triggered",
-            "currency_code": currency_code,
-            "currency_name": currency_name,
-            "target_price": f"{target_price:.2f}",
-            "current_price": f"{current_price:.2f}",
-            "start_price": f"{start_price:.2f}",
-            "alarm_type": alarm_type,
-            "alarm_status": alarm_status,
-            "price_diff": f"{price_diff:.2f}",
-            "change_from_start": f"{change_from_start:.2f}",
-            "change_percent": f"{change_percent:.2f}"
-        }
+        else:
+            logger.error(f"❌ [ALARM] Geçersiz alarm_mode: {alarm_mode}")
+            return False
         
-        # Gönder
         response = messaging.send(
             messaging.Message(
                 notification=messaging.Notification(
@@ -455,14 +505,18 @@ Anlık: ₺{current_price:,.2f}
                     notification=messaging.AndroidNotification(
                         sound='default',
                         channel_id='kurabak_alarm',
-                        color='#10B981'  # KuraBak yeşili
+                        color='#10B981'
                     )
                 )
             )
         )
         
         logger.info(f"✅ [ALARM] Bildirim gönderildi: {currency_name} ({currency_code}) - {alarm_status}")
-        logger.info(f"   📊 Hedef: ₺{target_price:.2f} | Anlık: ₺{current_price:.2f} | Değişim: {change_symbol}{change_from_start:.2f} TL ({change_symbol}{change_percent:.2f}%)")
+        
+        if alarm_mode == "PRICE":
+            logger.info(f"   📊 Hedef: ₺{target_price:.2f} | Anlık: ₺{current_price:.2f} | Değişim: {change_symbol}{change_from_start:.2f} TL ({change_symbol}{change_percent:.2f}%)")
+        else:
+            logger.info(f"   📊 Başlangıç: ₺{start_price:.2f} | Anlık: ₺{current_price:.2f} | Değişim: {change_symbol}{change_from_start:.2f} TL ({change_symbol}{actual_percent:.2f}%)")
         
         return True
         
