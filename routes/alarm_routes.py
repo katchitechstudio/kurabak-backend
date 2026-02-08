@@ -24,10 +24,10 @@ limiter = Limiter(
 ALARM_TTL = 90 * 24 * 60 * 60
 MAX_ALARMS_PER_USER = 50
 
-def create_alarm_key(fcm_token: str, currency_code: str, alarm_type: str) -> str:
+def create_alarm_key(fcm_token: str, currency_code: str, alarm_type: str, profile: str) -> str:
     import hashlib
     token_hash = hashlib.sha256(fcm_token.encode()).hexdigest()[:16]
-    return f"alarm:{token_hash}:{currency_code}:{alarm_type}"
+    return f"alarm:{token_hash}:{currency_code}:{alarm_type}:{profile}"
 
 def get_user_alarm_pattern(fcm_token: str) -> str:
     import hashlib
@@ -72,6 +72,10 @@ def validate_alarm_data(data: dict) -> tuple:
     if alarm_mode not in ['PRICE', 'PERCENT']:
         return False, "alarm_mode sadece PRICE veya PERCENT olabilir"
     
+    profile = data.get('profile', 'jeweler').strip().lower()
+    if profile not in ['raw', 'jeweler']:
+        return False, "profile sadece raw veya jeweler olabilir"
+    
     if alarm_mode == 'PERCENT':
         if 'percent_value' not in data:
             return False, "percent_value gerekli"
@@ -100,6 +104,7 @@ def parse_alarm_data(data: dict) -> dict:
         'start_price': float(data.get('start_price', 0)),
         'alarm_type': data['alarm_type'].strip().upper(),
         'alarm_mode': data.get('alarm_mode', 'PRICE').strip().upper(),
+        'profile': data.get('profile', 'jeweler').strip().lower(),
         'created_at': int(time.time()),
         'is_active': True
     }
@@ -135,6 +140,7 @@ def create_alarm():
         fcm_token = data['fcm_token'].strip()
         currency_code = data['currency_code'].strip().upper()
         alarm_type = data['alarm_type'].strip().upper()
+        profile = data.get('profile', 'jeweler').strip().lower()
         
         redis_client = get_redis_client()
         if not redis_client:
@@ -152,7 +158,7 @@ def create_alarm():
                 "message": f"Maksimum {MAX_ALARMS_PER_USER} alarm kurabilirsiniz"
             }), 400
         
-        alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type)
+        alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type, profile)
         
         import hashlib
         token_hash = hashlib.sha256(fcm_token.encode()).hexdigest()[:16]
@@ -162,9 +168,10 @@ def create_alarm():
         existing_alarm = redis_client.get(alarm_key)
         if existing_alarm:
             alarm_type_tr = "yükseliş" if alarm_type == "HIGH" else "düşüş"
+            profile_tr = "ham" if profile == "raw" else "kuyumcu"
             return jsonify({
                 "success": False,
-                "message": f"Bu varlık için zaten bir {alarm_type_tr} alarmınız var"
+                "message": f"Bu varlık için {profile_tr} fiyatında zaten bir {alarm_type_tr} alarmınız var"
             }), 409
         
         alarm_obj = parse_alarm_data(data)
@@ -176,7 +183,7 @@ def create_alarm():
         )
         
         logger.info(
-            f"✅ [ALARM] Oluşturuldu: {currency_code} ({alarm_type}, {alarm_obj['alarm_mode']}) "
+            f"✅ [ALARM] Oluşturuldu: {currency_code} ({alarm_type}, {alarm_obj['alarm_mode']}, {profile}) "
             f"→ Hedef: {alarm_obj['target_price']}"
         )
         
@@ -191,6 +198,7 @@ def create_alarm():
                 "start_price": alarm_obj['start_price'],
                 "alarm_type": alarm_type,
                 "alarm_mode": alarm_obj['alarm_mode'],
+                "profile": alarm_obj['profile'],
                 "percent_value": alarm_obj.get('percent_value'),
                 "percent_direction": alarm_obj.get('percent_direction'),
                 "created_at": alarm_obj['created_at']
@@ -291,6 +299,7 @@ def delete_alarm():
         fcm_token = data['fcm_token'].strip()
         currency_code = data['currency_code'].strip().upper()
         alarm_type = data['alarm_type'].strip().upper()
+        profile = data.get('profile', 'jeweler').strip().lower()
         
         redis_client = get_redis_client()
         if not redis_client:
@@ -299,7 +308,7 @@ def delete_alarm():
                 "message": "Redis bağlantısı yok"
             }), 500
         
-        alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type)
+        alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type, profile)
         
         if not redis_client.exists(alarm_key):
             return jsonify({
@@ -309,14 +318,15 @@ def delete_alarm():
         
         redis_client.delete(alarm_key)
         
-        logger.info(f"🗑️ [ALARM] Silindi: {currency_code} ({alarm_type})")
+        logger.info(f"🗑️ [ALARM] Silindi: {currency_code} ({alarm_type}, {profile})")
         
         return jsonify({
             "success": True,
             "message": "Alarm başarıyla silindi",
             "data": {
                 "currency_code": currency_code,
-                "alarm_type": alarm_type
+                "alarm_type": alarm_type,
+                "profile": profile
             }
         }), 200
         
@@ -390,8 +400,9 @@ def sync_alarms():
                 
                 currency_code = alarm_obj['currency_code']
                 alarm_type = alarm_obj['alarm_type']
+                profile = alarm_obj['profile']
                 
-                alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type)
+                alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type, profile)
                 
                 redis_client.setex(
                     alarm_key,
@@ -496,6 +507,8 @@ def alarm_stats():
         unique_users = set()
         high_count = 0
         low_count = 0
+        raw_count = 0
+        jeweler_count = 0
         
         for key in all_alarms:
             try:
@@ -513,6 +526,13 @@ def alarm_stats():
                         high_count += 1
                     elif alarm_type == 'LOW':
                         low_count += 1
+                    
+                    if len(parts) >= 5:
+                        profile = parts[4]
+                        if profile == 'raw':
+                            raw_count += 1
+                        elif profile == 'jeweler':
+                            jeweler_count += 1
                         
             except Exception as parse_err:
                 continue
@@ -525,6 +545,10 @@ def alarm_stats():
                 "alarm_types": {
                     "HIGH": high_count,
                     "LOW": low_count
+                },
+                "profiles": {
+                    "raw": raw_count,
+                    "jeweler": jeweler_count
                 },
                 "max_per_user": MAX_ALARMS_PER_USER,
                 "ttl_days": ALARM_TTL // (24 * 60 * 60)
