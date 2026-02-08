@@ -12,8 +12,12 @@ General Routes - API Endpoints V5.2 (MARKET MARGIN SYSTEM) 🔥
 
 V5.2 Changes:
 - Profile parametresi eklendi (raw | jeweler)
-- get_cache_key_for_profile() kullanımı
+- get_cache_key_for_profile() kullanımı TUTARLI HER YERDE
 - Response meta'da profile bilgisi
+
+V5.3 Changes (TUTARLILIK DÜZELTMESİ):
+- get_regional_currencies() → Config.CACHE_KEYS yerine get_cache_key_for_profile() kullanıyor
+- Her yerde tek bir fonksiyon kullanılıyor (tutarlılık)
 """
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
@@ -317,11 +321,27 @@ def get_all_silvers():
 @api_bp.route('/currency/regional', methods=['GET'])
 @limiter.limit("30 per minute")
 def get_regional_currencies():
+    """
+    🔥 V5.3: get_cache_key_for_profile() kullanımı ile tutarlı hale getirildi
+    
+    ÖNCEKİ KOD:
+        result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])  # ❌ Direkt Config kullanımı
+    
+    YENİ KOD:
+        cache_key = get_cache_key_for_profile('currencies_all', 'jeweler')  # ✅ Fonksiyon kullanımı
+        result = get_data_guaranteed(cache_key)
+    
+    NOT: Regional endpoint profil parametresi almıyor, varsayılan jeweler kullanıyor
+    """
     check_user_agent()
     track_online_user()
     
     try:
-        result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])
+        # 🔥 V5.3 FIX: get_cache_key_for_profile() kullan (tutarlılık için)
+        # Regional endpoint her zaman jeweler profili kullanır (kullanıcı seçimi yok)
+        cache_key = get_cache_key_for_profile('currencies_all', 'jeweler')
+        
+        result = get_data_guaranteed(cache_key)
         
         if not result:
             return create_response(
