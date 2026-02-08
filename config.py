@@ -230,8 +230,15 @@ class Config:
     # ======================================
     # HAFTA SONU KİLİDİ
     # ======================================
+    # 🔥 V5.3: Piyasa saatleri düzeltildi
+    
+    # Cuma günü piyasa kapanış saati (Türkiye saati)
+    MARKET_CLOSE_FRIDAY_HOUR = 18  # Cuma 18:00 (Forex standardı)
+    
     # Pazar gecesi kaçta piyasalar açılır? (Asya piyasaları)
-    WEEKEND_REOPEN_HOUR = 23  # Pazar 23:00
+    WEEKEND_REOPEN_HOUR = 0  # 🔥 DEĞİŞTİ: Pazar 00:00 (API bu saatte başlıyor)
+    
+    # ⚠️ Eski değer: 23 (Pazar 23:00) → Yanlıştı, API pazar 00:00'da başlıyor
     
     # ======================================
     # REDIS & CACHE ANAHTARLARI
