@@ -10,7 +10,7 @@ from utils.notification_service import send_notification
 
 logger = logging.getLogger("KuraBak.AlarmService")
 
-def get_current_price(currency_code: str) -> Optional[float]:
+def get_current_price(currency_code: str, profile: str = "jeweler") -> Optional[float]:
     try:
         original_code = currency_code
         if currency_code.startswith("FOREX_"):
@@ -20,32 +20,41 @@ def get_current_price(currency_code: str) -> Optional[float]:
         elif currency_code.startswith("GOLD_"):
             currency_code = currency_code.replace("GOLD_", "")
         
-        currencies_data = get_cache(Config.CACHE_KEYS['currencies_all'])
+        if profile == "raw":
+            currencies_key = Config.CACHE_KEYS['currencies_all']
+            golds_key = Config.CACHE_KEYS['golds_all']
+            silvers_key = Config.CACHE_KEYS['silvers_all']
+        else:
+            currencies_key = Config.CACHE_KEYS['currencies_jeweler']
+            golds_key = Config.CACHE_KEYS['golds_jeweler']
+            silvers_key = Config.CACHE_KEYS['silvers_jeweler']
+        
+        currencies_data = get_cache(currencies_key)
         
         if currencies_data:
             for item in currencies_data.get('data', []):
                 if item.get('code') == currency_code:
                     return item.get('selling', 0)
         
-        golds_data = get_cache(Config.CACHE_KEYS['golds_all'])
+        golds_data = get_cache(golds_key)
         
         if golds_data:
             for item in golds_data.get('data', []):
                 if item.get('code') == currency_code:
                     return item.get('selling', 0)
         
-        silvers_data = get_cache(Config.CACHE_KEYS['silvers_all'])
+        silvers_data = get_cache(silvers_key)
         
         if silvers_data:
             for item in silvers_data.get('data', []):
                 if item.get('code') == currency_code:
                     return item.get('selling', 0)
         
-        logger.debug(f"🔍 [ALARM] Fiyat aranıyor: {original_code} → {currency_code}")
+        logger.debug(f"🔍 [ALARM] Fiyat aranıyor: {original_code} → {currency_code} ({profile})")
         return None
         
     except Exception as e:
-        logger.error(f"❌ [ALARM] Fiyat alma hatası ({currency_code}): {e}")
+        logger.error(f"❌ [ALARM] Fiyat alma hatası ({currency_code}, {profile}): {e}")
         return None
 
 def extract_fcm_token_from_key(alarm_key: str) -> Optional[str]:
@@ -264,7 +273,7 @@ def get_all_alarm_keys_safe(redis_client) -> List[str]:
                     continue
                 
                 parts = key_str.split(':')
-                if len(parts) == 4:
+                if len(parts) >= 4:
                     alarm_keys.append(key_str)
             
             if cursor == 0:
@@ -340,17 +349,19 @@ def check_all_alarms() -> Dict:
                     failed_count += 1
                     continue
                 
-                current_price = get_current_price(currency_code)
+                alarm_profile = alarm_obj.get('profile', 'jeweler')
+                
+                current_price = get_current_price(currency_code, profile=alarm_profile)
                 
                 if current_price is None or current_price <= 0:
-                    logger.warning(f"⚠️ [ALARM] Fiyat bulunamadı: {currency_code}")
+                    logger.warning(f"⚠️ [ALARM] Fiyat bulunamadı: {currency_code} ({alarm_profile})")
                     failed_count += 1
                     continue
                 
                 should_trigger = check_alarm_trigger(alarm_obj, current_price)
                 
                 if should_trigger:
-                    logger.info(f"🎯 [ALARM] Tetiklendi: {currency_code} → {current_price}")
+                    logger.info(f"🎯 [ALARM] Tetiklendi: {currency_code} ({alarm_profile}) → {current_price}")
                     
                     token_hash = extract_fcm_token_from_key(key)
                     
@@ -378,11 +389,11 @@ def check_all_alarms() -> Dict:
                     if notification_sent:
                         redis_client.delete(key)
                         triggered_count += 1
-                        logger.info(f"✅ [ALARM] Bildirim gönderildi ve alarm silindi: {currency_code}")
+                        logger.info(f"✅ [ALARM] Bildirim gönderildi ve alarm silindi: {currency_code} ({alarm_profile})")
                     else:
                         redis_client.delete(key)
                         failed_count += 1
-                        logger.warning(f"⚠️ [ALARM] Bildirim gönderilemedi ama alarm silindi: {currency_code}")
+                        logger.warning(f"⚠️ [ALARM] Bildirim gönderilemedi ama alarm silindi: {currency_code} ({alarm_profile})")
                 
             except json.JSONDecodeError as json_err:
                 logger.error(f"❌ [ALARM] JSON parse hatası ({key}): {json_err}")
