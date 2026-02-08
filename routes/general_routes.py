@@ -1,5 +1,5 @@
 """
-General Routes - API Endpoints V5.2 (MARKET MARGIN SYSTEM) 🔥
+General Routes - API Endpoints V5.3 (MARKET STATUS ENDPOINT) 🔥
 ==================================================
 ✅ FCM Token Registration & Unregistration
 ✅ Feedback System (TELEGRAM BOT FIX!)
@@ -8,22 +8,24 @@ General Routes - API Endpoints V5.2 (MARKET MARGIN SYSTEM) 🔥
 ✅ Banner Management (Event System)
 ✅ Metrics & Monitoring
 ✅ Rate Limiting
-✅ 💰 PRICE PROFILE SUPPORT (Raw / Jeweler) - YENİ!
+✅ 💰 PRICE PROFILE SUPPORT (Raw / Jeweler)
+✅ 🚦 MARKET STATUS ENDPOINT (V5.3 - YENİ!)
 
 V5.2 Changes:
 - Profile parametresi eklendi (raw | jeweler)
 - get_cache_key_for_profile() kullanımı TUTARLI HER YERDE
 - Response meta'da profile bilgisi
 
-V5.3 Changes (TUTARLILIK DÜZELTMESİ):
-- get_regional_currencies() → Config.CACHE_KEYS yerine get_cache_key_for_profile() kullanıyor
-- Her yerde tek bir fonksiyon kullanılıyor (tutarlılık)
+V5.3 Changes:
+- get_regional_currencies() → get_cache_key_for_profile() kullanıyor (tutarlılık)
+- /api/market/status endpoint eklendi (Android için)
 """
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import logging
 import time
+import pytz
 from datetime import datetime
 
 from config import Config
@@ -34,7 +36,7 @@ from utils.notification_service import (
     get_token_count
 )
 from utils.event_manager import get_todays_banner
-from services.financial_service import get_cache_key_for_profile  # 🔥 YENİ
+from services.financial_service import get_cache_key_for_profile
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +201,7 @@ def get_all_currencies():
         
         meta_data = {
             'count': len(data_list),
-            'profile': profile,  # 🔥 YENİ: Hangi profil kullanıldı
+            'profile': profile,
             'last_update': update_date,
             'source': result.get('source'),
             'status': status,
@@ -258,7 +260,7 @@ def get_all_golds():
             f"Altın fiyatları getirildi ({profile})",
             {
                 'count': len(data_list),
-                'profile': profile,  # 🔥 YENİ
+                'profile': profile,
                 'last_update': result.get('update_date'),
                 'status': result.get('status', 'OPEN')
             }
@@ -308,7 +310,7 @@ def get_all_silvers():
             f"Gümüş fiyatları getirildi ({profile})",
             {
                 'count': len(data_list),
-                'profile': profile,  # 🔥 YENİ
+                'profile': profile,
                 'last_update': result.get('update_date'),
                 'status': result.get('status', 'OPEN')
             }
@@ -372,6 +374,152 @@ def get_regional_currencies():
     except Exception as e:
         logger.error(f"Regional Error: {e}")
         return create_response({}, 500, "Sunucu hatası")
+
+
+@api_bp.route('/market/status', methods=['GET'])
+@limiter.limit("120 per minute")
+def get_market_status():
+    """
+    🔥 V5.3: YENİ ENDPOINT - Market durumunu döner (Android için)
+    
+    Response:
+        {
+            "success": true,
+            "data": {
+                "status": "OPEN" | "CLOSED" | "MAINTENANCE" | "MAINTENANCE_FULL",
+                "color": "green" | "red" | "yellow",
+                "message": "Piyasalar Açık",
+                "next_open": "2026-02-10 00:00:00"  # Sadece CLOSED durumunda
+            },
+            "meta": {
+                "current_time": "2026-02-09 14:30:00",
+                "timezone": "Europe/Istanbul"
+            }
+        }
+    
+    Status Renkleri:
+        - OPEN → 🟢 green
+        - CLOSED → 🔴 red
+        - MAINTENANCE / MAINTENANCE_FULL → 🟡 yellow
+    
+    Örnek:
+        GET /api/market/status
+    """
+    check_user_agent()
+    track_online_user()
+    
+    try:
+        tz = pytz.timezone(Config.DEFAULT_TIMEZONE)
+        now = datetime.now(tz)
+        
+        # 1️⃣ BAKIM MODU KONTROLÜ
+        maintenance_data = get_cache("system_maintenance")
+        if maintenance_data and isinstance(maintenance_data, dict):
+            end_time = maintenance_data.get("end_time")
+            
+            # Bakım süresi bitti mi?
+            if end_time and time.time() > end_time:
+                # Bakım süresi doldu, normal akışa dön
+                pass
+            else:
+                # Hala bakımda
+                message = maintenance_data.get("message", "Sistem Bakımda")
+                mode = maintenance_data.get("mode", "limited")
+                status = "MAINTENANCE_FULL" if mode == "full" else "MAINTENANCE"
+                
+                return create_response(
+                    {
+                        "status": status,
+                        "color": "yellow",
+                        "message": message,
+                        "next_open": None
+                    },
+                    200,
+                    "Market durumu (Bakım)",
+                    {
+                        "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                        "timezone": Config.DEFAULT_TIMEZONE
+                    }
+                )
+        
+        # 2️⃣ HAFTA SONU KONTROLÜ
+        # 🔥 V5.3: Piyasa saatleri düzeltildi
+        
+        # Cumartesi tüm gün kapalı
+        is_saturday = now.weekday() == 5
+        
+        # Cuma 18:00 ve sonrası kapalı
+        is_friday_closed = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
+        
+        # Pazar sabahı (00:00'dan önce) kapalı
+        is_sunday_morning_closed = now.weekday() == 6 and now.hour < Config.WEEKEND_REOPEN_HOUR
+        
+        if is_saturday or is_friday_closed or is_sunday_morning_closed:
+            # Piyasa kapalı - Sonraki açılış zamanını hesapla
+            
+            if is_friday_closed:
+                # Cuma akşam → Pazar 00:00'da açılır
+                days_until_sunday = (6 - now.weekday()) % 7
+                next_open = now.replace(hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0)
+                next_open = next_open.replace(day=now.day + days_until_sunday)
+            elif is_saturday:
+                # Cumartesi → Pazar 00:00'da açılır
+                next_open = now.replace(hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0)
+                next_open = next_open.replace(day=now.day + 1)
+            else:
+                # Pazar sabah erken → Bugün 00:00'da açılır (geçmiş olabilir ama mantık doğru)
+                next_open = now.replace(hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0)
+            
+            return create_response(
+                {
+                    "status": "CLOSED",
+                    "color": "red",
+                    "message": "Piyasalar Kapalı",
+                    "next_open": next_open.strftime("%Y-%m-%d %H:%M:%S")
+                },
+                200,
+                "Market durumu (Kapalı)",
+                {
+                    "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "timezone": Config.DEFAULT_TIMEZONE
+                }
+            )
+        
+        # 3️⃣ PIYASA AÇIK
+        return create_response(
+            {
+                "status": "OPEN",
+                "color": "green",
+                "message": "Piyasalar Açık",
+                "next_open": None
+            },
+            200,
+            "Market durumu (Açık)",
+            {
+                "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "timezone": Config.DEFAULT_TIMEZONE
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ [MARKET STATUS] Hata: {e}")
+        
+        # Hata durumunda güvenli varsayılan döndür
+        return create_response(
+            {
+                "status": "OPEN",
+                "color": "green",
+                "message": "Piyasalar Açık",
+                "next_open": None
+            },
+            200,
+            "Market durumu (Varsayılan)",
+            {
+                "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "timezone": Config.DEFAULT_TIMEZONE,
+                "error": str(e)
+            }
+        )
 
 
 @api_bp.route('/banner/today', methods=['GET'])
