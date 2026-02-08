@@ -6,7 +6,6 @@ from datetime import datetime
 
 from config import Config
 from utils.cache import get_cache, get_redis_client
-from utils.notification_service import send_notification
 
 logger = logging.getLogger("KuraBak.AlarmService")
 
@@ -153,95 +152,39 @@ def check_alarm_trigger(alarm_data: dict, current_price: float) -> bool:
         logger.error(f"❌ [ALARM] Trigger kontrolü hatası: {e}")
         return False
 
-def send_alarm_notification(fcm_token: str, alarm_data: dict, current_price: float) -> bool:
+def send_alarm_notification_legacy(fcm_token: str, alarm_data: dict, current_price: float) -> bool:
+    """
+    🔥 V5.3: notification_service.py'deki yeni send_alarm_notification() fonksiyonunu kullanır
+    """
     try:
-        if not validate_fcm_token(fcm_token):
-            logger.error(f"❌ [ALARM] Geçersiz FCM token formatı: {fcm_token[:20]}...")
-            return False
+        from utils.notification_service import send_alarm_notification
         
-        currency_name = alarm_data.get('currency_name', 'Varlık')
         currency_code = alarm_data.get('currency_code', '')
-        alarm_mode = alarm_data.get('alarm_mode', 'PRICE').upper()
+        currency_name = alarm_data.get('currency_name', 'Varlık')
+        target_price = alarm_data.get('target_price', 0)
+        start_price = alarm_data.get('start_price', current_price)
+        alarm_type = alarm_data.get('alarm_type', 'HIGH')
         
-        if alarm_mode == 'PERCENT':
-            percent_value = alarm_data.get('percent_value', 0)
-            percent_direction = alarm_data.get('percent_direction', '').upper()
-            
-            emoji = "📈" if percent_direction == 'UP' else "📉"
-            
-            if percent_direction == 'UP':
-                title = f"{emoji} Fiyat Yükseldi!"
-                body = f"{currency_name} %{percent_value} yükseldi: ₺{current_price:,.2f}"
-            else:
-                title = f"{emoji} Fiyat Düştü!"
-                body = f"{currency_name} %{percent_value} düştü: ₺{current_price:,.2f}"
-        else:
-            target_price = alarm_data.get('target_price', 0)
-            alarm_type = alarm_data.get('alarm_type', '').upper()
-            
-            emoji = "📈" if alarm_type == 'HIGH' else "📉"
-            
-            if alarm_type == 'HIGH':
-                title = f"{emoji} Fiyat Yükseldi!"
-                body = f"{currency_name} hedef fiyatı aştı: ₺{target_price:,.2f}"
-            else:
-                title = f"{emoji} Fiyat Düştü!"
-                body = f"{currency_name} hedef fiyatın altına düştü: ₺{target_price:,.2f}"
-        
-        data = {
-            "type": "alarm_triggered",
-            "currency_code": currency_code,
-            "currency_name": currency_name,
-            "current_price": str(current_price),
-            "alarm_mode": alarm_mode,
-            "timestamp": str(int(time.time()))
-        }
-        
-        if alarm_mode == 'PERCENT':
-            data["percent_value"] = str(alarm_data.get('percent_value', 0))
-            data["percent_direction"] = alarm_data.get('percent_direction', '')
-        else:
-            data["target_price"] = str(alarm_data.get('target_price', 0))
-            data["alarm_type"] = alarm_data.get('alarm_type', '')
-        
-        logger.info(f"📤 [ALARM] Bildirim gönderiliyor...")
+        logger.info(f"📤 [ALARM] V5.3 Detaylı bildirim gönderiliyor...")
         logger.info(f"   Token: {fcm_token[:20]}...{fcm_token[-10:]}")
-        logger.info(f"   Başlık: {title}")
-        logger.info(f"   Mesaj: {body}")
+        logger.info(f"   Varlık: {currency_name} ({currency_code})")
+        logger.info(f"   Hedef: ₺{target_price:,.2f} | Anlık: ₺{current_price:,.2f}")
         
-        result = send_notification(
-            tokens=[fcm_token],
-            title=title,
-            body=body,
-            data=data,
-            priority="high",
-            sound="default"
+        success = send_alarm_notification(
+            fcm_token=fcm_token,
+            currency_code=currency_code,
+            currency_name=currency_name,
+            target_price=target_price,
+            current_price=current_price,
+            start_price=start_price,
+            alarm_type=alarm_type
         )
         
-        if result.get('success'):
-            success_count = result.get('success_count', 0)
-            failure_count = result.get('failure_count', 0)
-            
-            if success_count > 0:
-                logger.info(
-                    f"✅ [ALARM] Bildirim gönderildi: {currency_name} "
-                    f"→ Mevcut: ₺{current_price:,.2f}"
-                )
-                return True
-            else:
-                logger.error(
-                    f"❌ [ALARM] Bildirim başarısız: {failure_count} hata\n"
-                    f"   Detay: {result}"
-                )
-                return False
+        if success:
+            logger.info(f"✅ [ALARM] Bildirim gönderildi: {currency_name} → Mevcut: ₺{current_price:,.2f}")
+            return True
         else:
-            error_msg = result.get('error', 'Bilinmeyen hata')
-            logger.error(
-                f"❌ [ALARM] Bildirim hatası: {error_msg}\n"
-                f"   Token: {fcm_token[:20]}...\n"
-                f"   Currency: {currency_code}\n"
-                f"   Detay: {result}"
-            )
+            logger.error(f"❌ [ALARM] Bildirim gönderilemedi: {currency_name}")
             return False
         
     except Exception as e:
@@ -380,7 +323,7 @@ def check_all_alarms() -> Dict:
                         logger.info(f"🗑️ [ALARM] Geçersiz alarm silindi: {key}")
                         continue
                     
-                    notification_sent = send_alarm_notification(
+                    notification_sent = send_alarm_notification_legacy(
                         fcm_token,
                         alarm_obj,
                         current_price
