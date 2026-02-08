@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V5.2 🚀💰
+Financial Service - PRODUCTION READY V5.3 🚀💰
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -12,8 +12,9 @@ Financial Service - PRODUCTION READY V5.2 🚀💰
 ✅ CIRCUIT BREAKER V2: Sadece durum değişiminde kaydet
 ✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
 ✅ SUMMARY KALDIRMA: Günün özeti artık gönderilmiyor
-✅ 💰 MARKET MARGIN SYSTEM: Dual price streams (Raw + Jeweler) - YENİ!
-✅ 🔥 JEWELER CACHE FIX: Jeweler verileri düzgün kaydediliyor!
+✅ 💰 MARKET MARGIN SYSTEM: Dual price streams (Raw + Jeweler)
+✅ 🔥 JEWELER CACHE FIX: Jeweler verileri düzgün kaydediliyor
+✅ 🕐 V5.3: Piyasa saatleri düzeltildi (Cuma 18:00 + Pazar 00:00)
 """
 
 import requests
@@ -758,18 +759,16 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 
 def update_financial_data():
     """
-    🔥 V5.2 FIX: İKİ PRICE STREAM (Raw + Jeweler) - DÜZELTME!
+    🔥 V5.3: İKİ PRICE STREAM (Raw + Jeweler) + Piyasa Saatleri Fix
     
     Her 1 dakikada bir çalışır.
     V5 API (Tek Kaynak + Circuit Breaker) → Backup
     
-    YENİ MANTIK:
+    YENİ MANTIK (V5.3):
+    - Cuma 18:00 kapanış (Config.MARKET_CLOSE_FRIDAY_HOUR)
+    - Pazar 00:00 açılış (Config.WEEKEND_REOPEN_HOUR)
     - Raw veriler: API'den gelen ham fiyat
     - Jeweler veriler: Raw'a marj eklenmiş kuyumcu fiyatı
-    - Her iki set de ayrı Redis key'lerde saklanır
-    - Yüzdelikler kendi snapshot'larına göre hesaplanır
-    
-    🔥 FIX: Jeweler verileri düzgün kaydediliyor!
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -794,7 +793,18 @@ def update_financial_data():
         return True
     
     # HAFTA SONU KONTROLÜ
-    if now.weekday() == 5 or (now.weekday() == 6 and now.hour < 23):
+    # 🔥 V5.3: Piyasa saatleri düzeltildi
+    
+    # Cumartesi tüm gün kapalı
+    is_saturday = now.weekday() == 5
+    
+    # Cuma 18:00 ve sonrası kapalı
+    is_friday_closed = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
+    
+    # Pazar sabahı (00:00'dan önce) kapalı
+    is_sunday_morning_closed = now.weekday() == 6 and now.hour < Config.WEEKEND_REOPEN_HOUR
+    
+    if is_saturday or is_friday_closed or is_sunday_morning_closed:
         if not get_cache("market_closed_logged"):
             logger.info(f"🔒 [WORKER] Piyasa Kapalı - Hafta sonu modu başladı")
             set_cache("market_closed_logged", "true", ttl=43200)
