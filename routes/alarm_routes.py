@@ -21,9 +21,6 @@ limiter = Limiter(
     strategy="fixed-window"
 )
 
-ALARM_TTL = 90 * 24 * 60 * 60
-MAX_ALARMS_PER_USER = 50
-
 def create_alarm_key(fcm_token: str, currency_code: str, alarm_type: str, profile: str) -> str:
     import hashlib
     token_hash = hashlib.sha256(fcm_token.encode()).hexdigest()[:16]
@@ -152,10 +149,10 @@ def create_alarm():
         user_pattern = get_user_alarm_pattern(fcm_token)
         user_alarms = redis_client.keys(user_pattern)
         
-        if len(user_alarms) >= MAX_ALARMS_PER_USER:
+        if len(user_alarms) >= Config.MAX_ALARMS_PER_USER:
             return jsonify({
                 "success": False,
-                "message": f"Maksimum {MAX_ALARMS_PER_USER} alarm kurabilirsiniz"
+                "message": f"Maksimum {Config.MAX_ALARMS_PER_USER} alarm kurabilirsiniz"
             }), 400
         
         alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type, profile)
@@ -178,7 +175,7 @@ def create_alarm():
         
         redis_client.setex(
             alarm_key,
-            ALARM_TTL,
+            Config.ALARM_TTL,
             json.dumps(alarm_obj)
         )
         
@@ -265,7 +262,7 @@ def list_alarms():
             "data": alarms,
             "meta": {
                 "total": len(alarms),
-                "max_alarms": MAX_ALARMS_PER_USER
+                "max_alarms": Config.MAX_ALARMS_PER_USER
             }
         }), 200
         
@@ -362,10 +359,10 @@ def sync_alarms():
                 "message": "alarms bir liste olmalı"
             }), 400
         
-        if len(alarms) > MAX_ALARMS_PER_USER:
+        if len(alarms) > Config.MAX_ALARMS_PER_USER:
             return jsonify({
                 "success": False,
-                "message": f"Maksimum {MAX_ALARMS_PER_USER} alarm"
+                "message": f"Maksimum {Config.MAX_ALARMS_PER_USER} alarm"
             }), 400
         
         redis_client = get_redis_client()
@@ -406,7 +403,7 @@ def sync_alarms():
                 
                 redis_client.setex(
                     alarm_key,
-                    ALARM_TTL,
+                    Config.ALARM_TTL,
                     json.dumps(alarm_obj)
                 )
                 
@@ -550,8 +547,8 @@ def alarm_stats():
                     "raw": raw_count,
                     "jeweler": jeweler_count
                 },
-                "max_per_user": MAX_ALARMS_PER_USER,
-                "ttl_days": ALARM_TTL // (24 * 60 * 60)
+                "max_per_user": Config.MAX_ALARMS_PER_USER,
+                "ttl_days": Config.ALARM_TTL // (24 * 60 * 60)
             }
         }), 200
         
