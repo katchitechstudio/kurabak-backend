@@ -1,25 +1,26 @@
 """
-Maintenance Service - PRODUCTION READY V6.0 🚧
+Maintenance Service - PRODUCTION READY V6.1 🚧
 ===============================================
 ✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
 ✅ API V5: Tek kaynak sistemi
 ✅ BANNER SİSTEMİ: Uygulama tarafına özel mesaj gönderme
-✅ SCHEDULER: Worker + Snapshot + Şef + Push Notification + ALARM + HABER
+✅ SCHEDULER: Worker + Snapshot + Şef + Push Notification + ALARM + HABER + DİNAMİK MARJ
 ✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
 ✅ THREAD-SAFE: Güvenli veri erişimi
 ✅ SMART RECOVERY: Sistem çökerse otomatik kurtarma
 ✅ PUSH NOTIFICATION: 14:00 günlük bildirim (Bayram/Haber)
 ✅ CLEANUP SYSTEM: Her gün eski backup'ları temizle
 ✅ ALARM SYSTEM: Her 5-15 dakikada alarm kontrolü
-✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:00 + 12:00)
+✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:03 + 12:00)
+✅ DYNAMIC MARGIN SYSTEM: Her gece 00:01 Gemini ile marj güncelleme
 ✅ JOB ERROR LISTENER: Job crash'lerde Telegram bildirimi
 ✅ JOB OVERLAP PROTECTION: Çift çalışma önleme
 ✅ SCHEDULER SINGLETON LOCK: Thread-safe başlatma
 
-V6.0 Değişiklikler:
-- calendar_check job'u KALDIRILDI (08:00 etkinlik kontrolü yok artık)
-- push_notification saati 12:00 → 14:00'e taşındı
-- Bayram/Haber sistemi event_manager ile entegre
+V6.1 Değişiklikler:
+- 💰 DİNAMİK MARJ JOB EKLENDİ: Her gece 00:01'de Gemini ile marj hesaplama
+- 🌅 SABAH VARDİYASI: 00:00 → 00:03 (CPU spike önleme)
+- ⏰ ZAMANLAMA: 00:00:05 Snapshot → 00:01 Marj → 00:03 Haberler
 """
 
 import logging
@@ -208,6 +209,24 @@ def snapshot_job():
             
     except Exception as e:
         logger.error(f"❌ [SNAPSHOT] Hata: {e}")
+        raise
+
+
+def dynamic_margin_update_job():
+    """💰 DİNAMİK MARJ GÜNCELLEME (Günde 1 kere - 00:01)"""
+    try:
+        logger.info("💰 [DİNAMİK MARJ] Günlük güncelleme başlıyor...")
+        
+        from utils.news_manager import update_dynamic_margins
+        success = update_dynamic_margins()
+        
+        if success:
+            logger.info("✅ [DİNAMİK MARJ] Başarıyla güncellendi!")
+        else:
+            logger.warning("⚠️ [DİNAMİK MARJ] Güncellenemedi, fallback marjlar kullanılacak")
+            
+    except Exception as e:
+        logger.error(f"❌ [DİNAMİK MARJ] Hata: {e}")
         raise
 
 
@@ -404,6 +423,16 @@ def start_scheduler():
         )
         
         scheduler.add_job(
+            dynamic_margin_update_job,
+            trigger=CronTrigger(hour=0, minute=1),
+            id='dynamic_margin_update',
+            name='Dinamik Marj Güncelleme (Gemini)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        scheduler.add_job(
             supervisor_check,
             trigger=IntervalTrigger(minutes=Config.SUPERVISOR_INTERVAL),
             id='supervisor',
@@ -456,7 +485,7 @@ def start_scheduler():
         
         scheduler.add_job(
             news_morning_shift_job,
-            trigger=CronTrigger(hour=0, minute=0),
+            trigger=CronTrigger(hour=0, minute=3),
             id='news_morning',
             name='Haber Sabah Vardiyası',
             replace_existing=True,
@@ -475,15 +504,16 @@ def start_scheduler():
         )
         
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.0 - Bayram/Haber Sistemi)")
+        logger.info("✅ Scheduler başlatıldı! (V6.1 - Dinamik Marj Sistemi)")
         logger.info(f"   👷 Worker: Her {worker_interval} saniyede")
         logger.info("   📸 Snapshot: Her gece 00:00:05")
+        logger.info("   💰 Dinamik Marj: Her gece 00:01 (Gemini) 🔥")
         logger.info("   👮 Şef: Her 10 dakikada")
         logger.info("   📊 Rapor: Her gün 09:00")
         logger.info("   🔔 Push: Her gün 14:00 (Bayram/Haber)")
         logger.info("   🧹 Cleanup: Her gün 03:00")
         logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
-        logger.info("   🌅 Sabah Vardiyası: Her gece 00:00")
+        logger.info("   🌅 Sabah Vardiyası: Her gece 00:03 (CPU spike önleme) 🔥")
         logger.info("   🌆 Akşam Vardiyası: Her gün 12:00")
         logger.info("   🚨 Error Listener: AKTİF")
         logger.info("   🛡️ Overlap Protection: AKTİF")
