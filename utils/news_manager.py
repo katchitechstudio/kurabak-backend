@@ -1,6 +1,6 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V3.8 ULTIMATE 📰🚀
-=============================================
+News Manager - GÜNLÜK HABER SİSTEMİ V3.9 ULTIMATE + DYNAMIC MARGINS 📰🚀💰
+==========================================================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
 ✅ GELİŞMİŞ DEDUP: Benzerlik + Vardiyalar arası
@@ -12,6 +12,7 @@ News Manager - GÜNLÜK HABER SİSTEMİ V3.8 ULTIMATE 📰🚀
 ✅ ÇİFT KAYNAK: GNews + NewsData (V3.8)
 ✅ 3 GÜN GERİYE + 48 SAAT FİLTRE: Optimal zaman aralığı (V3.8)
 ✅ VARDİYALAR ARASI DEDUP: Aynı haber 2. kez gösterilmez (V3.8)
+✅ 🔥 DİNAMİK YARIM MARJ: Günde 1 kere Harem'den otomatik marj hesaplama (V3.9 - YENİ!)
 """
 
 import os
@@ -23,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import google.generativeai as genai
 from difflib import SequenceMatcher
+from bs4 import BeautifulSoup
 
 from utils.cache import get_cache, set_cache
 from config import Config
@@ -316,8 +318,8 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 🔥 YENİ MODEL: gemini-3-flash-preview
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        # 🔥 YENİ MODEL: gemini-2.0-flash-exp
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
@@ -491,6 +493,198 @@ BAŞKA AÇIKLAMA YAPMA!
         return [], None
 
 
+# ======================================
+# 🔥 DİNAMİK YARIM MARJ SİSTEMİ (YENİ!)
+# ======================================
+
+def fetch_harem_html() -> Optional[str]:
+    """
+    Harem sayfasının HTML'ini çeker
+    🔥 V3.9: BeautifulSoup ile table parse
+    """
+    try:
+        url = Config.HAREM_PRICE_URL
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        logger.info(f"🕷️ [HAREM HTML] Çekiliyor: {url}")
+        response = requests.get(url, headers=headers, timeout=Config.HAREM_FETCH_TIMEOUT)
+        response.raise_for_status()
+        
+        # BeautifulSoup ile parse et
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Tablo kısmını bul
+        table = soup.find('table')
+        if not table:
+            # Alternatif: div class'ları
+            table = soup.find_all('div', class_='data')
+        
+        if table:
+            # İlk 5000 karakter (token tasarrufu)
+            html_text = str(table)[:5000]
+            logger.info(f"✅ [HAREM HTML] {len(html_text)} karakter alındı")
+            return html_text
+        else:
+            logger.error("❌ [HAREM HTML] Tablo bulunamadı!")
+            return None
+        
+    except Exception as e:
+        logger.error(f"❌ [HAREM HTML] Hata: {e}")
+        return None
+
+
+def calculate_half_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
+    """
+    Gemini'ye HTML verisini göndererek YARIM MARJLARI hesaplat
+    🔥 V3.9: Veri besleme + Yarım marj + Gümüş özel
+    """
+    try:
+        if not GEMINI_API_KEY:
+            logger.warning("⚠️ GEMINI_API_KEY bulunamadı!")
+            return None
+        
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        prompt = f"""
+SEN BİR FİNANS ANALİSTİSİN.
+
+Aşağıda Harem Altın'ın SATIŞ fiyatlarını içeren HTML tablosu var.
+
+HAM VERİ (HTML):
+{html_data}
+
+API'den gelen HAM fiyatlar:
+- Gram Altın: {api_prices.get('GRA', 0)} ₺
+- Çeyrek Altın: {api_prices.get('CEYREKALTIN', 0)} ₺
+- Yarım Altın: {api_prices.get('YARIMALTIN', 0)} ₺
+- Tam Altın: {api_prices.get('TAMALTIN', 0)} ₺
+- Gram Gümüş: {api_prices.get('GUMUS', 0)} ₺
+
+GÖREV:
+1. HTML tablosundan Harem SATIŞ fiyatlarını bul
+2. Her ürün için MARJ oranını hesapla: (Harem - API) / API × 100
+3. HESAPLANAN MARJIN YARISINI AL
+
+ÖZEL KURAL - GÜMÜŞ:
+- Gümüş için marjın %75'ini kullan (%100 yerine %75)
+- Örnek: Gerçek marj %20 ise → %15 kullan
+
+ÇIKTI FORMATI (sadece bu):
+MARJ_GRA: 2.6
+MARJ_C22: 0.1
+MARJ_YAR: 0.05
+MARJ_TAM: 0.0
+MARJ_AG: 15.0
+
+HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
+"""
+        
+        logger.info("🤖 [GEMİNİ MARJ] Hesaplama başlıyor...")
+        
+        response = model.generate_content(prompt)
+        result = response.text.strip()
+        
+        if not result or len(result) < 10:
+            logger.error("❌ [GEMİNİ MARJ] Boş yanıt döndü!")
+            return None
+        
+        # Parse et
+        margins = {}
+        for line in result.split('\n'):
+            if 'MARJ_' in line:
+                parts = line.split(':')
+                if len(parts) == 2:
+                    key = parts[0].replace('MARJ_', '').strip()
+                    try:
+                        value = float(parts[1].strip()) / 100  # %2.6 → 0.026
+                        margins[key] = value
+                    except ValueError:
+                        logger.warning(f"⚠️ [MARJ PARSE] Geçersiz değer: {line}")
+                        continue
+        
+        if not margins:
+            logger.error("❌ [GEMİNİ MARJ] Parse edilemedi!")
+            return None
+        
+        logger.info(f"✅ [GEMİNİ MARJ] {len(margins)} marj hesaplandı: {margins}")
+        return margins
+        
+    except Exception as e:
+        logger.error(f"❌ [GEMİNİ MARJ] Hata: {e}")
+        return None
+
+
+def update_dynamic_margins() -> bool:
+    """
+    Dinamik marjları güncelle (Sabah vardiyası ile birlikte çalışır)
+    🔥 V3.9: HTML çek → API al → Gemini hesapla → Redis kaydet
+    """
+    try:
+        logger.info("💰 [DİNAMİK MARJ] Güncelleme başlıyor...")
+        
+        # 1. HTML'i çek
+        html_data = fetch_harem_html()
+        
+        if not html_data:
+            logger.warning("⚠️ [DİNAMİK MARJ] HTML çekilemedi, eski marjlar kullanılacak")
+            return False
+        
+        # 2. API fiyatlarını al (financial_service'den import edebilirsin ama circular import önlemek için burada basit çağrı)
+        try:
+            from services.financial_service import fetch_from_v5
+            api_data = fetch_from_v5()
+            
+            if not api_data or 'Rates' not in api_data:
+                logger.error("❌ [DİNAMİK MARJ] API verisi alınamadı!")
+                return False
+            
+            api_prices = {
+                'GRA': api_data['Rates'].get('GRA', {}).get('Selling', 0),
+                'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Selling', 0),
+                'YARIMALTIN': api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
+                'TAMALTIN': api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
+                'GUMUS': api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
+            }
+            
+            logger.info(f"✅ [DİNAMİK MARJ] API fiyatları: GRA={api_prices['GRA']}, AG={api_prices['GUMUS']}")
+            
+        except Exception as api_error:
+            logger.error(f"❌ [DİNAMİK MARJ] API çağrısı başarısız: {api_error}")
+            return False
+        
+        # 3. Gemini ile marjları hesapla
+        margins = calculate_half_margins_with_gemini(html_data, api_prices)
+        
+        if not margins:
+            logger.warning("⚠️ [DİNAMİK MARJ] Gemini hesaplayamadı, eski marjlar kullanılacak")
+            return False
+        
+        # 4. Redis'e kaydet (24 saat TTL)
+        margin_key = Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins')
+        set_cache(margin_key, margins, ttl=86400)  # 24 saat
+        
+        # 5. Son güncelleme zamanını kaydet
+        update_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
+        set_cache(update_key, {
+            'timestamp': time.time(),
+            'margins': margins
+        }, ttl=86400)
+        
+        logger.info(f"✅ [DİNAMİK MARJ] Kaydedildi: {margins}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ [DİNAMİK MARJ] Beklenmeyen hata: {e}")
+        return False
+
+
+# ======================================
+# 📅 VARDİYA PLANLAMA
+# ======================================
+
 def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) -> List[Dict]:
     """Haberleri saatlere eşit dağıt"""
     if not news_list:
@@ -621,7 +815,7 @@ def bootstrap_news_system() -> bool:
 def prepare_morning_shift() -> bool:
     """
     SABAH VARDİYASI (00:00 - 12:00)
-    🔥 V3.8: Vardiyalar arası dedup eklendi
+    🔥 V3.9: Vardiyalar arası dedup + DİNAMİK MARJ GÜNCELLEME (YENİ!)
     """
     try:
         logger.info("🌅 [SABAH VARDİYASI] Hazırlık başlıyor...")
@@ -670,13 +864,22 @@ def prepare_morning_shift() -> bool:
         # 7. 🔥 Gösterilen haberleri geçmişe kaydet
         save_shown_news(summaries)
         
-        # 8. Son güncelleme kaydı
+        # 8. 🔥 YENİ: DİNAMİK MARJ GÜNCELLEME
+        logger.info("💰 [SABAH VARDİYASI] Dinamik marj güncelleme başlıyor...")
+        margin_success = update_dynamic_margins()
+        if margin_success:
+            logger.info("✅ [SABAH VARDİYASI] Dinamik marjlar güncellendi!")
+        else:
+            logger.warning("⚠️ [SABAH VARDİYASI] Dinamik marj güncellenemedi, fallback marjlar kullanılacak")
+        
+        # 9. Son güncelleme kaydı
         update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
         set_cache(update_key, {
             'shift': 'morning',
             'timestamp': time.time(),
             'news_count': len(schedule),
-            'bayram': bayram_msg if bayram_msg else 'yok'
+            'bayram': bayram_msg if bayram_msg else 'yok',
+            'margin_updated': margin_success  # YENİ
         }, ttl=86400)
         
         logger.info(f"✅ [SABAH VARDİYASI] {len(schedule)} kritik haber hazır!")
@@ -690,7 +893,7 @@ def prepare_morning_shift() -> bool:
 def prepare_evening_shift() -> bool:
     """
     AKŞAM VARDİYASI (12:00 - 00:00)
-    🔥 V3.8: Vardiyalar arası dedup eklendi
+    🔥 V3.9: Vardiyalar arası dedup eklendi (Marj güncellemesi YOK)
     """
     try:
         logger.info("🌆 [AKŞAM VARDİYASI] Hazırlık başlıyor...")
@@ -806,7 +1009,7 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.8 ULTIMATE - Test\n")
+    print("🧪 News Manager V3.9 ULTIMATE + DYNAMIC MARGINS - Test\n")
     
     print("1️⃣ HABER TOPLAMA (GNews 3 gün + NewsData):")
     news_list = fetch_all_news()
@@ -839,14 +1042,15 @@ def test_news_manager():
             print("   ℹ️ Bugün kritik haber yok")
         print()
     
-    if summaries:
-        print("4️⃣ PLANLAMA:")
-        schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
-        print(f"   ✅ {len(schedule)} slot\n")
-        
-        for slot in schedule[:3]:
-            print(f"   {slot['start']}-{slot['end']}: {slot['text']}")
-        print()
+    print("4️⃣ DİNAMİK MARJ GÜNCELLEME:")
+    margin_success = update_dynamic_margins()
+    if margin_success:
+        print(f"   ✅ Marjlar güncellendi!\n")
+        margin_data = get_cache('dynamic:half_margins')
+        if margin_data:
+            print(f"   Marjlar: {margin_data}\n")
+    else:
+        print(f"   ⚠️ Marjlar güncellenemedi\n")
     
     print("5️⃣ BOOTSTRAP:")
     bootstrap_success = bootstrap_news_system()
