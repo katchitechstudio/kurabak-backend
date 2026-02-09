@@ -1,5 +1,5 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V3.9 ULTIMATE + DYNAMIC MARGINS 📰🚀💰
+News Manager - GÜNLÜK HABER SİSTEMİ V3.9.1 ULTIMATE + DYNAMIC MARGINS 📰🚀💰
 ==========================================================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
@@ -13,6 +13,8 @@ News Manager - GÜNLÜK HABER SİSTEMİ V3.9 ULTIMATE + DYNAMIC MARGINS 📰🚀
 ✅ 3 GÜN GERİYE + 48 SAAT FİLTRE: Optimal zaman aralığı (V3.8)
 ✅ VARDİYALAR ARASI DEDUP: Aynı haber 2. kez gösterilmez (V3.8)
 ✅ 🔥 DİNAMİK YARIM MARJ: Günde 1 kere Harem'den otomatik marj hesaplama (V3.9)
+✅ 🐛 BOOTSTRAP BOŞ LİSTE FIX: [] kontrolü düzeltildi (V3.9.1)
+✅ 🔥 MARJ BAĞIMSIZLIĞI: Dinamik marj haberlerden bağımsız güncelleniyor (V3.9.1)
 """
 
 import os
@@ -753,6 +755,7 @@ def bootstrap_news_system() -> bool:
     """
     İlk çalıştırma bootstrap
     🔒 RACE CONDITION FIX: Lock mekanizması ile aynı anda sadece 1 bootstrap
+    🐛 V3.9.1 FIX: Boş liste kontrolü düzeltildi (if existing_data: → if existing_data is not None:)
     """
     try:
         current_hour = datetime.now().hour
@@ -775,10 +778,10 @@ def bootstrap_news_system() -> bool:
                 logger.info(f"ℹ️ [BOOTSTRAP] {shift_name} vardiyası zaten hazırlanıyor (başka thread), atlanıyor...")
                 return False
             
-            # Cache'de veri var mı?
+            # 🐛 V3.9.1 FIX: Cache'de veri var mı? (BOŞ LİSTE FIX!)
             existing_data = get_cache(cache_key)
-            if existing_data:
-                logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır")
+            if existing_data is not None:  # ✅ DÜZELTME: [] (boş liste) için de True döner
+                logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır (veri: {len(existing_data) if isinstance(existing_data, list) else 'dict'})")
                 return False
             
             # Bootstrap başlıyor, flag set et
@@ -818,10 +821,20 @@ def prepare_morning_shift() -> bool:
     """
     SABAH VARDİYASI (00:00 - 12:00)
     🔥 V3.9: Vardiyalar arası dedup + DİNAMİK MARJ GÜNCELLEME
+    🔥 V3.9.1: Dinamik marj güncelleme haberlerden BAĞIMSIZ çalışıyor
     """
     try:
         logger.info("🌅 [SABAH VARDİYASI] Hazırlık başlıyor...")
         
+        # 🔥 V3.9.1 FIX: ÖNCE DİNAMİK MARJ GÜNCELLE (haberlerden bağımsız!)
+        logger.info("💰 [SABAH VARDİYASI] Dinamik marj güncelleme başlıyor...")
+        margin_success = update_dynamic_margins()
+        if margin_success:
+            logger.info("✅ [SABAH VARDİYASI] Dinamik marjlar güncellendi!")
+        else:
+            logger.warning("⚠️ [SABAH VARDİYASI] Dinamik marj güncellenemedi, fallback marjlar kullanılacak")
+        
+        # SONRA HABERLERİ HAZIRLA
         # 1. Haberleri topla
         news_list = fetch_all_news()
         
@@ -829,6 +842,17 @@ def prepare_morning_shift() -> bool:
             logger.warning("⚠️ [SABAH VARDİYASI] Haber bulunamadı!")
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             set_cache(cache_key, [], ttl=43200)
+            
+            # 🔥 Son güncelleme kaydı (haber yok ama marj güncellendi)
+            update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
+            set_cache(update_key, {
+                'shift': 'morning',
+                'timestamp': time.time(),
+                'news_count': 0,
+                'bayram': 'yok',
+                'margin_updated': margin_success
+            }, ttl=86400)
+            
             return True
         
         # 2. 🔥 Vardiyalar arası dedup - Daha önce gösterilenleri filtrele
@@ -838,6 +862,17 @@ def prepare_morning_shift() -> bool:
             logger.warning("⚠️ [SABAH VARDİYASI] Tüm haberler daha önce gösterilmiş!")
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             set_cache(cache_key, [], ttl=43200)
+            
+            # 🔥 Son güncelleme kaydı (haber yok ama marj güncellendi)
+            update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
+            set_cache(update_key, {
+                'shift': 'morning',
+                'timestamp': time.time(),
+                'news_count': 0,
+                'bayram': 'yok',
+                'margin_updated': margin_success
+            }, ttl=86400)
+            
             return True
         
         # 3. Gemini filtrele
@@ -847,6 +882,24 @@ def prepare_morning_shift() -> bool:
             logger.warning("⚠️ [SABAH VARDİYASI] Kritik haber yok")
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             set_cache(cache_key, [], ttl=43200)
+            
+            # 🔥 Bayram kaydet (varsa)
+            if bayram_msg:
+                bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
+                bayram_ttl = calculate_bayram_ttl()
+                set_cache(bayram_key, bayram_msg, ttl=bayram_ttl)
+                logger.info(f"🏦 [SABAH VARDİYASI] Bayram kaydedildi: {bayram_msg}")
+            
+            # 🔥 Son güncelleme kaydı (haber yok ama marj güncellendi)
+            update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
+            set_cache(update_key, {
+                'shift': 'morning',
+                'timestamp': time.time(),
+                'news_count': 0,
+                'bayram': bayram_msg if bayram_msg else 'yok',
+                'margin_updated': margin_success
+            }, ttl=86400)
+            
             return True
         
         # 4. Bayram kaydet
@@ -866,15 +919,7 @@ def prepare_morning_shift() -> bool:
         # 7. 🔥 Gösterilen haberleri geçmişe kaydet
         save_shown_news(summaries)
         
-        # 8. 🔥 DİNAMİK MARJ GÜNCELLEME
-        logger.info("💰 [SABAH VARDİYASI] Dinamik marj güncelleme başlıyor...")
-        margin_success = update_dynamic_margins()
-        if margin_success:
-            logger.info("✅ [SABAH VARDİYASI] Dinamik marjlar güncellendi!")
-        else:
-            logger.warning("⚠️ [SABAH VARDİYASI] Dinamik marj güncellenemedi, fallback marjlar kullanılacak")
-        
-        # 9. Son güncelleme kaydı
+        # 8. Son güncelleme kaydı
         update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
         set_cache(update_key, {
             'shift': 'morning',
@@ -1011,7 +1056,7 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.9 ULTIMATE + DYNAMIC MARGINS - GEMINI 3 FLASH - Test\n")
+    print("🧪 News Manager V3.9.1 ULTIMATE + DYNAMIC MARGINS - GEMINI 3 FLASH - Test\n")
     
     print("1️⃣ HABER TOPLAMA (GNews 3 gün + NewsData):")
     news_list = fetch_all_news()
