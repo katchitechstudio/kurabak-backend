@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V5.4 🚀💰🔥
+Financial Service - PRODUCTION READY V5.4.1 🚀💰🔥
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -15,7 +15,8 @@ Financial Service - PRODUCTION READY V5.4 🚀💰🔥
 ✅ 💰 MARKET MARGIN SYSTEM: Dual price streams (Raw + Jeweler)
 ✅ 🔥 JEWELER CACHE FIX: Jeweler verileri düzgün kaydediliyor
 ✅ 🕐 V5.3: Piyasa saatleri düzeltildi (Cuma 18:00 + Pazar 00:00)
-✅ 🔥 DİNAMİK YARIM MARJ: Redis'ten dinamik marj kullanımı (V5.4 - YENİ!)
+✅ 🔥 DİNAMİK YARIM MARJ: Redis'ten dinamik marj kullanımı (V5.4)
+✅ 🔇 LOG SPAM FIX: Dinamik marj fallback log spam önlendi (V5.4.1)
 """
 
 import requests
@@ -393,12 +394,12 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     }
 
 # ======================================
-# 💰 MARKET MARGIN SYSTEM V2 - DİNAMİK MARJ (YENİ!)
+# 💰 MARKET MARGIN SYSTEM V2 - DİNAMİK MARJ
 # ======================================
 
 def get_dynamic_margins() -> Dict[str, float]:
     """
-    🔥 V5.4: Redis'ten dinamik marjları al, yoksa config'den fallback
+    🔥 V5.4.1: Redis'ten dinamik marjları al, yoksa config'den fallback
     
     Returns:
         Dict: {"GRA": 0.026, "C22": 0.001, ...}
@@ -411,7 +412,8 @@ def get_dynamic_margins() -> Dict[str, float]:
         return dynamic_margins
     
     # 2. Fallback: Config'den al
-    logger.warning("⚠️ [DİNAMİK MARJ] Redis'te yok, Config fallback kullanılıyor")
+    # 🔇 V5.4.1 FIX: Log spam önleme - warning → debug
+    logger.debug("💡 [DİNAMİK MARJ] Redis'te yok, Config fallback kullanılıyor")
     return Config.PRICE_PROFILES.get("jeweler", {})
 
 
@@ -770,7 +772,7 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 
 def update_financial_data():
     """
-    🔥 V5.4: İKİ PRICE STREAM (Raw + Jeweler) + DİNAMİK MARJ + Piyasa Saatleri Fix
+    🔥 V5.4.1: İKİ PRICE STREAM (Raw + Jeweler) + DİNAMİK MARJ + Log Spam Fix
     
     Her 1 dakikada bir çalışır.
     V5 API (Tek Kaynak + Circuit Breaker) → Backup
