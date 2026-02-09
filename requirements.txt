@@ -60,6 +60,12 @@ holidays==0.36
 firebase-admin==6.3.0
 
 # ======================================
-# 🤖 GOOGLE GEMINI AI 2.0 (Smart Banner + News)
+# 🤖 GOOGLE GEMINI AI 2.0 (Smart Banner + News + Dynamic Margins)
 # ======================================
 google-generativeai==0.8.3
+
+# ======================================
+# 🕷️ WEB SCRAPING (HTML Parsing for Harem Prices)
+# ======================================
+beautifulsoup4==4.12.2
+lxml==4.9.3
