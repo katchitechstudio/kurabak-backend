@@ -1,9 +1,9 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V5.0 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V5.1 🤖
 =======================================================
 ✅ CIRCUIT BREAKER SPAM FIX: 15 dakika sürekli hata → TEK uyarı
 ✅ TEST SİSTEMİ: /test, /test mobil, /test detay
-✅ STRES TESTİ: /test stres light|medium|hard (YENİ!)
+✅ STRES TESTİ: /test stres light|medium|hard
 ✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ SELF-HEALING: Otomatik CPU/RAM izleme ve müdahale
 ✅ TÜRKÇE KARAKTER FIX: 'ı', 'ş', 'ğ', 'ü', 'ö', 'ç' otomatik düzeltme
@@ -16,6 +16,8 @@ Telegram Monitor - ŞEF KOMUTA MERKEZİ V5.0 🤖
 ✅ GÜVENLİ CACHE TEMİZLİĞİ: Redis bağlantısı korunur (V4.5)
 ✅ SADELEŞTİRİLMİŞ KOMUTLAR: Duyuru ve rapor komutları optimize edildi
 ✅ 🔥 GELİŞMİŞ /online KOMUTU: Detaylı kullanıcı analizi (V5.1)
+✅ 🔥 RAM THRESHOLD ARTTIRILDI: %85 → %95 (LOG SPAM FİX - V5.1)
+✅ 🔥 CPU THRESHOLD ARTTIRILDI: %70 → %80 (LOG SPAM FİX - V5.1)
 """
 
 import os
@@ -33,7 +35,7 @@ ALLOWED_ADMIN_IDS = [7101853980]
 
 class TelegramMonitor:
     """
-    Gelişmiş Telegram Bot V5.0:
+    Gelişmiş Telegram Bot V5.1:
     1. RAPOR MODU: Sessiz bildirimler, zengin günlük raporlar
     2. KOMUT MODU: Komutları dinler ve cevaplar
     3. TEST SİSTEMİ: Otomatik sistem sağlık kontrolü + STRES TESTI
@@ -43,6 +45,7 @@ class TelegramMonitor:
     7. ZENGİN RAPORLAMA: CPU, RAM, Disk, Circuit Breaker, özel olaylar
     8. 🔐 GÜVENLİ CACHE: Redis bağlantısını koruyarak temizlik
     9. 🛡️ AKILLI CIRCUIT BREAKER: 15 dakika sürekli hata → TEK uyarı
+    10. 🔥 LOG SPAM FİX: RAM %95, CPU %80 threshold (V5.1)
     """
     
     def __init__(self, bot_token: str, chat_id: str):
@@ -51,7 +54,7 @@ class TelegramMonitor:
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         self._lock = threading.Lock()
         
-        # 🛡️ CIRCUIT BREAKER SPAM PROTECTION (YENİ!)
+        # 🛡️ CIRCUIT BREAKER SPAM PROTECTION
         self.circuit_error_start_time = None  # İlk hatanın zamanı
         self.circuit_recovery_notified = False  # Kurtarma bildirimi gönderildi mi?
         self.circuit_down_notified = False  # Çökme bildirimi gönderildi mi?
@@ -197,7 +200,7 @@ class TelegramMonitor:
 
     def send_daily_report(self, metrics: Dict[str, Any]):
         """
-        🌙 GÜN SONU ZENGİN RAPORU V5.0
+        🌙 GÜN SONU ZENGİN RAPORU V5.1
         
         YENİ ÖZELLİKLER:
         - CPU, RAM, Disk kullanımı
@@ -224,8 +227,8 @@ class TelegramMonitor:
             ram = psutil.virtual_memory().percent
             disk = psutil.disk_usage('/').percent
             
-            cpu_icon = "🟢" if cpu < 70 else "🟡" if cpu < 85 else "🔴"
-            ram_icon = "🟢" if ram < 75 else "🟡" if ram < 90 else "🔴"
+            cpu_icon = "🟢" if cpu < 80 else "🟡" if cpu < 90 else "🔴"
+            ram_icon = "🟢" if ram < 80 else "🟡" if ram < 95 else "🔴"
             disk_icon = "🟢" if disk < 80 else "🟡" if disk < 90 else "🔴"
             
             # Aktif Kullanıcılar
@@ -313,7 +316,7 @@ class TelegramMonitor:
                     report_lines.append(f"• {event}")
             
             # Footer
-            report_lines.append(f"\n_KuraBak Backend v5.0 • {now.strftime('%H:%M')}_")
+            report_lines.append(f"\n_KuraBak Backend v5.1 • {now.strftime('%H:%M')}_")
             
             report = "\n".join(report_lines)
             
@@ -562,7 +565,7 @@ class TelegramMonitor:
             self._send_raw(f"❌ Test hatası: {str(e)}")
 
     def _handle_stress_test(self, level: str):
-        """💪 STRES TESTİ (YENİ!)"""
+        """💪 STRES TESTİ"""
         self._send_raw(
             f"💪 *STRES TESTİ BAŞLATILIYOR*\n\n"
             f"Seviye: `{level}`\n"
@@ -613,8 +616,8 @@ class TelegramMonitor:
             cpu = psutil.cpu_percent(interval=1)
             ram = psutil.virtual_memory().percent
             
-            cpu_status = "✅" if cpu < 70 else "⚠️" if cpu < 85 else "❌"
-            ram_status = "✅" if ram < 75 else "⚠️" if ram < 90 else "❌"
+            cpu_status = "✅" if cpu < 80 else "⚠️" if cpu < 90 else "❌"
+            ram_status = "✅" if ram < 80 else "⚠️" if ram < 95 else "❌"
             
             results.append(f"{cpu_status} CPU: %{cpu:.1f}")
             results.append(f"{ram_status} RAM: %{ram:.1f}")
@@ -801,8 +804,8 @@ class TelegramMonitor:
             cpu = psutil.cpu_percent(interval=1)
             ram = psutil.virtual_memory().percent
             
-            cpu_status = "✅" if cpu < 70 else "⚠️" if cpu < 85 else "❌"
-            ram_status = "✅" if ram < 75 else "⚠️" if ram < 90 else "❌"
+            cpu_status = "✅" if cpu < 80 else "⚠️" if cpu < 90 else "❌"
+            ram_status = "✅" if ram < 80 else "⚠️" if ram < 95 else "❌"
             
             results.append(f"  {cpu_status} CPU: %{cpu:.1f}")
             results.append(f"  {ram_status} RAM: %{ram:.1f}")
@@ -887,7 +890,7 @@ class TelegramMonitor:
                 
                 f"🔒 *GÜVENLİK*\n"
                 f"• Admin Filter: `Aktif`\n"
-                f"• Güvenli Cache: `V5.0`\n\n"
+                f"• Güvenli Cache: `V5.1`\n\n"
                 
                 f"_Rapor Zamanı: {datetime.now().strftime('%H:%M:%S')}_"
             )
@@ -993,7 +996,7 @@ class TelegramMonitor:
 
     def _handle_temizle(self):
         """
-        🔥 GÜVENLİ Cache Temizliği (V5.0)
+        🔥 GÜVENLİ Cache Temizliği (V5.1)
         
         ÖNCEKİ SORUN: flush_all_cache() Redis connection'ı koparıyordu
         YENİ ÇÖZÜM: Sadece KuraBak key'lerini sil, connection'ı koru
@@ -1109,12 +1112,12 @@ class TelegramMonitor:
                 "🤖 *Self-Healing:* Aktif\n"
                 "⏱️ *Kontrol Sıklığı:* 1 dakika\n"
                 "🎯 *CPU Eşik:* %80\n"
-                "💾 *RAM Eşik:* %85\n"
+                "💾 *RAM Eşik:* %95\n"
                 "🗓️ *Takvim:* Her gün 08:00\n"
                 "🛡️ *Circuit Breaker:* 3 hata = 60s\n"
                 "🔔 *Push Notification:* Her gün 12:00\n"
                 "🧹 *Cleanup:* Her gün 03:00\n"
-                "🔐 *Güvenli Cache:* V5.0\n\n"
+                "🔐 *Güvenli Cache:* V5.1\n\n"
                 "_Sistem otomatik olarak yüksek yük durumlarını tespit edip düzeltiyor._"
             )
             
@@ -1188,7 +1191,11 @@ class TelegramMonitor:
         logger.info("🤖 Self-Healing sistemi başlatıldı!")
 
     def _self_healing_loop(self):
-        """Arka planda sürekli CPU/RAM kontrol eder ve müdahale eder"""
+        """
+        🔥 V5.1: RAM THRESHOLD %95, CPU THRESHOLD %80
+        
+        Arka planda sürekli CPU/RAM kontrol eder ve müdahale eder
+        """
         from config import Config
         from utils.cache import get_cache, set_cache
         
@@ -1202,6 +1209,7 @@ class TelegramMonitor:
                 ram = psutil.virtual_memory().percent
                 now = time.time()
                 
+                # 🔥 CPU THRESHOLD: %80 (eski: %70)
                 if cpu > Config.CPU_THRESHOLD:
                     if cpu_high_since is None:
                         cpu_high_since = now
@@ -1225,11 +1233,12 @@ class TelegramMonitor:
                         logger.info(f"✅ CPU normale döndü: %{cpu:.1f}")
                         cpu_high_since = None
                 
+                # 🔥 RAM THRESHOLD: %95 (eski: %85) - LOG SPAM FİX!
                 if ram > Config.RAM_THRESHOLD:
-                    logger.warning(f"💾 RAM yüksek ({ram}%), otomatik temizlik yapılıyor...")
+                    logger.warning(f"💾 RAM KRİTİK ({ram}%), otomatik temizlik yapılıyor...")
                     
                     try:
-                        # 🔥 V5.0: Güvenli temizlik yap
+                        # 🔥 V5.1: Güvenli temizlik yap
                         from utils.cache import get_redis_client
                         
                         redis_client = get_redis_client()
