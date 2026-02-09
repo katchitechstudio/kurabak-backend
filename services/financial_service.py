@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V5.3 🚀💰
+Financial Service - PRODUCTION READY V5.4 🚀💰🔥
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -15,6 +15,7 @@ Financial Service - PRODUCTION READY V5.3 🚀💰
 ✅ 💰 MARKET MARGIN SYSTEM: Dual price streams (Raw + Jeweler)
 ✅ 🔥 JEWELER CACHE FIX: Jeweler verileri düzgün kaydediliyor
 ✅ 🕐 V5.3: Piyasa saatleri düzeltildi (Cuma 18:00 + Pazar 00:00)
+✅ 🔥 DİNAMİK YARIM MARJ: Redis'ten dinamik marj kullanımı (V5.4 - YENİ!)
 """
 
 import requests
@@ -392,12 +393,32 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     }
 
 # ======================================
-# 💰 MARKET MARGIN SYSTEM - YARDIMCI FONKSİYONLAR (YENİ!)
+# 💰 MARKET MARGIN SYSTEM V2 - DİNAMİK MARJ (YENİ!)
 # ======================================
+
+def get_dynamic_margins() -> Dict[str, float]:
+    """
+    🔥 V5.4: Redis'ten dinamik marjları al, yoksa config'den fallback
+    
+    Returns:
+        Dict: {"GRA": 0.026, "C22": 0.001, ...}
+    """
+    # 1. Redis'ten dinamik marjları dene
+    dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins'))
+    
+    if dynamic_margins and isinstance(dynamic_margins, dict):
+        logger.debug(f"✅ [DİNAMİK MARJ] Redis'ten alındı: {len(dynamic_margins)} marj")
+        return dynamic_margins
+    
+    # 2. Fallback: Config'den al
+    logger.warning("⚠️ [DİNAMİK MARJ] Redis'te yok, Config fallback kullanılıyor")
+    return Config.PRICE_PROFILES.get("jeweler", {})
+
 
 def apply_margins(raw_data: dict, profile: str = "jeweler") -> dict:
     """
     Ham fiyatlara marj ekleyerek kuyumcu fiyatı oluşturur
+    🔥 V5.4: Dinamik marj desteği eklendi
     
     Args:
         raw_data: Ham veri (currencies/golds/silvers)
@@ -405,11 +426,6 @@ def apply_margins(raw_data: dict, profile: str = "jeweler") -> dict:
     
     Returns:
         Marjlı veri (aynı format)
-    
-    Örnek:
-        raw = {"data": [{"code": "GRA", "selling": 6943.53, ...}]}
-        jeweler = apply_margins(raw, "jeweler")
-        # jeweler = {"data": [{"code": "GRA", "selling": 7443.66, ...}]}
     """
     if profile == "raw":
         # Ham profilde marj yok, direkt döndür
@@ -420,7 +436,8 @@ def apply_margins(raw_data: dict, profile: str = "jeweler") -> dict:
         logger.warning(f"⚠️ [MARGIN] Bilinmeyen profil: {profile}, raw döndürülüyor")
         return raw_data
     
-    margin_map = Config.PRICE_PROFILES[profile]
+    # 🔥 DİNAMİK MARJ: Redis'ten al (fallback: config)
+    margin_map = get_dynamic_margins()
     
     # Deep copy (orijinal veriyi değiştirmemek için)
     margined_data = copy.deepcopy(raw_data)
@@ -467,13 +484,6 @@ def get_cache_key_for_profile(base_key: str, profile: str) -> str:
     
     Returns:
         Redis cache key
-    
-    Örnek:
-        get_cache_key_for_profile("currencies_all", "raw")
-        # -> "kurabak:currencies:raw"
-        
-        get_cache_key_for_profile("currencies_all", "jeweler")
-        # -> "kurabak:currencies:jeweler"
     """
     if profile == "raw":
         return Config.CACHE_KEYS[base_key]
@@ -599,13 +609,13 @@ def determine_banner_message() -> Optional[str]:
 
 def take_snapshot():
     """
-    🔥 V5.2: İKİ AYRI SNAPSHOT (Raw + Jeweler)
+    🔥 V5.4: İKİ AYRI SNAPSHOT (Raw + Jeweler) + DİNAMİK MARJ
     
     Gece 00:00 snapshot + Telegram rapor
     
     YENİ MANTIK:
     - Raw snapshot: Ham fiyatlar (API'den gelen)
-    - Jeweler snapshot: Kuyumcu fiyatları (marj eklenmiş)
+    - Jeweler snapshot: Kuyumcu fiyatları (DİNAMİK marj eklenmiş)
     - Her ikisi de ayrı ayrı kaydedilir
     - Yüzdelik hesapları kendi snapshot'larına göre yapılır
     """
@@ -640,9 +650,9 @@ def take_snapshot():
                 if code and selling > 0:
                     snapshot_raw[code] = selling
         
-        # 3️⃣ JEWELER SNAPSHOT OLUŞTUR (marj ekle)
+        # 3️⃣ JEWELER SNAPSHOT OLUŞTUR (DİNAMİK marj ekle)
         snapshot_jeweler = {}
-        margin_map = Config.PRICE_PROFILES.get("jeweler", {})
+        margin_map = get_dynamic_margins()  # 🔥 DİNAMİK MARJ
         
         for code, raw_price in snapshot_raw.items():
             margin = margin_map.get(code, Config.DEFAULT_MARKET_MARGIN)
@@ -720,7 +730,8 @@ def take_snapshot():
                         f"Patron, yarına kadar değişimler bu fiyatlara göre hesaplanacak:\n\n"
                         + "\n".join(report_lines) +
                         f"\n\n📦 *Toplam:* {len(snapshot_raw)} varlık kilitlendi.\n"
-                        f"✅ İki profil de (Raw + Kuyumcu) hazır."
+                        f"✅ İki profil de (Raw + Kuyumcu) hazır.\n"
+                        f"🔥 Dinamik marjlar kullanıldı."
                     )
                     telegram_instance._send_raw(msg)
             except Exception as tg_err:
@@ -754,21 +765,21 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
     return False, "OPEN", None
 
 # ======================================
-# WORKER (ANA FONKSİYON - DUAL STREAMS)
+# WORKER (ANA FONKSİYON - DUAL STREAMS + DİNAMİK MARJ)
 # ======================================
 
 def update_financial_data():
     """
-    🔥 V5.3: İKİ PRICE STREAM (Raw + Jeweler) + Piyasa Saatleri Fix
+    🔥 V5.4: İKİ PRICE STREAM (Raw + Jeweler) + DİNAMİK MARJ + Piyasa Saatleri Fix
     
     Her 1 dakikada bir çalışır.
     V5 API (Tek Kaynak + Circuit Breaker) → Backup
     
-    YENİ MANTIK (V5.3):
+    YENİ MANTIK (V5.4):
     - Cuma 18:00 kapanış (Config.MARKET_CLOSE_FRIDAY_HOUR)
     - Pazar 00:00 açılış (Config.WEEKEND_REOPEN_HOUR)
     - Raw veriler: API'den gelen ham fiyat
-    - Jeweler veriler: Raw'a marj eklenmiş kuyumcu fiyatı
+    - Jeweler veriler: Raw'a DİNAMİK marj eklenmiş kuyumcu fiyatı
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -967,14 +978,14 @@ def update_financial_data():
         
         logger.info(f"✅ RAW veriler kaydedildi: {len(currencies_raw)} döviz, {len(golds_raw)} altın, {len(silvers_raw)} gümüş")
         
-        # 6️⃣ 🔥 FIX: JEWELER VERİLERİNİ OLUŞTUR (önce marj ekle)
+        # 6️⃣ 🔥 JEWELER VERİLERİNİ OLUŞTUR (DİNAMİK marj ekle)
         # Deep copy ile yeni objeler oluştur
         jeweler_currencies_items = copy.deepcopy(currencies)
         jeweler_golds_items = copy.deepcopy(golds)
         jeweler_silvers_items = copy.deepcopy(silvers)
         
-        # Marj ekle
-        margin_map = Config.PRICE_PROFILES.get("jeweler", {})
+        # 🔥 DİNAMİK MARJ AL
+        margin_map = get_dynamic_margins()
         
         for item in jeweler_currencies_items:
             code = item.get("code")
@@ -1000,22 +1011,22 @@ def update_financial_data():
                 item["buying"] = round(item["buying"] * (1 + margin), 4)
                 item["rate"] = item["selling"]
         
-        # 7️⃣ 🔥 FIX: JEWELER VERİLERİNİ YÜZDELİKLERLE GÜNCELLE (jeweler snapshot'a göre)
+        # 7️⃣ JEWELER VERİLERİNİ YÜZDELİKLERLE GÜNCELLE (jeweler snapshot'a göre)
         jeweler_currencies = enrich_with_calculation(jeweler_currencies_items, yesterday_prices_jeweler)
         jeweler_golds = enrich_with_calculation(jeweler_golds_items, yesterday_prices_jeweler)
         jeweler_silvers = enrich_with_calculation(jeweler_silvers_items, yesterday_prices_jeweler)
         
-        # 8️⃣ 🔥 FIX: JEWELER PAYLOAD'LARI OLUŞTUR
+        # 8️⃣ JEWELER PAYLOAD'LARI OLUŞTUR
         jeweler_currencies_payload = {**base_meta, "data": jeweler_currencies}
         jeweler_golds_payload = {**base_meta, "data": jeweler_golds}
         jeweler_silvers_payload = {**base_meta, "data": jeweler_silvers}
         
-        # 9️⃣ 🔥 FIX: JEWELER VERİLERİNİ KAYDET
+        # 9️⃣ JEWELER VERİLERİNİ KAYDET
         set_cache(Config.CACHE_KEYS['currencies_jeweler'], jeweler_currencies_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
         
-        logger.info(f"✅ JEWELER veriler kaydedildi: {len(jeweler_currencies)} döviz, {len(jeweler_golds)} altın, {len(jeweler_silvers)} gümüş")
+        logger.info(f"✅ JEWELER veriler kaydedildi: {len(jeweler_currencies)} döviz, {len(jeweler_golds)} altın, {len(jeweler_silvers)} gümüş (DİNAMİK MARJ)")
         
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
         
@@ -1049,7 +1060,7 @@ def update_financial_data():
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies_raw)} Döviz + {len(golds_raw)} Altın + {len(silvers_raw)} Gümüş "
-            f"(Raw + Jeweler) ({banner_info}){cb_info}"
+            f"(Raw + Jeweler DİNAMİK) ({banner_info}){cb_info}"
         )
         return True
         
