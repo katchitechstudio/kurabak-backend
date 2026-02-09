@@ -7,12 +7,12 @@ News Manager - GÜNLÜK HABER SİSTEMİ V3.9 ULTIMATE + DYNAMIC MARGINS 📰🚀
 ✅ GÜÇLÜ FALLBACK: Gemini patlarsa da sistem ayakta
 ✅ RATE-LIMIT KORUMA: Retry + exponential backoff
 ✅ BAYRAM MANTIKLI TTL: Gece 03:00'e kadar geçerli
-✅ GEMİNİ 3 FLASH: Yeni model desteği
+✅ GEMİNİ 3 FLASH: Yeni model desteği 🔥
 ✅ RACE CONDITION FIX: Bootstrap lock mekanizması
 ✅ ÇİFT KAYNAK: GNews + NewsData (V3.8)
 ✅ 3 GÜN GERİYE + 48 SAAT FİLTRE: Optimal zaman aralığı (V3.8)
 ✅ VARDİYALAR ARASI DEDUP: Aynı haber 2. kez gösterilmez (V3.8)
-✅ 🔥 DİNAMİK YARIM MARJ: Günde 1 kere Harem'den otomatik marj hesaplama (V3.9 - YENİ!)
+✅ 🔥 DİNAMİK YARIM MARJ: Günde 1 kere Harem'den otomatik marj hesaplama (V3.9)
 """
 
 import os
@@ -295,7 +295,7 @@ def fetch_all_news() -> List[str]:
     unique_news = deduplicate_news(all_news)
     
     logger.info(f"✅ [NEWS] Toplam {len(unique_news)} benzersiz haber toplandı")
-    return unique_news  # Hepsini gönder (tek istekte sorun olmaz)
+    return unique_news
 
 
 # ======================================
@@ -305,7 +305,7 @@ def fetch_all_news() -> List[str]:
 def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]]:
     """
     ULTRA SIKI FİLTRE + TARİH FİLTRESİ - Gemini patlarsa da sistem ayakta kalır
-    🔥 V3.8: Son 48 saat içindeki kritik haberleri seçer
+    🔥 V3.9: GEMİNİ 3 FLASH + Son 48 saat içindeki kritik haberleri seçer
     """
     try:
         if not GEMINI_API_KEY:
@@ -318,8 +318,8 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 🔥 YENİ MODEL: gemini-2.0-flash-exp
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # 🔥 YENİ MODEL: GEMINI 3 FLASH
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
@@ -429,7 +429,7 @@ KURALLAR:
 BAŞKA AÇIKLAMA YAPMA!
 """
         
-        logger.info(f"🤖 [GEMİNİ] {len(news_list)} haber filtreleniyor...")
+        logger.info(f"🤖 [GEMİNİ 3 FLASH] {len(news_list)} haber filtreleniyor...")
         
         # 🛡️ GEMİNİ ÇAĞRISI + FALLBACK
         try:
@@ -480,7 +480,7 @@ BAŞKA AÇIKLAMA YAPMA!
             if clean_line and len(clean_line) > 10:
                 summaries.append(clean_line)
         
-        logger.info(f"✅ [GEMİNİ] {len(summaries)} kritik haber filtrelendi")
+        logger.info(f"✅ [GEMİNİ 3 FLASH] {len(summaries)} kritik haber filtrelendi")
         
         if not summaries:
             logger.warning("⚠️ [GEMİNİ] Bugün kritik haber yok")
@@ -494,7 +494,7 @@ BAŞKA AÇIKLAMA YAPMA!
 
 
 # ======================================
-# 🔥 DİNAMİK YARIM MARJ SİSTEMİ (YENİ!)
+# 🔥 DİNAMİK YARIM MARJ SİSTEMİ (V3.9)
 # ======================================
 
 def fetch_harem_html() -> Optional[str]:
@@ -538,7 +538,7 @@ def fetch_harem_html() -> Optional[str]:
 def calculate_half_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
     """
     Gemini'ye HTML verisini göndererek YARIM MARJLARI hesaplat
-    🔥 V3.9: Veri besleme + Yarım marj + Gümüş özel
+    🔥 V3.9: GEMİNİ 3 FLASH + Veri besleme + Yarım marj + Gümüş özel
     """
     try:
         if not GEMINI_API_KEY:
@@ -546,7 +546,9 @@ def calculate_half_margins_with_gemini(html_data: str, api_prices: Dict) -> Opti
             return None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        # 🔥 YENİ MODEL: GEMINI 3 FLASH
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         prompt = f"""
 SEN BİR FİNANS ANALİSTİSİN.
@@ -582,7 +584,7 @@ MARJ_AG: 15.0
 HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
 """
         
-        logger.info("🤖 [GEMİNİ MARJ] Hesaplama başlıyor...")
+        logger.info("🤖 [GEMİNİ 3 FLASH MARJ] Hesaplama başlıyor...")
         
         response = model.generate_content(prompt)
         result = response.text.strip()
@@ -609,7 +611,7 @@ HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
             logger.error("❌ [GEMİNİ MARJ] Parse edilemedi!")
             return None
         
-        logger.info(f"✅ [GEMİNİ MARJ] {len(margins)} marj hesaplandı: {margins}")
+        logger.info(f"✅ [GEMİNİ 3 FLASH MARJ] {len(margins)} marj hesaplandı: {margins}")
         return margins
         
     except Exception as e:
@@ -632,7 +634,7 @@ def update_dynamic_margins() -> bool:
             logger.warning("⚠️ [DİNAMİK MARJ] HTML çekilemedi, eski marjlar kullanılacak")
             return False
         
-        # 2. API fiyatlarını al (financial_service'den import edebilirsin ama circular import önlemek için burada basit çağrı)
+        # 2. API fiyatlarını al
         try:
             from services.financial_service import fetch_from_v5
             api_data = fetch_from_v5()
@@ -815,7 +817,7 @@ def bootstrap_news_system() -> bool:
 def prepare_morning_shift() -> bool:
     """
     SABAH VARDİYASI (00:00 - 12:00)
-    🔥 V3.9: Vardiyalar arası dedup + DİNAMİK MARJ GÜNCELLEME (YENİ!)
+    🔥 V3.9: Vardiyalar arası dedup + DİNAMİK MARJ GÜNCELLEME
     """
     try:
         logger.info("🌅 [SABAH VARDİYASI] Hazırlık başlıyor...")
@@ -864,7 +866,7 @@ def prepare_morning_shift() -> bool:
         # 7. 🔥 Gösterilen haberleri geçmişe kaydet
         save_shown_news(summaries)
         
-        # 8. 🔥 YENİ: DİNAMİK MARJ GÜNCELLEME
+        # 8. 🔥 DİNAMİK MARJ GÜNCELLEME
         logger.info("💰 [SABAH VARDİYASI] Dinamik marj güncelleme başlıyor...")
         margin_success = update_dynamic_margins()
         if margin_success:
@@ -879,7 +881,7 @@ def prepare_morning_shift() -> bool:
             'timestamp': time.time(),
             'news_count': len(schedule),
             'bayram': bayram_msg if bayram_msg else 'yok',
-            'margin_updated': margin_success  # YENİ
+            'margin_updated': margin_success
         }, ttl=86400)
         
         logger.info(f"✅ [SABAH VARDİYASI] {len(schedule)} kritik haber hazır!")
@@ -893,7 +895,7 @@ def prepare_morning_shift() -> bool:
 def prepare_evening_shift() -> bool:
     """
     AKŞAM VARDİYASI (12:00 - 00:00)
-    🔥 V3.9: Vardiyalar arası dedup eklendi (Marj güncellemesi YOK)
+    🔥 V3.9: Vardiyalar arası dedup (Marj güncellemesi YOK)
     """
     try:
         logger.info("🌆 [AKŞAM VARDİYASI] Hazırlık başlıyor...")
@@ -1009,7 +1011,7 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.9 ULTIMATE + DYNAMIC MARGINS - Test\n")
+    print("🧪 News Manager V3.9 ULTIMATE + DYNAMIC MARGINS - GEMINI 3 FLASH - Test\n")
     
     print("1️⃣ HABER TOPLAMA (GNews 3 gün + NewsData):")
     news_list = fetch_all_news()
@@ -1027,7 +1029,7 @@ def test_news_manager():
         print(f"   ✅ {len(fresh_news)} yeni haber (tekrar filtrelendi)\n")
     
     if fresh_news:
-        print("3️⃣ ULTRA SIKI FİLTRE + 48 SAAT:")
+        print("3️⃣ ULTRA SIKI FİLTRE + 48 SAAT (GEMINI 3 FLASH):")
         summaries, bayram_msg = summarize_news_batch(fresh_news)
         print(f"   ✅ {len(summaries)} KRİTİK haber filtrelendi\n")
         
@@ -1042,7 +1044,7 @@ def test_news_manager():
             print("   ℹ️ Bugün kritik haber yok")
         print()
     
-    print("4️⃣ DİNAMİK MARJ GÜNCELLEME:")
+    print("4️⃣ DİNAMİK MARJ GÜNCELLEME (GEMINI 3 FLASH):")
     margin_success = update_dynamic_margins()
     if margin_success:
         print(f"   ✅ Marjlar güncellendi!\n")
