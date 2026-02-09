@@ -1,15 +1,16 @@
 """
-General Routes - API Endpoints V5.3 (MARKET STATUS ENDPOINT) 🔥
+General Routes - API Endpoints V5.4 (TELEGRAM FEEDBACK FIX!) 🔥
 ==================================================
 ✅ FCM Token Registration & Unregistration
-✅ Feedback System (TELEGRAM BOT FIX!)
+✅ Feedback System (TELEGRAM BOT FIX V5.4!)
 ✅ Currency/Gold/Silver Data Endpoints
 ✅ Regional Currency Grouping
 ✅ Banner Management (Event System)
 ✅ Metrics & Monitoring
 ✅ Rate Limiting
 ✅ 💰 PRICE PROFILE SUPPORT (Raw / Jeweler)
-✅ 🚦 MARKET STATUS ENDPOINT (V5.3 - YENİ!)
+✅ 🚦 MARKET STATUS ENDPOINT (V5.3)
+✅ 📬 TELEGRAM FEEDBACK (V5.4 - TAMAMEN DÜZELTİLDİ!)
 
 V5.2 Changes:
 - Profile parametresi eklendi (raw | jeweler)
@@ -19,6 +20,11 @@ V5.2 Changes:
 V5.3 Changes:
 - get_regional_currencies() → get_cache_key_for_profile() kullanıyor (tutarlılık)
 - /api/market/status endpoint eklendi (Android için)
+
+V5.4 Changes:
+- 🔥 TELEGRAM FEEDBACK FIX: get_telegram_monitor() fonksiyonu kullanılıyor
+- telegram_instance import sorunu çözüldü
+- Runtime'da singleton instance alınıyor
 """
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
@@ -698,15 +704,20 @@ def fcm_status():
 @limiter.limit("5 per hour")
 def send_feedback():
     """
-    🔥 V5.1 FIX: Telegram bot instance düzeltildi
+    🔥 V5.4 FIX: get_telegram_monitor() fonksiyonu kullanılıyor
     
-    ÖNCEKİ SORUN:
-    - get_telegram_monitor() fonksiyonu None dönüyordu
-    - Feedback mesajları Telegram'a gitmiyordu
+    ÖNCEKİ SORUN (V5.1-V5.3):
+    - telegram_instance import edildiğinde None geliyordu
+    - Import anında henüz init_telegram_monitor() çağrılmamıştı
     
-    YENİ ÇÖZÜM:
-    - Global telegram_instance kullanılıyor
-    - Singleton pattern ile doğru instance alınıyor
+    YENİ ÇÖZÜM (V5.4):
+    - get_telegram_monitor() FONKSİYONUNU çağır
+    - Bu fonksiyon runtime'da singleton instance'ı döner
+    - Instance başlatıldıktan sonra erişim sağlanır
+    
+    NEDEN ÇALIŞIYOR:
+    - telegram_instance: Module-level variable (import anında None)
+    - get_telegram_monitor(): Runtime function (çağrıldığında instance döner)
     """
     try:
         data = request.get_json()
@@ -748,10 +759,10 @@ def send_feedback():
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        # 🔥 V5.1 FIX: Global telegram instance'ı kullan
-        from utils.telegram_monitor import telegram_instance
+        # 🔥 V5.4 FIX: get_telegram_monitor() FONKSIYONUNU KULLAN!
+        from utils.telegram_monitor import get_telegram_monitor
         
-        telegram_bot = telegram_instance
+        telegram_bot = get_telegram_monitor()  # ✅ RUNTIME'DA INSTANCE AL!
         
         if telegram_bot:
             feedback_text = (
