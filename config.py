@@ -1,6 +1,6 @@
 """
-Configuration - PRODUCTION READY V5.3 🧠📰🏦💰🔥
-===================================================
+Configuration - PRODUCTION READY V5.3.1 🧠📰🏦💰🔥
+=====================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
 ✅ TELEGRAM: Rapor ve bildirim sistemi
@@ -18,7 +18,9 @@ Configuration - PRODUCTION READY V5.3 🧠📰🏦💰🔥
 ✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
 ✅ 📰 GÜNLÜK HABER SİSTEMİ V2.0: Sabah + Akşam vardiyası + Gemini 2.0 + Bayram kontrolü
 ✅ 💰 MARKET MARGIN SYSTEM: Ham/Kuyumcu fiyat profilleri
-✅ 🔥 DYNAMIC HALF MARGIN: Gemini ile günlük otomatik marj güncelleme (YENİ!)
+✅ 🔥 DYNAMIC HALF MARGIN: Gemini ile günlük otomatik marj güncelleme
+✅ 🔥 RAM OPTIMIZATION: %95 threshold (LOG SPAM FİX - V5.3.1)
+✅ 🔥 CPU OPTIMIZATION: %80 threshold (LOG SPAM FİX - V5.3.1)
 """
 import os
 
@@ -27,7 +29,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "5.3.0"  # 🔥 Dynamic Half Margin System
+    APP_VERSION = "5.3.1"  # 🔥 RAM/CPU Threshold Optimization + Dynamic Half Margin
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -41,7 +43,7 @@ class Config:
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
     
     # ======================================
-    # 💰 MARKET MARGIN SYSTEM V2.0 (YENİ!)
+    # 💰 MARKET MARGIN SYSTEM V2.0
     # ======================================
     """
     FİYAT PROFİLLERİ:
@@ -53,7 +55,7 @@ class Config:
     - Backend her iki fiyat serisini de tutar (ayrı snapshot'lar)
     - Yüzdelik değişimler kendi snapshot'larına göre hesaplanır
     
-    DİNAMİK MARJ SİSTEMİ (YENİ!):
+    DİNAMİK MARJ SİSTEMİ:
     - Günde 1 kere (00:00) Harem fiyatları kontrol edilir
     - Gemini AI ile gerçek marjlar hesaplanır
     - Hesaplanan marjın YARISI kullanılır (alarm patlaması önlenir)
@@ -127,7 +129,7 @@ class Config:
     DEFAULT_MARKET_MARGIN = 0.0  # %0 (marj yok)
     
     # ======================================
-    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI (YENİ!)
+    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI
     # ======================================
     # Harem veri kaynağı (HTML parse edilecek)
     HAREM_PRICE_URL = "https://altin.doviz.com/harem"
@@ -196,13 +198,13 @@ class Config:
     MAINTENANCE_DEFAULT_MESSAGE = "Sistem bakımda. Veriler güncel olmayabilir."
     
     # ======================================
-    # 🚨 SELF-HEALING ALARM SİSTEMİ
+    # 🚨 SELF-HEALING ALARM SİSTEMİ V5.3.1
     # ======================================
-    # CPU Eşiği (Varsayılan %)
-    CPU_THRESHOLD = 80  # %80
+    # 🔥 CPU Eşiği (LOG SPAM FİX!)
+    CPU_THRESHOLD = 80  # %80 (eski: %70) → RAM %70-80 arası SESSİZ
     
-    # RAM Eşiği (Varsayılan %)
-    RAM_THRESHOLD = 85  # %85
+    # 🔥 RAM Eşiği (LOG SPAM FİX!)
+    RAM_THRESHOLD = 95  # %95 (eski: %85) → RAM %85-95 arası SESSİZ
     
     # Müdahale sonrası bekleme süresi (Saniye)
     ALARM_COOLDOWN = 300  # 5 dakika
@@ -216,9 +218,8 @@ class Config:
     # ======================================
     # 🔔 FİYAT ALARM SİSTEMİ (Redis-based)
     # ======================================
-    # Fiyat alarmları kontrol sıklığı (Dakika)
-    # 5-15 dakika arası önerilir (10 dakika optimal)
-    ALARM_CHECK_INTERVAL = 10  # 10 dakika
+    # 🔥 Fiyat alarmları kontrol sıklığı (Dakika) - ARTTIRILDI!
+    ALARM_CHECK_INTERVAL = 15  # 15 dakika (eski: 10) → RAM tasarrufu
     
     # Alarm TTL (Time To Live) - Alarmların Redis'te ne kadar süre saklanacağı
     ALARM_TTL = 90 * 24 * 60 * 60  # 90 gün (saniye cinsinden)
@@ -238,7 +239,7 @@ class Config:
     CALENDAR_BANNER_MINUTE = 0
     
     # ======================================
-    # 📰 GÜNLÜK HABER SİSTEMİ V2.0 (GÜNCELLENDİ!)
+    # 📰 GÜNLÜK HABER SİSTEMİ V2.0
     # ======================================
     # Haber vardiyası saatleri
     NEWS_MORNING_SHIFT_HOUR = 0   # Gece 00:00 - Sabah vardiyası hazırlanır
@@ -255,15 +256,11 @@ class Config:
     # ======================================
     # HAFTA SONU KİLİDİ
     # ======================================
-    # 🔥 V5.3: Piyasa saatleri düzeltildi
-    
     # Cuma günü piyasa kapanış saati (Türkiye saati)
     MARKET_CLOSE_FRIDAY_HOUR = 18  # Cuma 18:00 (Forex standardı)
     
     # Pazar gecesi kaçta piyasalar açılır? (Asya piyasaları)
-    WEEKEND_REOPEN_HOUR = 0  # 🔥 DEĞİŞTİ: Pazar 00:00 (API bu saatte başlıyor)
-    
-    # ⚠️ Eski değer: 23 (Pazar 23:00) → Yanlıştı, API pazar 00:00'da başlıyor
+    WEEKEND_REOPEN_HOUR = 0  # Pazar 00:00 (API bu saatte başlıyor)
     
     # ======================================
     # REDIS & CACHE ANAHTARLARI
@@ -328,7 +325,7 @@ class Config:
         'news_last_update': 'news:last_update',
         'daily_bayram': 'daily:bayram',
         
-        # 🔥 DİNAMİK YARIM MARJ SİSTEMİ (YENİ!)
+        # 🔥 DİNAMİK YARIM MARJ SİSTEMİ
         'dynamic_half_margins': 'dynamic:half_margins',  # 24 saat TTL
         'margin_last_update': 'margin:last_update',       # Son güncelleme zamanı
     }
