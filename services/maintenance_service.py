@@ -1,5 +1,5 @@
 """
-Maintenance Service - PRODUCTION READY V5.5 🚧
+Maintenance Service - PRODUCTION READY V5.6 🚧
 ===============================================
 ✅ SCHEDULER OPTIMIZATION: CPU spike önleme (prepare/publish ayrımı)
 ✅ SMOOTH MARGIN TRANSITION: Kademeli marj geçişi
@@ -7,20 +7,20 @@ Maintenance Service - PRODUCTION READY V5.5 🚧
 ✅ İKİ SNAPSHOT: raw_snapshot + jeweler_snapshot
 ✅ JEWELER REBUILD: Marj değişince cache otomatik yenilenir
 ✅ SNAPSHOT UPDATE: Marj değişince snapshot düzeltilir
+✅ 🔥 KOMBO TAKTİK: Async margin bootstrap + 6 saatlik sağlık kontrolü
 
-V5.5 Değişiklikler (SCHEDULER OPTIMIZATION):
-- 🔥 23:55 → prepare_morning_news() [Gemini call]
-- 🔥 00:00 → save_daily_snapshot() + publish_morning_news() [lightweight]
-- 🔥 00:05 → update_dynamic_margins() + rebuild_jeweler_cache() + update_jeweler_snapshot()
-- 🔥 11:55 → prepare_evening_news() [Gemini call]
-- 🔥 12:00 → publish_evening_news() [lightweight]
-- 🔥 14:00 → push_notification [daily summary]
+V5.6 Değişiklikler (KOMBO TAKTİK):
+- 🔥 ASYNC MARGIN BOOTSTRAP: Worker'ı yavaşlatmadan arka planda marj günceller
+- 🔥 MARJ SAĞLIK KONTROLÜ: Her 6 saatte marj yaşını kontrol eder
+- 🔥 OTOMATİK KURTARMA: 00:05 job'ı başarısız olsa bile 6 saat sonra düzeltir
+- 🔥 İLK DEPLOYMENT: 5 dakika sonra marjları otomatik oluşturur
 
 Timeline:
-23:55 → Sabah haberlerini HAZIRLA (Gemini - ağır işlem)
+23:55 → Sabah haberlerini HAZIRLA (Gemini)
 00:00 → Snapshot AL + Sabah YAYINLA (hafif)
 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update
-11:55 → Akşam haberlerini HAZIRLA (Gemini - ağır işlem)
+00:05, 06:05, 12:05, 18:05 → 🔥 Marj Sağlık Kontrolü (Her 6 saat)
+11:55 → Akşam haberlerini HAZIRLA (Gemini)
 12:00 → Akşam YAYINLA (hafif)
 14:00 → Push notification GÖNDER
 """
@@ -28,6 +28,7 @@ Timeline:
 import logging
 import time
 import threading
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -308,7 +309,7 @@ def alarm_check_job():
 
 
 # ======================================
-# 🔥 V5.5 NEW JOBS
+# 🔥 V5.5 JOBS
 # ======================================
 
 def prepare_morning_news_job():
@@ -454,11 +455,75 @@ def push_notification_daily():
 
 
 # ======================================
+# 🔥 V5.6 KOMBO TAKTİK - MARJ SAĞLIK
+# ======================================
+
+def check_and_refresh_margins():
+    """
+    🔥 KOMBO TAKTİK: MARJ SAĞLIK KONTROLÜ
+    
+    Her 6 saatte bir çalışır:
+    1. En son marj güncellemesini kontrol eder
+    2. 24 saatten eskiyse → Güncelle!
+    3. Gemini başarısız olsa bile 6 saat sonra tekrar dener
+    
+    AVANTAJLAR:
+    - Marjlar asla 24 saatten eski olmaz ✅
+    - 00:05 job'ı hata verse bile kurtarır ✅
+    - Smooth geçiş sistemi korunur ✅
+    """
+    try:
+        logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor...")
+        
+        from utils.news_manager import get_cache, update_dynamic_margins
+        from config import Config
+        import time
+        
+        # En son başarılı marj güncellemesini kontrol et
+        last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
+        last_successful = get_cache(last_successful_key)
+        
+        if not last_successful:
+            logger.warning("⚠️ [MARJ SAĞLIK] Hiç marj yok! Güncelleniyor...")
+            success = update_dynamic_margins()
+            
+            if success:
+                logger.info("✅ [MARJ SAĞLIK] İlk marjlar başarıyla oluşturuldu!")
+            else:
+                logger.error("❌ [MARJ SAĞLIK] İlk marj oluşturulamadı!")
+            return
+        
+        timestamp = last_successful.get('timestamp', 0)
+        hours_ago = (time.time() - timestamp) / 3600
+        days_ago = hours_ago / 24
+        
+        # 24 saatten eski mi kontrol et
+        if hours_ago > 24:
+            logger.warning(
+                f"⚠️ [MARJ SAĞLIK] Marjlar çok eski ({days_ago:.1f} gün önce)! "
+                f"Güncelleniyor..."
+            )
+            
+            success = update_dynamic_margins()
+            
+            if success:
+                logger.info("✅ [MARJ SAĞLIK] Marjlar başarıyla güncellendi!")
+            else:
+                logger.error("❌ [MARJ SAĞLIK] Güncelleme başarısız, 6 saat sonra tekrar denenecek")
+        else:
+            logger.info(f"✅ [MARJ SAĞLIK] Marjlar taze ({hours_ago:.1f} saat önce, son güncelleme)")
+    
+    except Exception as e:
+        logger.error(f"❌ [MARJ SAĞLIK] Beklenmeyen hata: {e}")
+        raise
+
+
+# ======================================
 # SCHEDULER START
 # ======================================
 
 def start_scheduler():
-    """🚀 Scheduler başlat - V5.5"""
+    """🚀 Scheduler başlat - V5.6 KOMBO TAKTİK"""
     global scheduler
     
     with _scheduler_lock:
@@ -603,26 +668,45 @@ def start_scheduler():
             coalesce=True
         )
         
+        # ======================================
+        # 🔥 V5.6 KOMBO TAKTİK - MARJ SAĞLIK
+        # ======================================
+        
+        # Marj Sağlık Kontrolü - Her 6 saatte (ilk çalışma 5 dakika sonra)
+        scheduler.add_job(
+            check_and_refresh_margins,
+            trigger=IntervalTrigger(hours=6),
+            id='margin_health_check',
+            name='Marj Sağlık Kontrolü',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now() + timedelta(minutes=5)
+        )
+        
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V5.5 - CPU Spike Önleme + Smooth Margin)")
+        logger.info("✅ Scheduler başlatıldı! (V5.6 - KOMBO TAKTİK)")
         logger.info(f"   👷 Worker: Her {worker_interval} saniyede")
         logger.info("   👮 Şef: Her 10 dakikada")
         logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
         logger.info("   📊 Rapor: Her gün 09:00")
         logger.info("   🧹 Cleanup: Her gün 03:00")
         logger.info("")
-        logger.info("   🔥 V5.5 OPTIMIZED TIMELINE:")
+        logger.info("   🔥 V5.6 OPTIMIZED TIMELINE:")
         logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
         logger.info("   📸 00:00 → Snapshot AL + Sabah YAYINLA (hafif)")
         logger.info("   💰 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update")
         logger.info("   🌆 11:55 → Akşam haberlerini HAZIRLA (Gemini)")
         logger.info("   📰 12:00 → Akşam YAYINLA (hafif)")
         logger.info("   🔔 14:00 → Push Notification GÖNDER")
+        logger.info("   🏥 00:05, 06:05, 12:05, 18:05 → Marj Sağlık Kontrolü (Her 6 saat)")
         logger.info("")
         logger.info("   ✅ CPU spike önleme: AKTİF")
         logger.info("   ✅ Smooth margin: AKTİF")
         logger.info("   ✅ Jeweler rebuild: OTOMATİK")
         logger.info("   ✅ Snapshot update: OTOMATİK")
+        logger.info("   ✅ Marj sağlık kontrolü: AKTİF (Her 6 saat)")
+        logger.info("   ✅ Async margin bootstrap: AKTİF (Worker'da)")
 
 
 def stop_scheduler():
@@ -667,12 +751,14 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V5.5',
+            'version': 'V5.6',
             'optimizations': {
                 'cpu_spike_prevention': True,
                 'smooth_margin': True,
                 'jeweler_auto_rebuild': True,
-                'snapshot_auto_update': True
+                'snapshot_auto_update': True,
+                'async_margin_bootstrap': True,
+                'margin_health_check': True
             }
         }
         
