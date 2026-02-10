@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V5.4 🧠📰🏦💰🔥
+Configuration - PRODUCTION READY V5.5 🧠📰🏦💰🔥
 =====================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -13,17 +13,20 @@ Configuration - PRODUCTION READY V5.4 🧠📰🏦💰🔥
 ✅ GELİŞMİŞ TRACKING: Header bazlı kullanıcı takibi
 ✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
 ✅ CIRCUIT BREAKER: API hata yönetimi
-✅ PUSH NOTIFICATION: Öğlen 12:00 günlük özet
+✅ PUSH NOTIFICATION: Öğlen 14:00 günlük özet
 ✅ TEMİZLİK MEKANİZMASI: 7 günlük otomatik temizlik
 ✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
-✅ 📰 GÜNLÜK HABER SİSTEMİ V2.0: Sabah + Akşam vardiyası + Gemini 2.0 + Bayram kontrolü
-✅ 💰 MARKET MARGIN SYSTEM: Ham/Kuyumcu fiyat profilleri
-✅ 🔥 DYNAMIC HALF MARGIN: Gemini ile günlük otomatik marj güncelleme (AYRI JOB - 00:01)
-✅ 🔥 RAM OPTIMIZATION: %95 threshold (LOG SPAM FİX - V5.3.1)
-✅ 🔥 CPU OPTIMIZATION: %80 threshold (LOG SPAM FİX - V5.3.1)
-✅ 🔥 SCHEDULER OPTIMIZATION: CPU spike önleme (00:00→00:03 sabah vardiyası - V5.3.2)
-✅ 🔥 SMART MARGIN FALLBACK: En son başarılı marjları kullan (Config fallback kaldırıldı - V5.4)
-✅ 🔥 MARGIN BOOTSTRAP: İlk kurulumda otomatik marj çekme (V5.4)
+✅ 📰 GÜNLÜK HABER SİSTEMİ V3.0: Hazırlama + Yayınlama ayrı (23:55 + 11:55)
+✅ 💰 MARKET MARGIN SYSTEM: Ham/Kuyumcu fiyat profilleri + İki Snapshot
+✅ 🔥 DYNAMIC FULL MARGIN V5.5: TAM MARJ + Smooth Geçiş (3-4 günde kademeli)
+✅ 🔥 SMART SCHEDULER V5.5: CPU spike önleme (haberler 5 dakika önce hazırlanır)
+
+V5.5 Değişiklikler (SMOOTH MARGIN TRANSITION + NEWS PREPARE):
+- 🔥 TAM MARJ: Yarım değil, TAM marj kullanılıyor (kuyumcu gerçeği)
+- 🔥 SMOOTH GEÇİŞ: Marj değişimi kademeli (3-4 gün), alarm patlaması önlenir
+- 🔥 HABER HAZIRLIK: 23:55 + 11:55'te Gemini çağrılır (00:00 + 12:00'da yayınlanır)
+- 🔥 İKİ SNAPSHOT: raw_snapshot + jeweler_snapshot (marj değişiminde sorun yok)
+- 🔥 CPU OPTİMİZASYON: 00:00 civarında 3 ağır iş dağıtıldı (23:55 → 00:00 → 00:05)
 """
 import os
 
@@ -32,7 +35,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "5.4"  # 🔥 Smart Margin Fallback + Bootstrap
+    APP_VERSION = "5.5"  # 🔥 Smooth Margin Transition + News Prepare System
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -46,67 +49,75 @@ class Config:
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
     
     # ======================================
-    # 💰 MARKET MARGIN SYSTEM V5.4
+    # 💰 MARKET MARGIN SYSTEM V5.5
     # ======================================
     """
     FİYAT PROFİLLERİ:
     - raw: Ham fiyat (API'den direk gelen, borsa/toptan fiyatı)
-    - jeweler: Kuyumcu/Fiziki piyasa fiyatı (DİNAMİK MARJ eklenmiş)
+    - jeweler: Kuyumcu/Fiziki piyasa fiyatı (DİNAMİK TAM MARJ eklenmiş)
     
     KULLANIM:
     - Kullanıcı ayarlardan "Ham Fiyat" veya "Kuyumcu Fiyatı" seçer
-    - Backend her iki fiyat serisini de tutar (ayrı snapshot'lar)
+    - Backend her iki fiyat serisini de tutar (İKİ AYRI SNAPSHOT)
     - Yüzdelik değişimler kendi snapshot'larına göre hesaplanır
     
-    DİNAMİK MARJ SİSTEMİ V5.4:
-    - Günde 1 kere (00:01 - AYRI JOB) Harem fiyatları kontrol edilir
+    DİNAMİK MARJ SİSTEMİ V5.5 (TAM MARJ + SMOOTH GEÇİŞ):
+    - Günde 1 kere (00:05) Harem fiyatları kontrol edilir
     - Gemini AI ile gerçek marjlar hesaplanır
-    - Hesaplanan marjın YARISI kullanılır (alarm patlaması önlenir)
-    - Gümüş için özel: %75'i kullanılır (%100 yerine)
+    - TAM MARJ kullanılır (kuyumcu gerçeğini yansıtır)
+    - SMOOTH GEÇİŞ: Marj değişimi kademeli (3-4 gün)
+      Örnek: %2 → %4 değişimi:
+        Gün 1: %3 (ortalama)
+        Gün 2: %3.5 (ortalama)
+        Gün 3: %3.75 (ortalama)
+        Gün 4: %4 (hedef)
     - Redis'e kaydedilir (24 saat TTL)
     - KALICI BACKUP: margin_last_update (TTL=0, süresiz!)
     
-    ZAMANLAMA (CPU Spike Önleme):
-    - 00:00:05 → Snapshot (hızlı)
-    - 00:01:00 → Dinamik Marj Güncelleme (Gemini - orta hız)
-    - 00:03:00 → Sabah Vardiyası Haberler (Gemini - yavaş)
+    İKİ SNAPSHOT SİSTEMİ V5.5:
+    - raw_snapshot: Ham fiyatlar (00:00'da kaydedilir, asla değişmez)
+    - jeweler_snapshot: Marjlı fiyatlar (00:00'da + marj değişiminde güncellenir)
     
-    AKILLI FALLBACK SİSTEMİ V5.4:
+    ZAMANLAMA (CPU Spike Önleme):
+    - 23:55:00 → Sabah haberlerini hazırla (Gemini)
+    - 00:00:00 → Snapshot kaydet (RAW + JEWELER) + Sabah haberlerini yayınla
+    - 00:05:00 → Dinamik Marj Güncelle (Gemini + Smooth + Jeweler Rebuild)
+    - 11:55:00 → Akşam haberlerini hazırla (Gemini)
+    - 12:00:00 → Akşam haberlerini yayınla
+    - 14:00:00 → Push notification gönder
+    
+    AKILLI FALLBACK SİSTEMİ V5.5:
     1. Redis (bugünkü Gemini marjları) → EN GÜNCEL ✅
     2. margin_last_update (en son başarılı) → SMOOTH FALLBACK ✅
     3. BOOTSTRAP (ilk kurulum) → HEMEN GEMİNİ ÇAĞIR! ✅
     
-    NEDEN CONFIG MARJLARI KALDIRILDI?
-    - Gemini çökerse sabit marjlar kullanılıyordu → Ani fiyat değişimi!
-    - Alarmlar patlıyordu, kullanıcılar şaşırıyordu
-    - YENİ ÇÖZÜM: En son başarılı marjları kullan → Smooth geçiş!
-    
-    ÖRNEİLK KURULUM:
+    ÖRNEK 1: İLK KURULUM
     - margin_last_update yok
     - get_dynamic_margins() HEMEN Gemini'yi çağırır (BOOTSTRAP)
     - Marjlar çekilir ve kaydedilir
     - Sistem çalışmaya başlar
     
-    ÖRNEK 2: GEMİNİ ÇÖKTÜ:
-    - Gece 00:01 Gemini timeout
+    ÖRNEK 2: GEMİNİ ÇÖKTÜ
+    - Gece 00:05 Gemini timeout
     - Redis boş (24sa TTL doldu)
     - margin_last_update kullanılır (dünkü marjlar)
     - Smooth geçiş, kullanıcı fark etmez!
     
-    ÖRNEK 3: RESTART:
-    - Redis temiz (restart)
-    - margin_last_update disk backup'tan yüklenir
-    - Eski marjlar kullanılır
-    - Gece 00:01 Gemini yenileyecek
+    ÖRNEK 3: MARJ DEĞİŞİMİ
+    - Harem: Gram Altın marjı %2 → %4.7 oldu
+    - Smooth: İlk gün %3.35 uygula (ortalama)
+    - Ertesi gün: %4.025 uygula
+    - 3. gün: %4.36 uygula
+    - 4. gün: %4.7 uygula (hedef)
+    - Alarmlar patlamaz, kullanıcı şaşırmaz ✅
     """
     
     PRICE_PROFILES = {
         # RAW PROFILE - Ham Fiyat (API'den gelen)
         "raw": {},  # Hiç marj yok, direkt API fiyatı
         
-        # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı (DİNAMİK MARJ)
-        # 🔥 V5.4: Config marjları KALDIRILDI!
-        # Gemini otomatik doldurur + Bootstrap varsa hemen çeker
+        # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı (DİNAMİK TAM MARJ)
+        # 🔥 V5.5: TAM MARJ + SMOOTH GEÇİŞ
         "jeweler": {}  # Gemini dolduracak (Redis + margin_last_update)
     }
     
@@ -117,21 +128,20 @@ class Config:
     DEFAULT_MARKET_MARGIN = 0.0  # %0 (marj yok - ham fiyat gibi)
     
     # ======================================
-    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI V5.4
+    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI V5.5
     # ======================================
     # Harem veri kaynağı (HTML parse edilecek)
     HAREM_PRICE_URL = "https://altin.doviz.com/harem"
     HAREM_FETCH_TIMEOUT = 10  # 10 saniye
     
     # 🔥 Marj güncelleme saati (AYRI JOB - CPU spike önleme)
-    MARGIN_UPDATE_HOUR = 0     # Gece 00:01 (sabah vardiyasından ÖNCE)
-    MARGIN_UPDATE_MINUTE = 1   # 00:00:05 Snapshot → 00:01:00 Marj → 00:03:00 Haberler
+    MARGIN_UPDATE_HOUR = 0     # Gece 00:05 (snapshot'tan SONRA)
+    MARGIN_UPDATE_MINUTE = 5   # 00:00:00 Snapshot → 00:05:00 Marj → Haberler zaten hazır
     
-    # Marj hesaplama stratejisi
-    MARGIN_CALCULATION_STRATEGY = "half"  # "half" = Yarım marj, "full" = Tam marj
-    
-    # Gümüş için özel çarpan
-    SILVER_MARGIN_MULTIPLIER = 0.75  # %75 kullan (%100 yerine)
+    # 🔥 V5.5: TAM MARJ + SMOOTH GEÇİŞ
+    MARGIN_CALCULATION_STRATEGY = "full"  # "full" = Tam marj (kuyumcu gerçeği)
+    MARGIN_SMOOTH_TRANSITION = True  # Kademeli geçiş aktif
+    MARGIN_SMOOTH_THRESHOLD = 0.015  # %1.5'ten fazla fark varsa smooth geçiş yap
     
     # ======================================
     # 🔥 FIREBASE PUSH NOTIFICATIONS
@@ -156,7 +166,7 @@ class Config:
     # 📸 Fotoğrafçı (Snapshot) - Gece kaçta çalışacak?
     SNAPSHOT_HOUR = 0    # Saat 00
     SNAPSHOT_MINUTE = 0  # Dakika 00
-    SNAPSHOT_SECOND = 5  # Saniye 05 (00:00:05)
+    SNAPSHOT_SECOND = 0  # Saniye 00 (00:00:00)
     
     # 👮 Şef (Controller) - Sistem denetim sıklığı (Dakika)
     SUPERVISOR_INTERVAL = 10  # 10 Dakika (CPU/RAM kontrolü için)
@@ -164,8 +174,8 @@ class Config:
     # 📊 Telegram Günlük Rapor Saati (Sabah 09:00)
     TELEGRAM_DAILY_REPORT_HOUR = 9
     
-    # 🔔 Push Notification Günlük Özet Saati (Öğlen 12:00)
-    PUSH_NOTIFICATION_DAILY_HOUR = 12
+    # 🔔 Push Notification Günlük Özet Saati (Öğlen 14:00)
+    PUSH_NOTIFICATION_DAILY_HOUR = 14
     PUSH_NOTIFICATION_DAILY_MINUTE = 0
     
     # 🛡️ Circuit Breaker (Sigorta) Ayarları
@@ -227,19 +237,28 @@ class Config:
     CALENDAR_BANNER_MINUTE = 0
     
     # ======================================
-    # 📰 GÜNLÜK HABER SİSTEMİ V2.0 + V5.3.2 SCHEDULER
+    # 📰 GÜNLÜK HABER SİSTEMİ V3.0 (PREPARE + PUBLISH)
     # ======================================
-    # 🔥 Haber vardiyası saatleri (CPU spike önleme)
-    NEWS_MORNING_SHIFT_HOUR = 0   # Gece 00:03 - Sabah vardiyası hazırlanır (00:00 → 00:03)
-    NEWS_MORNING_SHIFT_MINUTE = 3  # 🔥 DEĞİŞTİ: Marj job'undan sonra (CPU spike önleme)
+    # 🔥 V5.5: Haber hazırlama ve yayınlama AYRI!
     
-    NEWS_EVENING_SHIFT_HOUR = 12   # Öğlen 12:00 - Akşam vardiyası hazırlanır
-    NEWS_EVENING_SHIFT_MINUTE = 0
+    # SABAH VARDİYASI
+    NEWS_MORNING_PREPARE_HOUR = 23    # 23:55 - Sabah haberlerini hazırla (Gemini)
+    NEWS_MORNING_PREPARE_MINUTE = 55
+    
+    NEWS_MORNING_PUBLISH_HOUR = 0     # 00:00 - Sabah haberlerini yayınla
+    NEWS_MORNING_PUBLISH_MINUTE = 0
+    
+    # AKŞAM VARDİYASI
+    NEWS_EVENING_PREPARE_HOUR = 11    # 11:55 - Akşam haberlerini hazırla (Gemini)
+    NEWS_EVENING_PREPARE_MINUTE = 55
+    
+    NEWS_EVENING_PUBLISH_HOUR = 12    # 12:00 - Akşam haberlerini yayınla
+    NEWS_EVENING_PUBLISH_MINUTE = 0
     
     # Haber kaynakları ayarları
-    NEWS_MAX_RESULTS_PER_SOURCE = 10  # Her API'den max 10 haber
+    NEWS_MAX_RESULTS_PER_SOURCE = 30  # Her API'den max 30 haber
     NEWS_GEMINI_TIMEOUT = 30  # Gemini timeout (saniye)
-    NEWS_BATCH_SIZE = 20  # Tek seferde max 20 haber özetle
+    NEWS_BATCH_SIZE = 40  # Tek seferde max 40 haber özetle
     
     # ======================================
     # HAFTA SONU KİLİDİ
@@ -271,9 +290,11 @@ class Config:
         # Yedek sistemler
         'backup': 'kurabak:backup:all',
         
-        # Worker + Snapshot + Şef sistemleri
-        'yesterday_prices': 'kurabak:yesterday_prices:raw',
-        'yesterday_prices_jeweler': 'kurabak:yesterday_prices:jeweler',
+        # 🔥 V5.5: İKİ SNAPSHOT SİSTEMİ
+        'raw_snapshot': 'kurabak:raw_snapshot',           # Ham fiyatlar (asla değişmez)
+        'jeweler_snapshot': 'kurabak:jeweler_snapshot',   # Marjlı fiyatlar (marj değişince güncellenir)
+        
+        # Worker + Şef sistemleri
         'last_worker_run': 'kurabak:last_worker_run',
         'backup_timestamp': 'kurabak:backup:timestamp',
         
@@ -307,15 +328,17 @@ class Config:
         'circuit_breaker_last_open': 'circuit:breaker:last_open',
         'cleanup_last_run': 'cleanup:last_run',
         
-        # 📰 GÜNLÜK HABER SİSTEMİ V2.0
-        'news_morning_shift': 'news:morning_shift',
-        'news_evening_shift': 'news:evening_shift',
+        # 📰 GÜNLÜK HABER SİSTEMİ V3.0
+        'news_morning_pending': 'news:morning_pending',   # 23:55'te hazırlanan (geçici)
+        'news_morning_shift': 'news:morning_shift',       # 00:00'da yayınlanan
+        'news_evening_pending': 'news:evening_pending',   # 11:55'te hazırlanan (geçici)
+        'news_evening_shift': 'news:evening_shift',       # 12:00'da yayınlanan
         'news_last_update': 'news:last_update',
         'daily_bayram': 'daily:bayram',
         
-        # 🔥 DİNAMİK MARJ SİSTEMİ V5.4
-        'dynamic_half_margins': 'dynamic:half_margins',  # 24 saat TTL (bugünkü Gemini marjları)
-        'margin_last_update': 'margin:last_update',       # TTL=0 süresiz (en son başarılı marjlar)
+        # 🔥 DİNAMİK MARJ SİSTEMİ V5.5
+        'dynamic_margins': 'dynamic:margins',          # 24 saat TTL (bugünkü Gemini marjları - TAM MARJ)
+        'margin_last_update': 'margin:last_update',    # TTL=0 süresiz (en son başarılı marjlar + timestamp)
     }
     
     # ======================================
