@@ -1,29 +1,28 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V3.9.3 ULTIMATE + SMART MARGIN FALLBACK 📰🚀💰
-===================================================================================
+News Manager - GÜNLÜK HABER SİSTEMİ V4.0 ULTIMATE 📰🚀💰
+=========================================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
 ✅ GELİŞMİŞ DEDUP: Benzerlik + Vardiyalar arası
 ✅ GÜÇLÜ FALLBACK: Gemini patlarsa da sistem ayakta
 ✅ RATE-LIMIT KORUMA: Retry + exponential backoff
 ✅ BAYRAM MANTIKLI TTL: Gece 03:00'e kadar geçerli
-✅ GEMİNİ 3 FLASH: Yeni model desteği 🔥
+✅ GEMİNİ 2.0 FLASH EXP: Yeni model desteği 🔥
 ✅ RACE CONDITION FIX: Bootstrap lock mekanizması
-✅ ÇİFT KAYNAK: GNews + NewsData (V3.8)
-✅ 3 GÜN GERİYE + 48 SAAT FİLTRE: Optimal zaman aralığı (V3.8)
-✅ VARDİYALAR ARASI DEDUP: Aynı haber 2. kez gösterilmez (V3.8)
-✅ 🔥 DİNAMİK YARIM MARJ: Günde 1 kere Harem'den otomatik marj hesaplama (V3.9)
-✅ 🐛 BOOTSTRAP BOŞ LİSTE FIX: [] kontrolü düzeltildi (V3.9.1)
-✅ 🔥 MARJ BAĞIMSIZLIĞI: Dinamik marj ayrı job'da çalışıyor (V3.9.2)
-✅ 🔥 SMART MARGIN FALLBACK: Config kullanmıyor, en son başarılı marjları kullanıyor (V3.9.3)
-✅ 🔥 MARGIN BOOTSTRAP: İlk kurulumda otomatik Gemini çağrısı (V3.9.3)
+✅ ÇİFT KAYNAK: GNews + NewsData
+✅ 3 GÜN GERİYE + 48 SAAT FİLTRE: Optimal zaman aralığı
+✅ VARDİYALAR ARASI DEDUP: Aynı haber 2. kez gösterilmez
+✅ 🔥 DİNAMİK TAM MARJ V4.0: Kuyumcu gerçeğini yansıtır
+✅ 🔥 SMOOTH MARJ GEÇİŞİ: 3-4 günde kademeli (alarm patlaması önlenir)
+✅ 🔥 PREPARE/PUBLISH AYRI: Haberler 5 dakika önce hazırlanır
 
-V3.9.3 Değişiklikler:
-- 🔥 AKILLI FALLBACK: Gemini çökerse Config yerine en son başarılı marjları kullan
-- 🔥 BOOTSTRAP: margin_last_update yoksa HEMEN Gemini çağır
-- 🔥 CONFIG MARJ KALDIRILDI: Smooth geçiş için sadece geçmiş marjlar kullanılıyor
-- 🔥 KALICI BACKUP: margin_last_update TTL=0 (süresiz, her zaman hazır)
-- ⚡ ANI FİYAT DEĞİŞİMİ ÖNLENDİ: Kullanıcı deneyimi korundu
+V4.0 Değişiklikler (TAM MARJ + SMOOTH + PREPARE/PUBLISH):
+- 🔥 TAM MARJ: Yarım değil, TAM marj hesaplanıyor (kuyumcu fiyatları)
+- 🔥 SMOOTH GEÇİŞ: Marj değişimi kademeli (%1.5+ fark varsa ortalama al)
+- 🔥 PREPARE FONKSIYONLARI: prepare_morning_news(), prepare_evening_news()
+- 🔥 PUBLISH FONKSIYONLARI: publish_morning_news(), publish_evening_news()
+- 🔥 YENİ CACHE: news_morning_pending, news_evening_pending (geçici)
+- 🔥 ZAMANLAMA: 23:55 hazırla → 00:00 yayınla (CPU spike önleme)
 """
 
 import os
@@ -37,7 +36,7 @@ import google.generativeai as genai
 from difflib import SequenceMatcher
 from bs4 import BeautifulSoup
 
-from utils.cache import get_cache, set_cache
+from utils.cache import get_cache, set_cache, delete_cache
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -180,14 +179,13 @@ def fetch_with_retry(url: str, max_retries: int = 3, timeout: int = 10) -> Optio
 def fetch_gnews(max_results: int = 30) -> List[str]:
     """
     GNews API'den ekonomi haberleri çeker - SON 3 GÜN + TARİH ETİKETLİ
-    🔥 V3.8: 3 gün geriye (12 saat gecikme + buffer)
     """
     try:
         if not GNEWS_API_KEY:
             logger.warning("⚠️ GNEWS_API_KEY bulunamadı!")
             return []
         
-        # 🔥 SON 3 GÜN - GNews'un 12 saat gecikmesini tolere et
+        # SON 3 GÜN
         three_days_ago = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%dT%H:%M:%SZ')
         
         url = (
@@ -218,7 +216,6 @@ def fetch_gnews(max_results: int = 30) -> List[str]:
             
             full_text = f"{title}. {description}" if description else title
             
-            # 🔥 Tarihi ekle (Gemini görsün)
             if full_text and len(full_text) > 15:
                 news_list.append(f"{full_text} [Tarih: {pub_date}]")
         
@@ -232,8 +229,7 @@ def fetch_gnews(max_results: int = 30) -> List[str]:
 
 def fetch_newsdata(max_results: int = 40) -> List[str]:
     """
-    NewsData API'den ekonomi haberleri çeker - TARİH FİLTRESİ YOK + TARİH ETİKETLİ
-    🔥 V3.8: Tarih filtresi desteklenmiyor, Gemini filtreleyecek
+    NewsData API'den ekonomi haberleri çeker
     """
     try:
         if not NEWSDATA_API_KEY:
@@ -249,7 +245,7 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
             f"&q=(merkez AND bankası) OR faiz OR TCMB OR FED OR ECB OR enflasyon OR büyüme"
         )
         
-        logger.info("📡 [NEWSDATA] Haberler çekiliyor (tarih filtresi yok)...")
+        logger.info("📡 [NEWSDATA] Haberler çekiliyor...")
         data = fetch_with_retry(url)
         
         if not data or data.get('status') != 'success':
@@ -260,7 +256,6 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
         news_list = []
         
         for article in results:
-            # 🔥 NULL SAFETY
             title = article.get('title')
             description = article.get('description')
             pub_date = article.get('pubDate', '')
@@ -276,7 +271,6 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
                 description = description.strip()
                 full_text = f"{title}. {description}" if description else title
             
-            # 🔥 Tarihi ekle
             if full_text and len(full_text) > 15:
                 news_list.append(f"{full_text} [Tarih: {pub_date}]")
         
@@ -291,18 +285,17 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
 def fetch_all_news() -> List[str]:
     """
     Tüm kaynaklardan haberleri çeker ve dedup yapar
-    🔥 V3.8: GNews (3 gün) + NewsData (tarih yok)
     """
     logger.info("📰 [NEWS] Tüm kaynaklardan haber toplama başlıyor...")
     
     # İki kaynaktan da topla
-    gnews_list = fetch_gnews(max_results=30)
-    newsdata_list = fetch_newsdata(max_results=40)
+    gnews_list = fetch_gnews(max_results=Config.NEWS_MAX_RESULTS_PER_SOURCE)
+    newsdata_list = fetch_newsdata(max_results=Config.NEWS_MAX_RESULTS_PER_SOURCE)
     
     # Birleştir
     all_news = gnews_list + newsdata_list
     
-    # Gelişmiş dedup (aynı request içinde)
+    # Gelişmiş dedup
     unique_news = deduplicate_news(all_news)
     
     logger.info(f"✅ [NEWS] Toplam {len(unique_news)} benzersiz haber toplandı")
@@ -315,12 +308,11 @@ def fetch_all_news() -> List[str]:
 
 def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]]:
     """
-    ULTRA SIKI FİLTRE + TARİH FİLTRESİ - Gemini patlarsa da sistem ayakta kalır
-    🔥 V3.9: GEMİNİ 3 FLASH + Son 48 saat içindeki kritik haberleri seçer
+    ULTRA SIKI FİLTRE + TARİH FİLTRESİ
     """
     try:
         if not GEMINI_API_KEY:
-            logger.warning("⚠️ GEMINI_API_KEY bulunamadı! Fallback modu...")
+            logger.warning("⚠️ GEMINI_API_KEY bulunamadı!")
             return [], None
         
         if not news_list:
@@ -328,15 +320,11 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
             return [], None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        
-        # 🔥 YENİ MODEL: GEMINI 3 FLASH
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
         current_time = datetime.now().strftime('%H:%M')
-        
-        # 🔥 Tarih aralığı hesapla (son 48 saat)
         two_days_ago = (datetime.now() - timedelta(days=2)).strftime('%d %B %Y')
         
         prompt = f"""
@@ -349,7 +337,6 @@ BUGÜN: {today}, SAAT: {current_time}
 - SADECE SON 48 SAAT İÇİNDEKİ ({two_days_ago} - {today}) HABERLERİ AL
 - 2025 yılından haberler → KESINLIKLE ATLA
 - 3+ gün önceki haberler → ATLA
-- Eski tarihli haberler finansal durumu yansıtmaz!
 
 ═══════════════════════════════════════════
 GÖREV 1 - BAYRAM KONTROLÜ
@@ -361,54 +348,36 @@ VARSA → "BAYRAM: [tam isim]" | YOKSA → "BAYRAM: YOK"
 GÖREV 2 - ULTRA SIKI FİLTRE + TARİH KONTROLÜ
 ═══════════════════════════════════════════
 
-✅ SADECE ŞU TİP HABERLERİ AL (VE GÜNCEL OLANLARI):
+✅ SADECE ŞU TİP HABERLERİ AL:
 
-1. MERKEZ BANKASI KARARLARI (Hem duyuru hem sonuç!):
+1. MERKEZ BANKASI KARARLARI:
    📅 DUYURU: "FED bugün saat 21:00'de faiz kararını açıklayacak"
-   ✅ SONUÇ: "FED faizi %4.5'te sabit tuttu" veya "FED faizi %0.25 indirdi"
-   📅 DUYURU: "TCMB yarın PPK toplantısı yapacak"
-   ✅ SONUÇ: "TCMB faizi %50'de sabit bıraktı" veya "TCMB %2.5 puan artırdı"
-   - ECB, BoE, BoJ kararları (hem duyuru hem sonuç)
+   ✅ SONUÇ: "FED faizi %4.5'te sabit tuttu"
 
 2. KRİTİK EKONOMİK VERİ AÇIKLAMALARI:
    📅 DUYURU: "Enflasyon rakamları bugün saat 10:00'da açıklanacak"
-   ✅ SONUÇ: "Ocak enflasyonu %64.77 açıklandı" (tam rakam önemli!)
-   📅 DUYURU: "4. çeyrek büyüme verileri yarın açıklanacak"
-   ✅ SONUÇ: "Türkiye ekonomisi 3. çeyrekte %3.2 büyüdü"
-   - İşsizlik oranı (duyuru + sonuç)
-   - Dış ticaret açığı (duyuru + sonuç)
-   - GSYİH büyüme (duyuru + sonuç)
+   ✅ SONUÇ: "Ocak enflasyonu %64.77 açıklandı"
 
-3. DÖVIZ/ALTIN REKORLARI (Sadece TARİHİ REKOR!):
+3. DÖVIZ/ALTIN REKORLARI:
    ✅ "Dolar TARİHİ REKOR kırdı: 45.50 TL"
-   ✅ "Euro TÜM ZAMANLARIN REKORUNU KIRDI: 48 TL"
-   ✅ "Altın gram fiyatı REKOR kırdı: 3.500 TL"
-   ❌ "Dolar 43.5 TL seviyesinde" (rekor değilse ALMA!)
 
 4. BORSA KRİTİK HAREKETLER:
    ✅ "BIST 100 %5+ düşüşle 10.000'in altına indi"
-   ✅ "BIST 100 TARİHİ REKOR: 12.500 puan"
-   ❌ Normal günlük dalgalanmalar (ALMA!)
 
 5. GEOPOLİTİK ŞOKLAR:
    ✅ "ABD Çin'e yeni gümrük vergisi uygulamaya başladı"
-   ✅ "OPEC petrol üretimini kısma kararı aldı"
-   ✅ "Rusya doğalgaz akışını durdurdu"
 
 6. YASAL DEĞİŞİKLİKLER:
    ✅ "Yeni asgari ücret 20.000 TL olarak açıklandı"
-   ✅ "Vergi indirimi yasası meclisten geçti"
 
 ❌ BUNLARI ASLA ALMA:
-- Genel yorumlar ("Uzmanlar dolar için ne diyor", "Altın yükselişini sürdürüyor")
+- Genel yorumlar
 - BES/emeklilik fon performansları
-- Şirket kâr/zarar açıklamaları (bireysel şirketler - Tesla, Apple vs.)
+- Şirket kâr/zarar açıklamaları
 - Banka kampanya/kredi haberleri
-- Teknik analiz/tahmin haberleri ("Dolar 50 TL'ye çıkabilir")
-- "Altında yükseliş bekleniyor" gibi belirsiz ifadeler
-- Suç/mahkeme/magazin
-- ESKİ TARİHLİ HABERLER (2025 veya 48 saatten eski)
-- Kripto para haberleri (Bitcoin, Ethereum - finansal regülasyon değilse)
+- Teknik analiz/tahmin haberleri
+- Kripto para haberleri
+- ESKİ TARİHLİ HABERLER
 
 ═══════════════════════════════════════════
 HAM HABERLER ({len(news_list)} adet):
@@ -416,40 +385,31 @@ HAM HABERLER ({len(news_list)} adet):
 {numbered_news}
 
 ═══════════════════════════════════════════
-ÇIKTI FORMATI (SADECE BU!):
+ÇIKTI FORMATI:
 ═══════════════════════════════════════════
 
 BAYRAM: [VAR/YOK veya isim]
-1. [Tam anlaşılır özet - Max 15 kelime - Kesme yok!]
-2. [Tam anlaşılır özet - Max 15 kelime - Kesme yok!]
+1. [Tam anlaşılır özet - Max 15 kelime]
+2. [Tam anlaşılır özet - Max 15 kelime]
 
 KURALLAR:
-✅ Her özet TAM CÜMLE (max 15 kelime ama KESME YOK!)
-✅ Duyuru haberlerinde SAAT belirt: "FED bugün 21:00'de faiz kararını açıklayacak"
-✅ Sonuç haberlerinde RAKAM belirt: "FED faizi %4.5'te tuttu", "Enflasyon %64.77 açıklandı"
-✅ Rekor haberlerinde RAKAM belirt: "Dolar rekor kırdı: 45.50 TL"
+✅ Her özet TAM CÜMLE (max 15 kelime)
+✅ Duyuru haberlerinde SAAT belirt
+✅ Sonuç haberlerinde RAKAM belirt
+✅ Rekor haberlerinde RAKAM belirt
 ✅ Emoji YOK
-✅ [Tarih: ...] etiketini ÇIKTI'da gösterme (sadece filtreleme için kullan)
-✅ Kritik kelimeler: açıklayacak, açıkladı, karar, rekor, kırdı, arttı, düştü (+ sayı/saat)
-
-❌ Finansal olmayan haberi ATLA
-❌ Önemsiz/genel haberi ATLA
-❌ ESKİ TARİHLİ haberi ATLA (48 saatten eski)
+✅ [Tarih: ...] etiketini gösterme
 ❌ HİÇBİR kritik haber yoksa: "HABER: YOK"
-
-BAŞKA AÇIKLAMA YAPMA!
 """
         
-        logger.info(f"🤖 [GEMİNİ 3 FLASH] {len(news_list)} haber filtreleniyor...")
+        logger.info(f"🤖 [GEMİNİ 2.0 FLASH] {len(news_list)} haber filtreleniyor...")
         
-        # 🛡️ GEMİNİ ÇAĞRISI + FALLBACK
         try:
             response = model.generate_content(prompt)
             result = response.text.strip()
             
-            # Boş yanıt kontrolü
             if not result or len(result) < 10:
-                logger.error("❌ [GEMİNİ] Boş yanıt döndü! Fallback...")
+                logger.error("❌ [GEMİNİ] Boş yanıt!")
                 return [], None
                 
         except Exception as gemini_error:
@@ -487,11 +447,10 @@ BAŞKA AÇIKLAMA YAPMA!
                 if len(parts) > 1:
                     clean_line = parts[1]
             
-            # Tam metni al
             if clean_line and len(clean_line) > 10:
                 summaries.append(clean_line)
         
-        logger.info(f"✅ [GEMİNİ 3 FLASH] {len(summaries)} kritik haber filtrelendi")
+        logger.info(f"✅ [GEMİNİ 2.0 FLASH] {len(summaries)} kritik haber filtrelendi")
         
         if not summaries:
             logger.warning("⚠️ [GEMİNİ] Bugün kritik haber yok")
@@ -505,13 +464,12 @@ BAŞKA AÇIKLAMA YAPMA!
 
 
 # ======================================
-# 🔥 DİNAMİK YARIM MARJ SİSTEMİ (V3.9.3)
+# 🔥 DİNAMİK TAM MARJ SİSTEMİ V4.0
 # ======================================
 
 def fetch_harem_html() -> Optional[str]:
     """
     Harem sayfasının HTML'ini çeker
-    🔥 V3.9: BeautifulSoup ile table parse
     """
     try:
         url = Config.HAREM_PRICE_URL
@@ -523,17 +481,13 @@ def fetch_harem_html() -> Optional[str]:
         response = requests.get(url, headers=headers, timeout=Config.HAREM_FETCH_TIMEOUT)
         response.raise_for_status()
         
-        # BeautifulSoup ile parse et
         soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Tablo kısmını bul
         table = soup.find('table')
+        
         if not table:
-            # Alternatif: div class'ları
             table = soup.find_all('div', class_='data')
         
         if table:
-            # İlk 5000 karakter (token tasarrufu)
             html_text = str(table)[:5000]
             logger.info(f"✅ [HAREM HTML] {len(html_text)} karakter alındı")
             return html_text
@@ -546,10 +500,12 @@ def fetch_harem_html() -> Optional[str]:
         return None
 
 
-def calculate_half_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
+def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
     """
-    Gemini'ye HTML verisini göndererek YARIM MARJLARI hesaplat
-    🔥 V3.9: GEMİNİ 3 FLASH + Veri besleme + Yarım marj + Gümüş özel
+    🔥 V4.0: Gemini'ye HTML verisini göndererek TAM MARJLARI hesaplat
+    
+    ÖNCEKİ (V3.9): Yarım marj hesaplıyordu
+    YENİ (V4.0): TAM MARJ hesaplıyor (kuyumcu gerçeği)
     """
     try:
         if not GEMINI_API_KEY:
@@ -557,51 +513,64 @@ def calculate_half_margins_with_gemini(html_data: str, api_prices: Dict) -> Opti
             return None
         
         genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
-        # 🔥 YENİ MODEL: GEMINI 3 FLASH
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        # API fiyatlarını formatla
+        api_str = "\n".join([
+            f"- {k}: {v:.2f} ₺" for k, v in api_prices.items()
+        ])
         
         prompt = f"""
-SEN BİR FİNANS ANALİSTİSİN.
+SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatlarını kullanarak kuyumcu marjlarını hesapla.
 
-Aşağıda Harem Altın'ın SATIŞ fiyatlarını içeren HTML tablosu var.
+📊 API'DEN GELEN HAM FİYATLAR (Borsa/Toptan):
+{api_str}
 
-HAM VERİ (HTML):
-{html_data}
+🌐 HAREM WEB SİTESİ HTML VERİSİ:
+{html_data[:3000]}
 
-API'den gelen HAM fiyatlar:
-- Gram Altın: {api_prices.get('GRA', 0)} ₺
-- Çeyrek Altın: {api_prices.get('CEYREKALTIN', 0)} ₺
-- Yarım Altın: {api_prices.get('YARIMALTIN', 0)} ₺
-- Tam Altın: {api_prices.get('TAMALTIN', 0)} ₺
-- Gram Gümüş: {api_prices.get('GUMUS', 0)} ₺
+🎯 GÖREV:
+1. HTML tablosundan Harem'in SATIŞ fiyatlarını çıkar
+2. Her ürün için TAM MARJ hesapla: ((Harem Satış - API Satış) / API Satış) × 100
+3. ONDALIK NOKTA KULLAN (virgül değil!)
 
-GÖREV:
-1. HTML tablosundan Harem SATIŞ fiyatlarını bul
-2. Her ürün için MARJ oranını hesapla: (Harem - API) / API × 100
-3. HESAPLANAN MARJIN YARISINI AL
+📐 ÖRNEK HESAPLAMA (Gram Altın):
+- Harem Satış: 7.407,92 ₺ (HTML'deki virgülü noktaya çevir: 7407.92)
+- API Satış: 7073.56 ₺
+- Fark: 7407.92 - 7073.56 = 334.36 ₺
+- TAM MARJ: (334.36 / 7073.56) × 100 = 4.73%
+- ÇIKTI: 4.73
 
-ÖZEL KURAL - GÜMÜŞ:
-- Gümüş için marjın %75'ini kullan (%100 yerine %75)
-- Örnek: Gerçek marj %20 ise → %15 kullan
+⚠️ DİKKAT:
+- HTML'de binlik ayraç NOKTA (7.267,68)
+- Ondalık ayraç VİRGÜL (7267,68)
+- Çıktıda NOKTA kullan: 4.73 (4,73 değil!)
+- SATIŞ sütunundaki değeri al (ALIŞ değil!)
 
-ÇIKTI FORMATI (sadece bu):
-MARJ_GRA: 2.6
-MARJ_C22: 0.1
-MARJ_YAR: 0.05
-MARJ_TAM: 0.0
-MARJ_AG: 15.0
+🎯 ÜRÜN EŞLEMELERİ:
+GRA = Harem Gram Altın
+C22 = Harem Çeyrek Altın
+YAR = Harem Yarım Altın
+TAM = Harem Tam Altın
+AG = Harem Gümüş
 
-HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
+📤 ÇIKTI FORMATI (SADECE BU - noktalı sayılar!):
+MARJ_GRA: 4.73
+MARJ_C22: 1.58
+MARJ_YAR: 1.90
+MARJ_TAM: 1.26
+MARJ_AG: 3.54
+
+HİÇBİR AÇIKLAMA YAPMA!
 """
         
-        logger.info("🤖 [GEMİNİ 3 FLASH MARJ] Hesaplama başlıyor...")
+        logger.info("🤖 [GEMİNİ 2.0 FLASH MARJ] TAM MARJ hesaplama başlıyor...")
         
         response = model.generate_content(prompt)
         result = response.text.strip()
         
         if not result or len(result) < 10:
-            logger.error("❌ [GEMİNİ MARJ] Boş yanıt döndü!")
+            logger.error("❌ [GEMİNİ MARJ] Boş yanıt!")
             return None
         
         # Parse et
@@ -612,7 +581,7 @@ HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
                 if len(parts) == 2:
                     key = parts[0].replace('MARJ_', '').strip()
                     try:
-                        value = float(parts[1].strip()) / 100  # %2.6 → 0.026
+                        value = float(parts[1].strip()) / 100  # %4.73 → 0.0473
                         margins[key] = value
                     except ValueError:
                         logger.warning(f"⚠️ [MARJ PARSE] Geçersiz değer: {line}")
@@ -622,7 +591,7 @@ HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
             logger.error("❌ [GEMİNİ MARJ] Parse edilemedi!")
             return None
         
-        logger.info(f"✅ [GEMİNİ 3 FLASH MARJ] {len(margins)} marj hesaplandı: {margins}")
+        logger.info(f"✅ [GEMİNİ 2.0 FLASH] {len(margins)} TAM MARJ hesaplandı: {margins}")
         return margins
         
     except Exception as e:
@@ -632,11 +601,18 @@ HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
 
 def update_dynamic_margins() -> bool:
     """
-    Dinamik marjları güncelle (Ayrı job'da çalışır - 00:01)
-    🔥 V3.9.3: KALICI BACKUP - margin_last_update TTL=0 (süresiz!)
+    🔥 V4.0: Dinamik marjları güncelle (TAM MARJ + SMOOTH GEÇİŞ)
+    
+    ZAMANLAMA: Gece 00:05 (snapshot'tan sonra, haberlerden önce)
+    
+    YENİ ÖZELLİKLER:
+    - TAM MARJ hesaplama (yarım değil)
+    - SMOOTH GEÇİŞ: %1.5+ fark varsa kademeli geçiş (3-4 gün)
+    - Jeweler cache rebuild
+    - Jeweler snapshot güncelleme
     """
     try:
-        logger.info("💰 [DİNAMİK MARJ] Güncelleme başlıyor...")
+        logger.info("💰 [DİNAMİK MARJ] TAM MARJ + SMOOTH GEÇİŞ güncelleme başlıyor...")
         
         # 1. HTML'i çek
         html_data = fetch_harem_html()
@@ -668,26 +644,52 @@ def update_dynamic_margins() -> bool:
             logger.error(f"❌ [DİNAMİK MARJ] API çağrısı başarısız: {api_error}")
             return False
         
-        # 3. Gemini ile marjları hesapla
-        margins = calculate_half_margins_with_gemini(html_data, api_prices)
+        # 3. Gemini ile TAM MARJLARI hesapla
+        new_margins = calculate_full_margins_with_gemini(html_data, api_prices)
         
-        if not margins:
+        if not new_margins:
             logger.warning("⚠️ [DİNAMİK MARJ] Gemini hesaplayamadı, eski marjlar kullanılacak")
             return False
         
-        # 4. Redis'e kaydet (24 saat TTL - bugünkü marjlar)
-        margin_key = Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins')
-        set_cache(margin_key, margins, ttl=86400)
+        # 4. 🔥 SMOOTH GEÇİŞ - Eski marjları al
+        old_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')) or {}
         
-        # 5. 🔥 KALICI BACKUP (TTL=0, süresiz!) - En son başarılı marjlar
+        # 5. 🔥 SMOOTH GEÇİŞ - Kademeli güncelleme
+        smooth_margins = {}
+        threshold = Config.MARGIN_SMOOTH_THRESHOLD  # 0.015 (%1.5)
+        
+        for key, new_val in new_margins.items():
+            old_val = old_margins.get(key, new_val)
+            diff = abs(new_val - old_val)
+            
+            if diff > threshold and Config.MARGIN_SMOOTH_TRANSITION:
+                # Fark %1.5'ten büyük → Ortalama al (kademeli geçiş)
+                smooth_margins[key] = round((old_val + new_val) / 2, 4)
+                logger.warning(
+                    f"📊 [SMOOTH GEÇİŞ] {key}: {old_val:.4f} → {new_val:.4f} "
+                    f"(Fark: {diff:.4f}) → SMOOTH: {smooth_margins[key]:.4f}"
+                )
+            else:
+                # Fark küçük → Direkt uygula
+                smooth_margins[key] = new_val
+        
+        # 6. Redis'e kaydet (24 saat TTL - bugünkü marjlar)
+        margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
+        set_cache(margin_key, smooth_margins, ttl=86400)
+        
+        # 7. 🔥 KALICI BACKUP (TTL=0, süresiz!)
         update_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
         set_cache(update_key, {
             'timestamp': time.time(),
-            'margins': margins
-        }, ttl=0)  # ✅ SÜRESIZ! Fallback için her zaman hazır!
+            'margins': smooth_margins
+        }, ttl=0)
         
-        logger.info(f"✅ [DİNAMİK MARJ] Kaydedildi: {margins}")
+        logger.info(f"✅ [DİNAMİK MARJ] TAM MARJ + SMOOTH kaydedildi: {smooth_margins}")
         logger.info(f"💾 [DİNAMİK MARJ] KALICI BACKUP kaydedildi (TTL=0)")
+        
+        # 8. 🔥 JEWELER CACHE VE SNAPSHOT GÜNCELLENMELİ
+        # (Bu kısım financial_service.py'de yapılacak)
+        
         return True
         
     except Exception as e:
@@ -697,29 +699,18 @@ def update_dynamic_margins() -> bool:
 
 def get_dynamic_margins() -> Dict[str, float]:
     """
-    🔥 V3.9.3: AKILLI FALLBACK + BOOTSTRAP
-    
-    ÖNCEKİ SORUN (V3.9.2):
-    - Gemini çökerse → Config'deki sabit marjlar kullanılıyordu
-    - Ani fiyat değişimi → Alarmlar patlar, kullanıcılar şaşırır!
-    
-    YENİ ÇÖZÜM (V3.9.3):
-    - Gemini çökerse → En son başarılı marjları kullan (smooth geçiş)
-    - İlk kurulumda → HEMEN Gemini'yi çağır (BOOTSTRAP)
+    Dinamik marjları getir (TAM MARJ)
     
     FALLBACK SIRASI:
-    1. Redis (bugünkü Gemini marjları) → EN GÜNCEL ✅
-    2. margin_last_update (en son başarılı) → SMOOTH FALLBACK ✅
-    3. BOOTSTRAP (ilk kurulum) → HEMEN GEMİNİ ÇAĞIR! ✅
-    
-    Returns:
-        Dict: {"GRA": 0.026, "C22": 0.001, ...}
+    1. Redis (bugünkü marjlar)
+    2. margin_last_update (en son başarılı)
+    3. BOOTSTRAP (ilk kurulum)
     """
-    # 1️⃣ BUGÜNKÜ GEMİNİ MARJLARINI DENE
-    dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins'))
+    # 1️⃣ BUGÜNKÜ MARJLARI DENE
+    dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
     
     if dynamic_margins and isinstance(dynamic_margins, dict):
-        logger.debug(f"✅ [DİNAMİK MARJ] Bugünkü Gemini marjları: {len(dynamic_margins)} marj")
+        logger.debug(f"✅ [DİNAMİK MARJ] Bugünkü marjlar: {len(dynamic_margins)} marj")
         return dynamic_margins
     
     # 2️⃣ EN SON BAŞARILI MARJLARI AL
@@ -731,50 +722,36 @@ def get_dynamic_margins() -> Dict[str, float]:
         timestamp = last_successful.get('timestamp', 0)
         
         if margins and isinstance(margins, dict):
-            # Kaç gün önce başarılıydı?
             days_ago = (time.time() - timestamp) / 86400
             
             logger.warning(
-                f"⚠️ [DİNAMİK MARJ FALLBACK] Gemini çalışmıyor! "
-                f"En son başarılı marjlar kullanılıyor ({days_ago:.1f} gün önce)"
+                f"⚠️ [DİNAMİK MARJ FALLBACK] En son başarılı marjlar kullanılıyor "
+                f"({days_ago:.1f} gün önce)"
             )
             
-            return margins  # ✅ SMOOTH FALLBACK!
+            return margins
     
-    # 3️⃣ 🔥 HİÇBİR ŞEY YOK → BOOTSTRAP (İLK KURULUM!)
-    logger.error(
-        "🔴 [DİNAMİK MARJ BOOTSTRAP] Marj yok! "
-        "HEMEN Gemini çağrılıyor..."
-    )
+    # 3️⃣ BOOTSTRAP (İLK KURULUM)
+    logger.error("🔴 [DİNAMİK MARJ BOOTSTRAP] Marj yok! Gemini çağrılıyor...")
     
-    # 🔥 HEMEN Gemini'yi çağır ve marjları çek!
     bootstrap_success = update_dynamic_margins()
     
     if bootstrap_success:
-        # Başarılı olduysa, yeni marjları al
-        fresh_margins = get_cache(Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins'))
+        fresh_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
         
         if fresh_margins:
-            logger.info("✅ [DİNAMİK MARJ BOOTSTRAP] Gemini başarılı! Marjlar hazır!")
+            logger.info("✅ [DİNAMİK MARJ BOOTSTRAP] Gemini başarılı!")
             return fresh_margins
     
-    # 🔥 BOOTSTRAP BAŞARISIZ → VARSAYILAN MARJ (0.0)
-    logger.critical(
-        "💣 [DİNAMİK MARJ BOOTSTRAP] Gemini başarısız! "
-        "Varsayılan marj (0.0) kullanılıyor - FİYATLAR HAM!"
-    )
+    # BOOTSTRAP BAŞARISIZ → Varsayılan 0.0
+    logger.critical("💣 [DİNAMİK MARJ BOOTSTRAP] Gemini başarısız! HAM FİYAT kullanılacak!")
     
-    # 🔥 Tüm varlıklar için 0.0 marj döndür (Ham fiyat gibi)
     fallback_margins = {}
     
     # Dövizler
-    currencies = [
-        "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB",
-        "SAR", "AED", "KWD", "BHD", "OMR", "QAR",
-        "CNY", "SEK", "NOK", "PLN", "RON", "CZK",
-        "EGP", "RSD", "HUF", "BAM"
-    ]
-    for code in currencies:
+    for code in ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB", "SAR", "AED", 
+                 "KWD", "BHD", "OMR", "QAR", "CNY", "SEK", "NOK", "PLN", "RON", 
+                 "CZK", "EGP", "RSD", "HUF", "BAM"]:
         fallback_margins[code] = 0.0
     
     # Altınlar
@@ -785,7 +762,7 @@ def get_dynamic_margins() -> Dict[str, float]:
     fallback_margins["AG"] = 0.0
     fallback_margins["GUMUS"] = 0.0
     
-    logger.warning(f"⚠️ [DİNAMİK MARJ BOOTSTRAP] Fallback: {len(fallback_margins)} marj (0.0)")
+    logger.warning(f"⚠️ [FALLBACK] {len(fallback_margins)} marj (0.0)")
     return fallback_margins
 
 
@@ -834,33 +811,249 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
     return schedule
 
 
-# ======================================
-# 🕐 BAYRAM TTL - Gece 03:00'e kadar
-# ======================================
-
 def calculate_bayram_ttl() -> int:
     """
-    Bayram mesajı için TTL hesapla
-    Gece 03:00'e kadar geçerli (vardiya değişiminden sonra temizlensin)
+    Bayram mesajı için TTL hesapla (gece 03:00'e kadar)
     """
     now = datetime.now()
-    
-    # Yarın saat 03:00
     tomorrow_3am = (now + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
-    
-    # Şu andan yarın 03:00'e kadar kalan saniye
     ttl = int((tomorrow_3am - now).total_seconds())
     
     logger.debug(f"🕐 [BAYRAM TTL] {ttl} saniye (yarın 03:00'e kadar)")
     return ttl
 
 
+# ======================================
+# 🔥 PREPARE FONKSIYONLARI (YENİ! V4.0)
+# ======================================
+
+def prepare_morning_news() -> bool:
+    """
+    🔥 V4.0: SABAH HABERLERİNİ HAZIRLA (23:55'te çağrılır)
+    
+    GÖREV:
+    1. Haberleri topla
+    2. Dedup yap
+    3. Gemini filtrele
+    4. Bayram kontrolü
+    5. PENDING cache'e kaydet (geçici - 10 dakika TTL)
+    
+    NOT: Henüz yayınlama YOK! (00:00'da publish_morning_news yapacak)
+    """
+    try:
+        logger.info("🌅 [SABAH HAZIRLIK] Haberler hazırlanıyor (Gemini çağrısı)...")
+        
+        # 1. Haberleri topla
+        news_list = fetch_all_news()
+        
+        if not news_list:
+            logger.warning("⚠️ [SABAH HAZIRLIK] Haber bulunamadı!")
+            pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
+            set_cache(pending_key, {'summaries': [], 'bayram': None}, ttl=600)
+            return True
+        
+        # 2. Vardiyalar arası dedup
+        fresh_news = filter_already_shown(news_list)
+        
+        if not fresh_news:
+            logger.warning("⚠️ [SABAH HAZIRLIK] Tüm haberler daha önce gösterilmiş!")
+            pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
+            set_cache(pending_key, {'summaries': [], 'bayram': None}, ttl=600)
+            return True
+        
+        # 3. Gemini filtrele
+        summaries, bayram_msg = summarize_news_batch(fresh_news)
+        
+        # 4. PENDING cache'e kaydet (10 dakika TTL - 00:00'da kullanılacak)
+        pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
+        set_cache(pending_key, {
+            'summaries': summaries,
+            'bayram': bayram_msg
+        }, ttl=600)
+        
+        logger.info(f"✅ [SABAH HAZIRLIK] {len(summaries)} haber hazırlandı (PENDING)")
+        if bayram_msg:
+            logger.info(f"🏦 [SABAH HAZIRLIK] Bayram: {bayram_msg}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ [SABAH HAZIRLIK] Hata: {e}")
+        return False
+
+
+def publish_morning_news() -> bool:
+    """
+    🔥 V4.0: SABAH HABERLERİNİ YAYINLA (00:00'da çağrılır)
+    
+    GÖREV:
+    1. PENDING cache'den al (23:55'te hazırlandı)
+    2. Vardiya planla
+    3. Shift cache'e kaydet
+    4. Bayram kaydet
+    5. PENDING cache sil
+    """
+    try:
+        logger.info("🌅 [SABAH YAYINLA] Hazır haberler yayınlanıyor...")
+        
+        # 1. PENDING'den al
+        pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
+        pending_data = get_cache(pending_key)
+        
+        if not pending_data:
+            logger.error("❌ [SABAH YAYINLA] PENDING verisi yok! (23:55'te hazırlanmalıydı)")
+            return False
+        
+        summaries = pending_data.get('summaries', [])
+        bayram_msg = pending_data.get('bayram')
+        
+        # 2. Bayram kaydet
+        if bayram_msg:
+            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
+            bayram_ttl = calculate_bayram_ttl()
+            set_cache(bayram_key, bayram_msg, ttl=bayram_ttl)
+            logger.info(f"🏦 [SABAH YAYINLA] Bayram kaydedildi: {bayram_msg}")
+        
+        # 3. Vardiya planla
+        if summaries:
+            schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
+            
+            # 4. Shift cache'e kaydet
+            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
+            set_cache(cache_key, schedule, ttl=43200)
+            
+            # 5. Gösterilen haberleri geçmişe kaydet
+            save_shown_news(summaries)
+            
+            logger.info(f"✅ [SABAH YAYINLA] {len(schedule)} haber yayınlandı!")
+        else:
+            # Haber yok, boş cache kaydet
+            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
+            set_cache(cache_key, [], ttl=43200)
+            logger.warning("⚠️ [SABAH YAYINLA] Kritik haber yok")
+        
+        # 6. PENDING cache sil
+        delete_cache(pending_key)
+        
+        # 7. Son güncelleme kaydı
+        update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
+        set_cache(update_key, {
+            'shift': 'morning',
+            'timestamp': time.time(),
+            'news_count': len(summaries),
+            'bayram': bayram_msg if bayram_msg else 'yok'
+        }, ttl=86400)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ [SABAH YAYINLA] Hata: {e}")
+        return False
+
+
+def prepare_evening_news() -> bool:
+    """
+    🔥 V4.0: AKŞAM HABERLERİNİ HAZIRLA (11:55'te çağrılır)
+    """
+    try:
+        logger.info("🌆 [AKŞAM HAZIRLIK] Haberler hazırlanıyor (Gemini çağrısı)...")
+        
+        news_list = fetch_all_news()
+        
+        if not news_list:
+            logger.warning("⚠️ [AKŞAM HAZIRLIK] Haber bulunamadı!")
+            pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
+            set_cache(pending_key, {'summaries': [], 'bayram': None}, ttl=600)
+            return True
+        
+        fresh_news = filter_already_shown(news_list)
+        
+        if not fresh_news:
+            logger.warning("⚠️ [AKŞAM HAZIRLIK] Tüm haberler daha önce gösterilmiş!")
+            pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
+            set_cache(pending_key, {'summaries': [], 'bayram': None}, ttl=600)
+            return True
+        
+        summaries, bayram_msg = summarize_news_batch(fresh_news)
+        
+        pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
+        set_cache(pending_key, {
+            'summaries': summaries,
+            'bayram': bayram_msg
+        }, ttl=600)
+        
+        logger.info(f"✅ [AKŞAM HAZIRLIK] {len(summaries)} haber hazırlandı (PENDING)")
+        if bayram_msg:
+            logger.info(f"🏦 [AKŞAM HAZIRLIK] Bayram: {bayram_msg}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ [AKŞAM HAZIRLIK] Hata: {e}")
+        return False
+
+
+def publish_evening_news() -> bool:
+    """
+    🔥 V4.0: AKŞAM HABERLERİNİ YAYINLA (12:00'da çağrılır)
+    """
+    try:
+        logger.info("🌆 [AKŞAM YAYINLA] Hazır haberler yayınlanıyor...")
+        
+        pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
+        pending_data = get_cache(pending_key)
+        
+        if not pending_data:
+            logger.error("❌ [AKŞAM YAYINLA] PENDING verisi yok! (11:55'te hazırlanmalıydı)")
+            return False
+        
+        summaries = pending_data.get('summaries', [])
+        bayram_msg = pending_data.get('bayram')
+        
+        if bayram_msg:
+            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
+            bayram_ttl = calculate_bayram_ttl()
+            set_cache(bayram_key, bayram_msg, ttl=bayram_ttl)
+            logger.info(f"🏦 [AKŞAM YAYINLA] Bayram kaydedildi: {bayram_msg}")
+        
+        if summaries:
+            schedule = plan_shift_schedule(summaries, start_hour=12, end_hour=24)
+            
+            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
+            set_cache(cache_key, schedule, ttl=43200)
+            
+            save_shown_news(summaries)
+            
+            logger.info(f"✅ [AKŞAM YAYINLA] {len(schedule)} haber yayınlandı!")
+        else:
+            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
+            set_cache(cache_key, [], ttl=43200)
+            logger.warning("⚠️ [AKŞAM YAYINLA] Kritik haber yok")
+        
+        delete_cache(pending_key)
+        
+        update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
+        set_cache(update_key, {
+            'shift': 'evening',
+            'timestamp': time.time(),
+            'news_count': len(summaries),
+            'bayram': bayram_msg if bayram_msg else 'yok'
+        }, ttl=86400)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ [AKŞAM YAYINLA] Hata: {e}")
+        return False
+
+
+# ======================================
+# BOOTSTRAP & BANNER
+# ======================================
+
 def bootstrap_news_system() -> bool:
     """
     İlk çalıştırma bootstrap
-    🔒 RACE CONDITION FIX: Lock mekanizması ile aynı anda sadece 1 bootstrap
-    🐛 V3.9.1 FIX: Boş liste kontrolü düzeltildi
-    💰 V3.9.2 FIX: Bootstrap dinamik marj güncellemez (sadece haberler)
     """
     try:
         current_hour = datetime.now().hour
@@ -869,33 +1062,30 @@ def bootstrap_news_system() -> bool:
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             shift_name = "SABAH"
             shift_type = "morning"
-            prepare_func = prepare_morning_shift
         else:
             cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
             shift_name = "AKŞAM"
             shift_type = "evening"
-            prepare_func = prepare_evening_shift
         
-        # 🔒 LOCK: Aynı vardiya için eş zamanlı bootstrap engelle
         with _bootstrap_lock:
-            # Başka thread bootstrap yapıyor mu?
             if _bootstrap_in_progress[shift_type]:
-                logger.info(f"ℹ️ [BOOTSTRAP] {shift_name} vardiyası zaten hazırlanıyor (başka thread), atlanıyor...")
+                logger.info(f"ℹ️ [BOOTSTRAP] {shift_name} vardiyası zaten hazırlanıyor...")
                 return False
             
-            # Cache'de veri var mı?
             existing_data = get_cache(cache_key)
             if existing_data is not None:
                 logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır")
                 return False
             
-            # Bootstrap başlıyor
             _bootstrap_in_progress[shift_type] = True
             logger.warning(f"⚠️ [BOOTSTRAP] {shift_name} vardiyası boş! Doldurma başlıyor...")
         
-        # 🔓 Lock dışında prepare yap
         try:
-            success = prepare_func()
+            # Bootstrap: Prepare + Publish birlikte
+            if shift_type == 'morning':
+                success = prepare_morning_news() and publish_morning_news()
+            else:
+                success = prepare_evening_news() and publish_evening_news()
             
             if success:
                 logger.info(f"🚀 [BOOTSTRAP] {shift_name} vardiyası dolduruldu!")
@@ -917,183 +1107,6 @@ def bootstrap_news_system() -> bool:
                     _bootstrap_in_progress['evening'] = False
         except:
             pass
-        return False
-
-
-def prepare_morning_shift() -> bool:
-    """
-    SABAH VARDİYASI (00:00 - 12:00)
-    🔥 V3.9.2: Dinamik marj güncelleme KALDIRILDI (ayrı job'da yapılıyor - 00:01)
-    """
-    try:
-        logger.info("🌅 [SABAH VARDİYASI] Hazırlık başlıyor...")
-        
-        # 💰 MARJ GÜNCELLEME KALDIRILDI - Artık ayrı job'da (00:01)
-        
-        # 1. Haberleri topla
-        news_list = fetch_all_news()
-        
-        if not news_list:
-            logger.warning("⚠️ [SABAH VARDİYASI] Haber bulunamadı!")
-            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-            set_cache(cache_key, [], ttl=43200)
-            
-            # Son güncelleme kaydı
-            update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
-            set_cache(update_key, {
-                'shift': 'morning',
-                'timestamp': time.time(),
-                'news_count': 0,
-                'bayram': 'yok'
-            }, ttl=86400)
-            
-            return True
-        
-        # 2. 🔥 Vardiyalar arası dedup - Daha önce gösterilenleri filtrele
-        fresh_news = filter_already_shown(news_list)
-        
-        if not fresh_news:
-            logger.warning("⚠️ [SABAH VARDİYASI] Tüm haberler daha önce gösterilmiş!")
-            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-            set_cache(cache_key, [], ttl=43200)
-            
-            # Son güncelleme kaydı
-            update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
-            set_cache(update_key, {
-                'shift': 'morning',
-                'timestamp': time.time(),
-                'news_count': 0,
-                'bayram': 'yok'
-            }, ttl=86400)
-            
-            return True
-        
-        # 3. Gemini filtrele
-        summaries, bayram_msg = summarize_news_batch(fresh_news)
-        
-        if not summaries:
-            logger.warning("⚠️ [SABAH VARDİYASI] Kritik haber yok")
-            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-            set_cache(cache_key, [], ttl=43200)
-            
-            # 🔥 Bayram kaydet (varsa)
-            if bayram_msg:
-                bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-                bayram_ttl = calculate_bayram_ttl()
-                set_cache(bayram_key, bayram_msg, ttl=bayram_ttl)
-                logger.info(f"🏦 [SABAH VARDİYASI] Bayram kaydedildi: {bayram_msg}")
-            
-            # Son güncelleme kaydı
-            update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
-            set_cache(update_key, {
-                'shift': 'morning',
-                'timestamp': time.time(),
-                'news_count': 0,
-                'bayram': bayram_msg if bayram_msg else 'yok'
-            }, ttl=86400)
-            
-            return True
-        
-        # 4. Bayram kaydet
-        if bayram_msg:
-            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            bayram_ttl = calculate_bayram_ttl()
-            set_cache(bayram_key, bayram_msg, ttl=bayram_ttl)
-            logger.info(f"🏦 [SABAH VARDİYASI] Bayram kaydedildi: {bayram_msg}")
-        
-        # 5. Planla
-        schedule = plan_shift_schedule(summaries, start_hour=0, end_hour=12)
-        
-        # 6. Cache'e kaydet
-        cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
-        set_cache(cache_key, schedule, ttl=43200)
-        
-        # 7. 🔥 Gösterilen haberleri geçmişe kaydet
-        save_shown_news(summaries)
-        
-        # 8. Son güncelleme kaydı
-        update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
-        set_cache(update_key, {
-            'shift': 'morning',
-            'timestamp': time.time(),
-            'news_count': len(schedule),
-            'bayram': bayram_msg if bayram_msg else 'yok'
-        }, ttl=86400)
-        
-        logger.info(f"✅ [SABAH VARDİYASI] {len(schedule)} kritik haber hazır!")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ [SABAH VARDİYASI] Hata: {e}")
-        return False
-
-
-def prepare_evening_shift() -> bool:
-    """
-    AKŞAM VARDİYASI (12:00 - 00:00)
-    🔥 V3.9: Vardiyalar arası dedup (Marj güncellemesi YOK)
-    """
-    try:
-        logger.info("🌆 [AKŞAM VARDİYASI] Hazırlık başlıyor...")
-        
-        # 1. Haberleri topla
-        news_list = fetch_all_news()
-        
-        if not news_list:
-            logger.warning("⚠️ [AKŞAM VARDİYASI] Haber bulunamadı!")
-            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-            set_cache(cache_key, [], ttl=43200)
-            return True
-        
-        # 2. 🔥 Vardiyalar arası dedup - Daha önce gösterilenleri filtrele
-        fresh_news = filter_already_shown(news_list)
-        
-        if not fresh_news:
-            logger.warning("⚠️ [AKŞAM VARDİYASI] Tüm haberler daha önce gösterilmiş!")
-            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-            set_cache(cache_key, [], ttl=43200)
-            return True
-        
-        # 3. Gemini filtrele
-        summaries, bayram_msg = summarize_news_batch(fresh_news)
-        
-        if not summaries:
-            logger.warning("⚠️ [AKŞAM VARDİYASI] Kritik haber yok")
-            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-            set_cache(cache_key, [], ttl=43200)
-            return True
-        
-        # 4. Bayram kaydet
-        if bayram_msg:
-            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            bayram_ttl = calculate_bayram_ttl()
-            set_cache(bayram_key, bayram_msg, ttl=bayram_ttl)
-            logger.info(f"🏦 [AKŞAM VARDİYASI] Bayram kaydedildi: {bayram_msg}")
-        
-        # 5. Planla
-        schedule = plan_shift_schedule(summaries, start_hour=12, end_hour=24)
-        
-        # 6. Cache'e kaydet
-        cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
-        set_cache(cache_key, schedule, ttl=43200)
-        
-        # 7. 🔥 Gösterilen haberleri geçmişe kaydet
-        save_shown_news(summaries)
-        
-        # 8. Son güncelleme kaydı
-        update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
-        set_cache(update_key, {
-            'shift': 'evening',
-            'timestamp': time.time(),
-            'news_count': len(schedule),
-            'bayram': bayram_msg if bayram_msg else 'yok'
-        }, ttl=86400)
-        
-        logger.info(f"✅ [AKŞAM VARDİYASI] {len(schedule)} kritik haber hazır!")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ [AKŞAM VARDİYASI] Hata: {e}")
         return False
 
 
@@ -1147,9 +1160,9 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.9.3 ULTIMATE + SMART MARGIN FALLBACK - GEMINI 3 FLASH - Test\n")
+    print("🧪 News Manager V4.0 ULTIMATE - TAM MARJ + SMOOTH + PREPARE/PUBLISH\n")
     
-    print("1️⃣ HABER TOPLAMA (GNews 3 gün + NewsData):")
+    print("1️⃣ HABER TOPLAMA:")
     news_list = fetch_all_news()
     print(f"   ✅ {len(news_list)} haber toplandı\n")
     
@@ -1162,12 +1175,12 @@ def test_news_manager():
     if news_list:
         print("2️⃣ VARDIYALAR ARASI DEDUP:")
         fresh_news = filter_already_shown(news_list)
-        print(f"   ✅ {len(fresh_news)} yeni haber (tekrar filtrelendi)\n")
+        print(f"   ✅ {len(fresh_news)} yeni haber\n")
     
     if fresh_news:
-        print("3️⃣ ULTRA SIKI FİLTRE + 48 SAAT (GEMINI 3 FLASH):")
+        print("3️⃣ GEMINI FİLTRE:")
         summaries, bayram_msg = summarize_news_batch(fresh_news)
-        print(f"   ✅ {len(summaries)} KRİTİK haber filtrelendi\n")
+        print(f"   ✅ {len(summaries)} kritik haber\n")
         
         if bayram_msg:
             print(f"   🏦 BAYRAM: {bayram_msg}\n")
@@ -1176,11 +1189,9 @@ def test_news_manager():
             print("   Kritik haberler:")
             for i, summary in enumerate(summaries, 1):
                 print(f"   {i}. {summary}")
-        else:
-            print("   ℹ️ Bugün kritik haber yok")
         print()
     
-    print("4️⃣ DİNAMİK MARJ SİSTEMİ (SMART FALLBACK + BOOTSTRAP):")
+    print("4️⃣ DİNAMİK TAM MARJ SİSTEMİ:")
     margins = get_dynamic_margins()
     print(f"   ✅ {len(margins)} marj alındı!\n")
     if margins:
