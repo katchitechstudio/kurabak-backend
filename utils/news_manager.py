@@ -53,6 +53,10 @@ _bootstrap_in_progress = {
     'evening': False
 }
 
+# 🔥 MARGIN ASYNC BOOTSTRAP LOCK
+_margin_bootstrap_lock = threading.Lock()
+_margin_bootstrap_in_progress = False
+
 
 # ======================================
 # 🔧 GELIŞMIŞ DEDUP - SIMILARITY KONTROLÜ
@@ -501,6 +505,67 @@ def fetch_harem_html() -> Optional[str]:
         return None
 
 
+# 🔥 ASYNC MARGIN BOOTSTRAP
+def async_margin_bootstrap():
+    """
+    🔥 KOMBO TAKTİK: Arka planda marj güncelle (non-blocking)
+    
+    ÇALIŞMA PRENSİBİ:
+    - Worker devam eder (hızlı!)
+    - Arka planda thread başlar
+    - 3-5 saniye sonra marjlar hazır
+    - Bir sonraki worker taze marjları kullanır!
+    """
+    global _margin_bootstrap_in_progress
+    
+    try:
+        logger.info("🔄 [ASYNC MARJ] Arka planda başlatıldı...")
+        success = update_dynamic_margins()
+        
+        if success:
+            logger.info("✅ [ASYNC MARJ] Tamamlandı! Taze marjlar hazır!")
+        else:
+            logger.warning("⚠️ [ASYNC MARJ] Güncelleme başarısız, eski marjlar kullanılacak")
+    except Exception as e:
+        logger.error(f"❌ [ASYNC MARJ] Hata: {e}")
+    finally:
+        with _margin_bootstrap_lock:
+            _margin_bootstrap_in_progress = False
+
+
+def fetch_harem_html() -> Optional[str]:
+    """
+    Harem sayfasının HTML'ini çeker
+    """
+    try:
+        url = Config.HAREM_PRICE_URL
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        logger.info(f"🕷️ [HAREM HTML] Çekiliyor: {url}")
+        response = requests.get(url, headers=headers, timeout=Config.HAREM_FETCH_TIMEOUT)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        table = soup.find('table')
+        
+        if not table:
+            table = soup.find_all('div', class_='data')
+        
+        if table:
+            html_text = str(table)[:5000]
+            logger.info(f"✅ [HAREM HTML] {len(html_text)} karakter alındı")
+            return html_text
+        else:
+            logger.error("❌ [HAREM HTML] Tablo bulunamadı!")
+            return None
+        
+    except Exception as e:
+        logger.error(f"❌ [HAREM HTML] Hata: {e}")
+        return None
+
+
 def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
     """
     🔥 V4.0: Gemini'ye HTML verisini göndererek TAM MARJLARI hesaplat
@@ -700,13 +765,16 @@ def update_dynamic_margins() -> bool:
 
 def get_dynamic_margins() -> Dict[str, float]:
     """
-    Dinamik marjları getir (TAM MARJ)
+    🔥 KOMBO TAKTİK: Dinamik marjları getir (TAM MARJ + ASYNC BOOTSTRAP)
     
     FALLBACK SIRASI:
-    1. Redis (bugünkü marjlar)
-    2. margin_last_update (en son başarılı)
-    3. BOOTSTRAP (ilk kurulum)
+    1. Redis (bugünkü marjlar) → En taze!
+    2. margin_last_update (en son başarılı) → Fallback
+       → 🔥 YENİ: 1 günden eskiyse ASYNC bootstrap tetikle!
+    3. BOOTSTRAP (ilk kurulum) → İlk çalışma
     """
+    global _margin_bootstrap_in_progress
+    
     # 1️⃣ BUGÜNKÜ MARJLARI DENE
     dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
     
@@ -725,14 +793,30 @@ def get_dynamic_margins() -> Dict[str, float]:
         if margins and isinstance(margins, dict):
             days_ago = (time.time() - timestamp) / 86400
             
+            # 🔥 KOMBO TAKTİK: 1 GÜNDEN ESKİYSE ASYNC BOOTSTRAP TETİKLE!
+            if days_ago > 1.0:
+                with _margin_bootstrap_lock:
+                    if not _margin_bootstrap_in_progress:
+                        _margin_bootstrap_in_progress = True
+                        logger.warning(
+                            f"⚠️ [DİNAMİK MARJ] En son marj {days_ago:.1f} gün önce! "
+                            f"ASYNC Bootstrap başlatılıyor..."
+                        )
+                        
+                        # 🔥 Arka planda thread başlat (non-blocking!)
+                        thread = threading.Thread(target=async_margin_bootstrap, daemon=True)
+                        thread.start()
+                        
+                        logger.info("🚀 [ASYNC MARJ] Thread başlatıldı, worker devam ediyor...")
+            
             logger.warning(
-                f"⚠️ [DİNAMİK MARJ FALLBACK] En son başarılı marjlar kullanılıyor "
-                f"({days_ago:.1f} gün önce)"
+                f"⚠️ [DİNAMİK MARJ] Fallback kullanıldı (margin_last_update) - "
+                f"{days_ago:.1f} gün önce"
             )
             
             return margins
     
-    # 3️⃣ BOOTSTRAP (İLK KURULUM)
+    # 3️⃣ BOOTSTRAP (İLK KURULUM) - İlk çalışmada kaçınılmaz
     logger.error("🔴 [DİNAMİK MARJ BOOTSTRAP] Marj yok! Gemini çağrılıyor...")
     
     bootstrap_success = update_dynamic_margins()
