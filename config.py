@@ -294,6 +294,10 @@ class Config:
         'raw_snapshot': 'kurabak:raw_snapshot',           # Ham fiyatlar (asla değişmez)
         'jeweler_snapshot': 'kurabak:jeweler_snapshot',   # Marjlı fiyatlar (marj değişince güncellenir)
         
+        # 🔙 BACKWARD COMPATIBILITY (Eski kodlar için)
+        'yesterday_prices': 'kurabak:raw_snapshot',           # → raw_snapshot ile aynı
+        'yesterday_prices_jeweler': 'kurabak:jeweler_snapshot',  # → jeweler_snapshot ile aynı
+        
         # Worker + Şef sistemleri
         'last_worker_run': 'kurabak:last_worker_run',
         'backup_timestamp': 'kurabak:backup:timestamp',
