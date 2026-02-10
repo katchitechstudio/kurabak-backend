@@ -1,6 +1,6 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V3.9.2 ULTIMATE + DYNAMIC MARGINS 📰🚀💰
-==========================================================================
+News Manager - GÜNLÜK HABER SİSTEMİ V3.9.3 ULTIMATE + SMART MARGIN FALLBACK 📰🚀💰
+===================================================================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
 ✅ GELİŞMİŞ DEDUP: Benzerlik + Vardiyalar arası
@@ -15,6 +15,15 @@ News Manager - GÜNLÜK HABER SİSTEMİ V3.9.2 ULTIMATE + DYNAMIC MARGINS 📰�
 ✅ 🔥 DİNAMİK YARIM MARJ: Günde 1 kere Harem'den otomatik marj hesaplama (V3.9)
 ✅ 🐛 BOOTSTRAP BOŞ LİSTE FIX: [] kontrolü düzeltildi (V3.9.1)
 ✅ 🔥 MARJ BAĞIMSIZLIĞI: Dinamik marj ayrı job'da çalışıyor (V3.9.2)
+✅ 🔥 SMART MARGIN FALLBACK: Config kullanmıyor, en son başarılı marjları kullanıyor (V3.9.3)
+✅ 🔥 MARGIN BOOTSTRAP: İlk kurulumda otomatik Gemini çağrısı (V3.9.3)
+
+V3.9.3 Değişiklikler:
+- 🔥 AKILLI FALLBACK: Gemini çökerse Config yerine en son başarılı marjları kullan
+- 🔥 BOOTSTRAP: margin_last_update yoksa HEMEN Gemini çağır
+- 🔥 CONFIG MARJ KALDIRILDI: Smooth geçiş için sadece geçmiş marjlar kullanılıyor
+- 🔥 KALICI BACKUP: margin_last_update TTL=0 (süresiz, her zaman hazır)
+- ⚡ ANI FİYAT DEĞİŞİMİ ÖNLENDİ: Kullanıcı deneyimi korundu
 """
 
 import os
@@ -496,7 +505,7 @@ BAŞKA AÇIKLAMA YAPMA!
 
 
 # ======================================
-# 🔥 DİNAMİK YARIM MARJ SİSTEMİ (V3.9)
+# 🔥 DİNAMİK YARIM MARJ SİSTEMİ (V3.9.3)
 # ======================================
 
 def fetch_harem_html() -> Optional[str]:
@@ -624,7 +633,7 @@ HİÇBİR AÇIKLAMA YAPMA, SADECE YUKARI FORMATTA VER!
 def update_dynamic_margins() -> bool:
     """
     Dinamik marjları güncelle (Ayrı job'da çalışır - 00:01)
-    🔥 V3.9.2: Haberlerden bağımsız, sadece marj güncelleme
+    🔥 V3.9.3: KALICI BACKUP - margin_last_update TTL=0 (süresiz!)
     """
     try:
         logger.info("💰 [DİNAMİK MARJ] Güncelleme başlıyor...")
@@ -666,23 +675,118 @@ def update_dynamic_margins() -> bool:
             logger.warning("⚠️ [DİNAMİK MARJ] Gemini hesaplayamadı, eski marjlar kullanılacak")
             return False
         
-        # 4. Redis'e kaydet (24 saat TTL)
+        # 4. Redis'e kaydet (24 saat TTL - bugünkü marjlar)
         margin_key = Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins')
-        set_cache(margin_key, margins, ttl=86400)  # 24 saat
+        set_cache(margin_key, margins, ttl=86400)
         
-        # 5. Son güncelleme zamanını kaydet
+        # 5. 🔥 KALICI BACKUP (TTL=0, süresiz!) - En son başarılı marjlar
         update_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
         set_cache(update_key, {
             'timestamp': time.time(),
             'margins': margins
-        }, ttl=86400)
+        }, ttl=0)  # ✅ SÜRESIZ! Fallback için her zaman hazır!
         
         logger.info(f"✅ [DİNAMİK MARJ] Kaydedildi: {margins}")
+        logger.info(f"💾 [DİNAMİK MARJ] KALICI BACKUP kaydedildi (TTL=0)")
         return True
         
     except Exception as e:
         logger.error(f"❌ [DİNAMİK MARJ] Beklenmeyen hata: {e}")
         return False
+
+
+def get_dynamic_margins() -> Dict[str, float]:
+    """
+    🔥 V3.9.3: AKILLI FALLBACK + BOOTSTRAP
+    
+    ÖNCEKİ SORUN (V3.9.2):
+    - Gemini çökerse → Config'deki sabit marjlar kullanılıyordu
+    - Ani fiyat değişimi → Alarmlar patlar, kullanıcılar şaşırır!
+    
+    YENİ ÇÖZÜM (V3.9.3):
+    - Gemini çökerse → En son başarılı marjları kullan (smooth geçiş)
+    - İlk kurulumda → HEMEN Gemini'yi çağır (BOOTSTRAP)
+    
+    FALLBACK SIRASI:
+    1. Redis (bugünkü Gemini marjları) → EN GÜNCEL ✅
+    2. margin_last_update (en son başarılı) → SMOOTH FALLBACK ✅
+    3. BOOTSTRAP (ilk kurulum) → HEMEN GEMİNİ ÇAĞIR! ✅
+    
+    Returns:
+        Dict: {"GRA": 0.026, "C22": 0.001, ...}
+    """
+    # 1️⃣ BUGÜNKÜ GEMİNİ MARJLARINI DENE
+    dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins'))
+    
+    if dynamic_margins and isinstance(dynamic_margins, dict):
+        logger.debug(f"✅ [DİNAMİK MARJ] Bugünkü Gemini marjları: {len(dynamic_margins)} marj")
+        return dynamic_margins
+    
+    # 2️⃣ EN SON BAŞARILI MARJLARI AL
+    last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
+    last_successful = get_cache(last_successful_key)
+    
+    if last_successful and isinstance(last_successful, dict):
+        margins = last_successful.get('margins')
+        timestamp = last_successful.get('timestamp', 0)
+        
+        if margins and isinstance(margins, dict):
+            # Kaç gün önce başarılıydı?
+            days_ago = (time.time() - timestamp) / 86400
+            
+            logger.warning(
+                f"⚠️ [DİNAMİK MARJ FALLBACK] Gemini çalışmıyor! "
+                f"En son başarılı marjlar kullanılıyor ({days_ago:.1f} gün önce)"
+            )
+            
+            return margins  # ✅ SMOOTH FALLBACK!
+    
+    # 3️⃣ 🔥 HİÇBİR ŞEY YOK → BOOTSTRAP (İLK KURULUM!)
+    logger.error(
+        "🔴 [DİNAMİK MARJ BOOTSTRAP] Marj yok! "
+        "HEMEN Gemini çağrılıyor..."
+    )
+    
+    # 🔥 HEMEN Gemini'yi çağır ve marjları çek!
+    bootstrap_success = update_dynamic_margins()
+    
+    if bootstrap_success:
+        # Başarılı olduysa, yeni marjları al
+        fresh_margins = get_cache(Config.CACHE_KEYS.get('dynamic_half_margins', 'dynamic:half_margins'))
+        
+        if fresh_margins:
+            logger.info("✅ [DİNAMİK MARJ BOOTSTRAP] Gemini başarılı! Marjlar hazır!")
+            return fresh_margins
+    
+    # 🔥 BOOTSTRAP BAŞARISIZ → VARSAYILAN MARJ (0.0)
+    logger.critical(
+        "💣 [DİNAMİK MARJ BOOTSTRAP] Gemini başarısız! "
+        "Varsayılan marj (0.0) kullanılıyor - FİYATLAR HAM!"
+    )
+    
+    # 🔥 Tüm varlıklar için 0.0 marj döndür (Ham fiyat gibi)
+    fallback_margins = {}
+    
+    # Dövizler
+    currencies = [
+        "USD", "EUR", "GBP", "CHF", "CAD", "AUD", "RUB",
+        "SAR", "AED", "KWD", "BHD", "OMR", "QAR",
+        "CNY", "SEK", "NOK", "PLN", "RON", "CZK",
+        "EGP", "RSD", "HUF", "BAM"
+    ]
+    for code in currencies:
+        fallback_margins[code] = 0.0
+    
+    # Altınlar
+    for code in ["GRA", "C22", "YAR", "TAM", "CUM", "ATA", "HAS"]:
+        fallback_margins[code] = 0.0
+    
+    # Gümüş
+    fallback_margins["AG"] = 0.0
+    fallback_margins["GUMUS"] = 0.0
+    
+    logger.warning(f"⚠️ [DİNAMİK MARJ BOOTSTRAP] Fallback: {len(fallback_margins)} marj (0.0)")
+    return fallback_margins
 
 
 # ======================================
@@ -1043,7 +1147,7 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V3.9.2 ULTIMATE + DYNAMIC MARGINS - GEMINI 3 FLASH - Test\n")
+    print("🧪 News Manager V3.9.3 ULTIMATE + SMART MARGIN FALLBACK - GEMINI 3 FLASH - Test\n")
     
     print("1️⃣ HABER TOPLAMA (GNews 3 gün + NewsData):")
     news_list = fetch_all_news()
@@ -1076,15 +1180,11 @@ def test_news_manager():
             print("   ℹ️ Bugün kritik haber yok")
         print()
     
-    print("4️⃣ DİNAMİK MARJ GÜNCELLEME (GEMINI 3 FLASH):")
-    margin_success = update_dynamic_margins()
-    if margin_success:
-        print(f"   ✅ Marjlar güncellendi!\n")
-        margin_data = get_cache('dynamic:half_margins')
-        if margin_data:
-            print(f"   Marjlar: {margin_data}\n")
-    else:
-        print(f"   ⚠️ Marjlar güncellenemedi\n")
+    print("4️⃣ DİNAMİK MARJ SİSTEMİ (SMART FALLBACK + BOOTSTRAP):")
+    margins = get_dynamic_margins()
+    print(f"   ✅ {len(margins)} marj alındı!\n")
+    if margins:
+        print(f"   İlk 5 marj: {dict(list(margins.items())[:5])}\n")
     
     print("5️⃣ BOOTSTRAP:")
     bootstrap_success = bootstrap_news_system()
