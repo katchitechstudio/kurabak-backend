@@ -1,5 +1,5 @@
 """
-News Manager - GÜNLÜK HABER SİSTEMİ V4.0 ULTIMATE 📰🚀💰
+News Manager - GÜNLÜK HABER SİSTEMİ V4.1 ULTIMATE 📰🚀💰
 =========================================================
 ✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
 ✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
@@ -7,7 +7,7 @@ News Manager - GÜNLÜK HABER SİSTEMİ V4.0 ULTIMATE 📰🚀💰
 ✅ GÜÇLÜ FALLBACK: Gemini patlarsa da sistem ayakta
 ✅ RATE-LIMIT KORUMA: Retry + exponential backoff
 ✅ BAYRAM MANTIKLI TTL: Gece 03:00'e kadar geçerli
-✅ GEMİNİ 2.0 FLASH EXP: Yeni model desteği 🔥
+✅ GEMİNİ 3 FLASH: Yeni model desteği 🔥
 ✅ RACE CONDITION FIX: Bootstrap lock mekanizması
 ✅ ÇİFT KAYNAK: GNews + NewsData
 ✅ 3 GÜN GERİYE + 48 SAAT FİLTRE: Optimal zaman aralığı
@@ -16,7 +16,8 @@ News Manager - GÜNLÜK HABER SİSTEMİ V4.0 ULTIMATE 📰🚀💰
 ✅ 🔥 SMOOTH MARJ GEÇİŞİ: 3-4 günde kademeli (alarm patlaması önlenir)
 ✅ 🔥 PREPARE/PUBLISH AYRI: Haberler 5 dakika önce hazırlanır
 
-V4.0 Değişiklikler (TAM MARJ + SMOOTH + PREPARE/PUBLISH):
+V4.1 Değişiklikler (GEMİNİ 3 FLASH):
+- 🔥 GEMİNİ 3 FLASH: Google'ın yeni modeli (gemini-2.0-flash-exp deprecated)
 - 🔥 TAM MARJ: Yarım değil, TAM marj hesaplanıyor (kuyumcu fiyatları)
 - 🔥 SMOOTH GEÇİŞ: Marj değişimi kademeli (%1.5+ fark varsa ortalama al)
 - 🔥 PREPARE FONKSIYONLARI: prepare_morning_news(), prepare_evening_news()
@@ -320,7 +321,7 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
             return [], None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-3-flash-preview')  # 🔥 V5.5: Gemini 3 Flash
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
@@ -402,7 +403,7 @@ KURALLAR:
 ❌ HİÇBİR kritik haber yoksa: "HABER: YOK"
 """
         
-        logger.info(f"🤖 [GEMİNİ 2.0 FLASH] {len(news_list)} haber filtreleniyor...")
+        logger.info(f"🤖 [GEMİNİ 3 FLASH] {len(news_list)} haber filtreleniyor...")
         
         try:
             response = model.generate_content(prompt)
@@ -450,7 +451,7 @@ KURALLAR:
             if clean_line and len(clean_line) > 10:
                 summaries.append(clean_line)
         
-        logger.info(f"✅ [GEMİNİ 2.0 FLASH] {len(summaries)} kritik haber filtrelendi")
+        logger.info(f"✅ [GEMİNİ 3 FLASH] {len(summaries)} kritik haber filtrelendi")
         
         if not summaries:
             logger.warning("⚠️ [GEMİNİ] Bugün kritik haber yok")
@@ -513,7 +514,7 @@ def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict) -> Opti
             return None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-3-flash-preview')  # 🔥 V5.5: Gemini 3 Flash
         
         # API fiyatlarını formatla
         api_str = "\n".join([
@@ -564,7 +565,7 @@ MARJ_AG: 3.54
 HİÇBİR AÇIKLAMA YAPMA!
 """
         
-        logger.info("🤖 [GEMİNİ 2.0 FLASH MARJ] TAM MARJ hesaplama başlıyor...")
+        logger.info("🤖 [GEMİNİ 3 FLASH MARJ] TAM MARJ hesaplama başlıyor...")
         
         response = model.generate_content(prompt)
         result = response.text.strip()
@@ -591,7 +592,7 @@ HİÇBİR AÇIKLAMA YAPMA!
             logger.error("❌ [GEMİNİ MARJ] Parse edilemedi!")
             return None
         
-        logger.info(f"✅ [GEMİNİ 2.0 FLASH] {len(margins)} TAM MARJ hesaplandı: {margins}")
+        logger.info(f"✅ [GEMİNİ 3 FLASH] {len(margins)} TAM MARJ hesaplandı: {margins}")
         return margins
         
     except Exception as e:
