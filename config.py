@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V5.3.1 🧠📰🏦💰🔥
+Configuration - PRODUCTION READY V5.3.2 🧠📰🏦💰🔥
 =====================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -18,9 +18,10 @@ Configuration - PRODUCTION READY V5.3.1 🧠📰🏦💰🔥
 ✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
 ✅ 📰 GÜNLÜK HABER SİSTEMİ V2.0: Sabah + Akşam vardiyası + Gemini 2.0 + Bayram kontrolü
 ✅ 💰 MARKET MARGIN SYSTEM: Ham/Kuyumcu fiyat profilleri
-✅ 🔥 DYNAMIC HALF MARGIN: Gemini ile günlük otomatik marj güncelleme
+✅ 🔥 DYNAMIC HALF MARGIN: Gemini ile günlük otomatik marj güncelleme (AYRI JOB - 00:01)
 ✅ 🔥 RAM OPTIMIZATION: %95 threshold (LOG SPAM FİX - V5.3.1)
 ✅ 🔥 CPU OPTIMIZATION: %80 threshold (LOG SPAM FİX - V5.3.1)
+✅ 🔥 SCHEDULER OPTIMIZATION: CPU spike önleme (00:00→00:03 sabah vardiyası - V5.3.2)
 """
 import os
 
@@ -29,7 +30,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "5.3.1"  # 🔥 RAM/CPU Threshold Optimization + Dynamic Half Margin
+    APP_VERSION = "5.3.2"  # 🔥 Dynamic Margin Ayrı Job + Scheduler Optimization
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -55,13 +56,18 @@ class Config:
     - Backend her iki fiyat serisini de tutar (ayrı snapshot'lar)
     - Yüzdelik değişimler kendi snapshot'larına göre hesaplanır
     
-    DİNAMİK MARJ SİSTEMİ:
-    - Günde 1 kere (00:00) Harem fiyatları kontrol edilir
+    DİNAMİK MARJ SİSTEMİ V5.3.2:
+    - Günde 1 kere (00:01 - AYRI JOB) Harem fiyatları kontrol edilir
     - Gemini AI ile gerçek marjlar hesaplanır
     - Hesaplanan marjın YARISI kullanılır (alarm patlaması önlenir)
     - Gümüş için özel: %75'i kullanılır (%100 yerine)
     - Redis'e kaydedilir (24 saat TTL)
     - Fallback: Gemini patlarsa aşağıdaki varsayılan marjlar kullanılır
+    
+    ZAMANLAMA (CPU Spike Önleme):
+    - 00:00:05 → Snapshot (hızlı)
+    - 00:01:00 → Dinamik Marj Güncelleme (Gemini - orta hız)
+    - 00:03:00 → Sabah Vardiyası Haberler (Gemini - yavaş)
     
     MARJ ORANLARI (Fallback - Gemini kullanılamazsa):
     - Altınlar: %0-2.6 (Harem marjının yarısı)
@@ -129,15 +135,15 @@ class Config:
     DEFAULT_MARKET_MARGIN = 0.0  # %0 (marj yok)
     
     # ======================================
-    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI
+    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI V5.3.2
     # ======================================
     # Harem veri kaynağı (HTML parse edilecek)
     HAREM_PRICE_URL = "https://altin.doviz.com/harem"
     HAREM_FETCH_TIMEOUT = 10  # 10 saniye
     
-    # Marj güncelleme saati (Gece 00:00 - Sabah vardiyası ile birlikte)
-    MARGIN_UPDATE_HOUR = 0
-    MARGIN_UPDATE_MINUTE = 0
+    # 🔥 Marj güncelleme saati (AYRI JOB - CPU spike önleme)
+    MARGIN_UPDATE_HOUR = 0     # Gece 00:01 (sabah vardiyasından ÖNCE)
+    MARGIN_UPDATE_MINUTE = 1   # 00:00:05 Snapshot → 00:01:00 Marj → 00:03:00 Haberler
     
     # Marj hesaplama stratejisi
     MARGIN_CALCULATION_STRATEGY = "half"  # "half" = Yarım marj, "full" = Tam marj
@@ -239,11 +245,11 @@ class Config:
     CALENDAR_BANNER_MINUTE = 0
     
     # ======================================
-    # 📰 GÜNLÜK HABER SİSTEMİ V2.0
+    # 📰 GÜNLÜK HABER SİSTEMİ V2.0 + V5.3.2 SCHEDULER
     # ======================================
-    # Haber vardiyası saatleri
-    NEWS_MORNING_SHIFT_HOUR = 0   # Gece 00:00 - Sabah vardiyası hazırlanır
-    NEWS_MORNING_SHIFT_MINUTE = 0
+    # 🔥 Haber vardiyası saatleri (CPU spike önleme)
+    NEWS_MORNING_SHIFT_HOUR = 0   # Gece 00:03 - Sabah vardiyası hazırlanır (00:00 → 00:03)
+    NEWS_MORNING_SHIFT_MINUTE = 3  # 🔥 DEĞİŞTİ: Marj job'undan sonra (CPU spike önleme)
     
     NEWS_EVENING_SHIFT_HOUR = 12   # Öğlen 12:00 - Akşam vardiyası hazırlanır
     NEWS_EVENING_SHIFT_MINUTE = 0
