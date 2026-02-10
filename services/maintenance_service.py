@@ -1,26 +1,28 @@
 """
-Maintenance Service - PRODUCTION READY V6.1 🚧
+Maintenance Service - PRODUCTION READY V5.5 🚧
 ===============================================
-✅ BAKIM MODU: Tek basit bakım senaryosu (banner ile bilgilendirme)
-✅ API V5: Tek kaynak sistemi
-✅ BANNER SİSTEMİ: Uygulama tarafına özel mesaj gönderme
-✅ SCHEDULER: Worker + Snapshot + Şef + Push Notification + ALARM + HABER + DİNAMİK MARJ
-✅ TELEGRAM KOMUTLARI: Manuel kaynak değiştirme
-✅ THREAD-SAFE: Güvenli veri erişimi
-✅ SMART RECOVERY: Sistem çökerse otomatik kurtarma
-✅ PUSH NOTIFICATION: 14:00 günlük bildirim (Bayram/Haber)
-✅ CLEANUP SYSTEM: Her gün eski backup'ları temizle
-✅ ALARM SYSTEM: Her 5-15 dakikada alarm kontrolü
-✅ NEWS SYSTEM: Günde 2 kez haber vardiyası (00:03 + 12:00)
-✅ DYNAMIC MARGIN SYSTEM: Her gece 00:01 Gemini ile marj güncelleme
-✅ JOB ERROR LISTENER: Job crash'lerde Telegram bildirimi
-✅ JOB OVERLAP PROTECTION: Çift çalışma önleme
-✅ SCHEDULER SINGLETON LOCK: Thread-safe başlatma
+✅ SCHEDULER OPTIMIZATION: CPU spike önleme (prepare/publish ayrımı)
+✅ SMOOTH MARGIN TRANSITION: Kademeli marj geçişi
+✅ TAM MARJ SİSTEMİ: Kuyumcu gerçeği yansıtır
+✅ İKİ SNAPSHOT: raw_snapshot + jeweler_snapshot
+✅ JEWELER REBUILD: Marj değişince cache otomatik yenilenir
+✅ SNAPSHOT UPDATE: Marj değişince snapshot düzeltilir
 
-V6.1 Değişiklikler:
-- 💰 DİNAMİK MARJ JOB EKLENDİ: Her gece 00:01'de Gemini ile marj hesaplama
-- 🌅 SABAH VARDİYASI: 00:00 → 00:03 (CPU spike önleme)
-- ⏰ ZAMANLAMA: 00:00:05 Snapshot → 00:01 Marj → 00:03 Haberler
+V5.5 Değişiklikler (SCHEDULER OPTIMIZATION):
+- 🔥 23:55 → prepare_morning_news() [Gemini call]
+- 🔥 00:00 → save_daily_snapshot() + publish_morning_news() [lightweight]
+- 🔥 00:05 → update_dynamic_margins() + rebuild_jeweler_cache() + update_jeweler_snapshot()
+- 🔥 11:55 → prepare_evening_news() [Gemini call]
+- 🔥 12:00 → publish_evening_news() [lightweight]
+- 🔥 14:00 → push_notification [daily summary]
+
+Timeline:
+23:55 → Sabah haberlerini HAZIRLA (Gemini - ağır işlem)
+00:00 → Snapshot AL + Sabah YAYINLA (hafif)
+00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update
+11:55 → Akşam haberlerini HAZIRLA (Gemini - ağır işlem)
+12:00 → Akşam YAYINLA (hafif)
+14:00 → Push notification GÖNDER
 """
 
 import logging
@@ -177,7 +179,12 @@ def job_error_listener(event):
             logger.error(f"❌ Telegram bildirim hatası: {telegram_err}")
 
 
+# ======================================
+# CORE JOBS
+# ======================================
+
 def worker_job():
+    """👷 Worker - Her dakika veri güncelle"""
     try:
         logger.info("👷 [WORKER] Veri güncelleme başlıyor...")
         
@@ -195,51 +202,19 @@ def worker_job():
         raise
 
 
-def snapshot_job():
-    try:
-        logger.info("📸 [SNAPSHOT] Gece fotoğrafı çekiliyor...")
-        
-        from services.financial_service import take_snapshot
-        success = take_snapshot()
-        
-        if success:
-            logger.info("✅ [SNAPSHOT] Başarıyla kaydedildi")
-        else:
-            logger.warning("⚠️ [SNAPSHOT] Kayıt başarısız")
-            
-    except Exception as e:
-        logger.error(f"❌ [SNAPSHOT] Hata: {e}")
-        raise
-
-
-def dynamic_margin_update_job():
-    """💰 DİNAMİK MARJ GÜNCELLEME (Günde 1 kere - 00:01)"""
-    try:
-        logger.info("💰 [DİNAMİK MARJ] Günlük güncelleme başlıyor...")
-        
-        from utils.news_manager import update_dynamic_margins
-        success = update_dynamic_margins()
-        
-        if success:
-            logger.info("✅ [DİNAMİK MARJ] Başarıyla güncellendi!")
-        else:
-            logger.warning("⚠️ [DİNAMİK MARJ] Güncellenemedi, fallback marjlar kullanılacak")
-            
-    except Exception as e:
-        logger.error(f"❌ [DİNAMİK MARJ] Hata: {e}")
-        raise
-
-
 def supervisor_check():
+    """👮 Şef - Sistem kontrolü"""
     try:
         logger.info("👮 [ŞEF] Sistem kontrolü başlıyor...")
         
-        snapshot_exists = bool(get_cache(Config.CACHE_KEYS['yesterday_prices']))
+        # raw_snapshot kontrolü
+        snapshot_exists = bool(get_cache(Config.CACHE_KEYS['raw_snapshot']))
         if not snapshot_exists:
             logger.warning("⚠️ [ŞEF] Snapshot kayıp! Acil snapshot alınıyor...")
-            from services.financial_service import take_snapshot
-            take_snapshot()
+            from services.financial_service import save_daily_snapshot
+            save_daily_snapshot()
         
+        # Worker kontrol
         last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
         if last_worker_run:
             time_diff = time.time() - float(last_worker_run)
@@ -255,6 +230,7 @@ def supervisor_check():
 
 
 def daily_report():
+    """📊 Günlük rapor - Telegram"""
     try:
         logger.info("📊 [RAPOR] Günlük rapor hazırlanıyor...")
         
@@ -273,34 +249,15 @@ def daily_report():
         raise
 
 
-def push_notification_daily():
-    try:
-        logger.info("🔔 [PUSH] Günlük push notification hazırlanıyor...")
-        
-        from utils.notification_service import send_daily_summary
-        
-        result = send_daily_summary()
-        
-        if result.get('success'):
-            logger.info(f"✅ [PUSH] {result.get('type', 'bildirim').upper()} gönderildi ({result.get('recipient_count', 0)} kullanıcı)")
-        else:
-            logger.warning(f"⚠️ [PUSH] Gönderim başarısız: {result.get('error')}")
-        
-    except Exception as e:
-        logger.error(f"❌ [PUSH] Hata: {e}")
-        raise
-
-
 def cleanup_old_backups():
+    """🧹 Cleanup - Eski backup temizliği"""
     try:
         logger.info("🧹 [CLEANUP] Eski backup temizliği başlıyor...")
         
         from utils.cache import cleanup_old_disk_backups, get_disk_backup_stats
         
         before_stats = get_disk_backup_stats()
-        
         result = cleanup_old_disk_backups(max_age_days=Config.CLEANUP_BACKUP_AGE_DAYS)
-        
         deleted_count = result.get('deleted_count', 0)
         after_stats = result.get('after_stats', {})
         
@@ -319,6 +276,7 @@ def cleanup_old_backups():
 
 
 def alarm_check_job():
+    """🔔 Alarm kontrol - Periyodik"""
     try:
         logger.info("🔔 [ALARM] Periyodik alarm kontrolü başlıyor...")
         
@@ -349,41 +307,158 @@ def alarm_check_job():
         raise
 
 
-def news_morning_shift_job():
+# ======================================
+# 🔥 V5.5 NEW JOBS
+# ======================================
+
+def prepare_morning_news_job():
+    """🌅 23:55 - Sabah haberlerini HAZIRLA (Gemini call)"""
     try:
-        logger.info("🌅 [SABAH VARDİYASI] Job başlatılıyor...")
+        logger.info("🌅 [SABAH HAZIRLIK] Sabah haberlerini hazırlama başlıyor (Gemini)...")
         
-        from utils.news_manager import prepare_morning_shift
-        success = prepare_morning_shift()
+        from utils.news_manager import prepare_morning_news
+        success = prepare_morning_news()
         
         if success:
-            logger.info("✅ [SABAH VARDİYASI] Başarıyla tamamlandı")
+            logger.info("✅ [SABAH HAZIRLIK] Sabah haberleri başarıyla hazırlandı!")
         else:
-            logger.warning("⚠️ [SABAH VARDİYASI] Tamamlanamadı")
+            logger.warning("⚠️ [SABAH HAZIRLIK] Hazırlama başarısız, yedek haber kullanılacak")
             
     except Exception as e:
-        logger.error(f"❌ [SABAH VARDİYASI] Hata: {e}")
+        logger.error(f"❌ [SABAH HAZIRLIK] Hata: {e}")
         raise
 
 
-def news_evening_shift_job():
+def snapshot_and_publish_morning_job():
+    """📸 00:00 - Snapshot AL + Sabah haberlerini YAYINLA"""
     try:
-        logger.info("🌆 [AKŞAM VARDİYASI] Job başlatılıyor...")
+        logger.info("📸 [SABAH YAYINI] Snapshot + sabah yayını başlıyor...")
         
-        from utils.news_manager import prepare_evening_shift
-        success = prepare_evening_shift()
+        # 1. Snapshot al (raw + jeweler)
+        from services.financial_service import save_daily_snapshot
+        snapshot_success = save_daily_snapshot()
         
-        if success:
-            logger.info("✅ [AKŞAM VARDİYASI] Başarıyla tamamlandı")
+        if snapshot_success:
+            logger.info("✅ [SABAH YAYINI] Snapshot başarıyla alındı")
         else:
-            logger.warning("⚠️ [AKŞAM VARDİYASI] Tamamlanamadı")
-            
+            logger.warning("⚠️ [SABAH YAYINI] Snapshot alınamadı")
+        
+        # 2. Sabah haberlerini yayınla (hafif işlem)
+        from utils.news_manager import publish_morning_news
+        publish_success = publish_morning_news()
+        
+        if publish_success:
+            logger.info("✅ [SABAH YAYINI] Sabah haberleri yayınlandı")
+        else:
+            logger.warning("⚠️ [SABAH YAYINI] Yayınlama başarısız")
+        
+        logger.info("✅ [SABAH YAYINI] İşlem tamamlandı")
+        
     except Exception as e:
-        logger.error(f"❌ [AKŞAM VARDİYASI] Hata: {e}")
+        logger.error(f"❌ [SABAH YAYINI] Hata: {e}")
         raise
 
+
+def update_margins_and_rebuild_job():
+    """💰 00:05 - Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update"""
+    try:
+        logger.info("💰 [MARJ + REBUILD] Marj güncelleme ve rebuild başlıyor...")
+        
+        # 1. Dinamik marjları güncelle (Gemini + Smooth)
+        from utils.news_manager import update_dynamic_margins
+        margin_success = update_dynamic_margins()
+        
+        if margin_success:
+            logger.info("✅ [MARJ + REBUILD] Dinamik marjlar güncellendi")
+            
+            # 2. Jeweler cache'i yeniden oluştur
+            from services.financial_service import rebuild_jeweler_cache
+            rebuild_success = rebuild_jeweler_cache()
+            
+            if rebuild_success:
+                logger.info("✅ [MARJ + REBUILD] Jeweler cache rebuild tamamlandı")
+            else:
+                logger.warning("⚠️ [MARJ + REBUILD] Jeweler cache rebuild başarısız")
+            
+            # 3. Jeweler snapshot'ı güncelle
+            from services.financial_service import update_jeweler_snapshot
+            update_success = update_jeweler_snapshot()
+            
+            if update_success:
+                logger.info("✅ [MARJ + REBUILD] Jeweler snapshot güncellendi")
+            else:
+                logger.warning("⚠️ [MARJ + REBUILD] Jeweler snapshot güncellenemedi")
+        else:
+            logger.warning("⚠️ [MARJ + REBUILD] Marj güncellenemedi, fallback kullanılacak")
+        
+        logger.info("✅ [MARJ + REBUILD] İşlem tamamlandı")
+        
+    except Exception as e:
+        logger.error(f"❌ [MARJ + REBUILD] Hata: {e}")
+        raise
+
+
+def prepare_evening_news_job():
+    """🌆 11:55 - Akşam haberlerini HAZIRLA (Gemini call)"""
+    try:
+        logger.info("🌆 [AKŞAM HAZIRLIK] Akşam haberlerini hazırlama başlıyor (Gemini)...")
+        
+        from utils.news_manager import prepare_evening_news
+        success = prepare_evening_news()
+        
+        if success:
+            logger.info("✅ [AKŞAM HAZIRLIK] Akşam haberleri başarıyla hazırlandı!")
+        else:
+            logger.warning("⚠️ [AKŞAM HAZIRLIK] Hazırlama başarısız, yedek haber kullanılacak")
+            
+    except Exception as e:
+        logger.error(f"❌ [AKŞAM HAZIRLIK] Hata: {e}")
+        raise
+
+
+def publish_evening_news_job():
+    """🌇 12:00 - Akşam haberlerini YAYINLA"""
+    try:
+        logger.info("🌇 [AKŞAM YAYINI] Akşam haberlerini yayınlama başlıyor...")
+        
+        from utils.news_manager import publish_evening_news
+        success = publish_evening_news()
+        
+        if success:
+            logger.info("✅ [AKŞAM YAYINI] Akşam haberleri yayınlandı")
+        else:
+            logger.warning("⚠️ [AKŞAM YAYINI] Yayınlama başarısız")
+        
+    except Exception as e:
+        logger.error(f"❌ [AKŞAM YAYINI] Hata: {e}")
+        raise
+
+
+def push_notification_daily():
+    """🔔 14:00 - Günlük push notification (Bayram/Haber)"""
+    try:
+        logger.info("🔔 [PUSH] Günlük push notification hazırlanıyor...")
+        
+        from utils.notification_service import send_daily_summary
+        
+        result = send_daily_summary()
+        
+        if result.get('success'):
+            logger.info(f"✅ [PUSH] {result.get('type', 'bildirim').upper()} gönderildi ({result.get('recipient_count', 0)} kullanıcı)")
+        else:
+            logger.warning(f"⚠️ [PUSH] Gönderim başarısız: {result.get('error')}")
+        
+    except Exception as e:
+        logger.error(f"❌ [PUSH] Hata: {e}")
+        raise
+
+
+# ======================================
+# SCHEDULER START
+# ======================================
 
 def start_scheduler():
+    """🚀 Scheduler başlat - V5.5"""
     global scheduler
     
     with _scheduler_lock:
@@ -397,7 +472,13 @@ def start_scheduler():
         logger.info("✅ Job Error Listener eklendi")
         
         worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)
+        alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)
         
+        # ======================================
+        # CORE JOBS
+        # ======================================
+        
+        # Worker - Her dakika
         scheduler.add_job(
             worker_job,
             trigger=IntervalTrigger(seconds=worker_interval),
@@ -408,30 +489,7 @@ def start_scheduler():
             coalesce=True
         )
         
-        scheduler.add_job(
-            snapshot_job,
-            trigger=CronTrigger(
-                hour=Config.SNAPSHOT_HOUR,
-                minute=Config.SNAPSHOT_MINUTE,
-                second=Config.SNAPSHOT_SECOND
-            ),
-            id='snapshot',
-            name='Snapshot (Referans Fiyatları)',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True
-        )
-        
-        scheduler.add_job(
-            dynamic_margin_update_job,
-            trigger=CronTrigger(hour=0, minute=1),
-            id='dynamic_margin_update',
-            name='Dinamik Marj Güncelleme (Gemini)',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True
-        )
-        
+        # Şef - Her 10 dakika
         scheduler.add_job(
             supervisor_check,
             trigger=IntervalTrigger(minutes=Config.SUPERVISOR_INTERVAL),
@@ -442,6 +500,7 @@ def start_scheduler():
             coalesce=True
         )
         
+        # Günlük Rapor - 09:00
         scheduler.add_job(
             daily_report,
             trigger=CronTrigger(hour=Config.TELEGRAM_DAILY_REPORT_HOUR),
@@ -452,16 +511,7 @@ def start_scheduler():
             coalesce=True
         )
         
-        scheduler.add_job(
-            push_notification_daily,
-            trigger=CronTrigger(hour=14, minute=0),
-            id='push_notification',
-            name='Push Notification (Bayram/Haber)',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True
-        )
-        
+        # Cleanup - 03:00
         scheduler.add_job(
             cleanup_old_backups,
             trigger=CronTrigger(hour=3, minute=0),
@@ -472,7 +522,7 @@ def start_scheduler():
             coalesce=True
         )
         
-        alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)
+        # Alarm Check - Her 10-15 dakika
         scheduler.add_job(
             alarm_check_job,
             trigger=IntervalTrigger(minutes=alarm_interval_minutes),
@@ -483,44 +533,100 @@ def start_scheduler():
             coalesce=True
         )
         
+        # ======================================
+        # 🔥 V5.5 OPTIMIZED JOBS
+        # ======================================
+        
+        # 23:55 - Sabah haberlerini HAZIRLA
         scheduler.add_job(
-            news_morning_shift_job,
-            trigger=CronTrigger(hour=0, minute=3),
-            id='news_morning',
-            name='Haber Sabah Vardiyası',
+            prepare_morning_news_job,
+            trigger=CronTrigger(hour=23, minute=55),
+            id='prepare_morning_news',
+            name='Sabah Haberlerini Hazırla (Gemini)',
             replace_existing=True,
             max_instances=1,
             coalesce=True
         )
         
+        # 00:00 - Snapshot AL + Sabah YAYINLA
         scheduler.add_job(
-            news_evening_shift_job,
+            snapshot_and_publish_morning_job,
+            trigger=CronTrigger(hour=0, minute=0, second=0),
+            id='snapshot_and_publish_morning',
+            name='Snapshot + Sabah Yayın',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 00:05 - Marj GÜNCELLE + Rebuild + Update
+        scheduler.add_job(
+            update_margins_and_rebuild_job,
+            trigger=CronTrigger(hour=0, minute=5),
+            id='margins_and_rebuild',
+            name='Marj Güncelle + Jeweler Rebuild',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 11:55 - Akşam haberlerini HAZIRLA
+        scheduler.add_job(
+            prepare_evening_news_job,
+            trigger=CronTrigger(hour=11, minute=55),
+            id='prepare_evening_news',
+            name='Akşam Haberlerini Hazırla (Gemini)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 12:00 - Akşam YAYINLA
+        scheduler.add_job(
+            publish_evening_news_job,
             trigger=CronTrigger(hour=12, minute=0),
-            id='news_evening',
-            name='Haber Akşam Vardiyası',
+            id='publish_evening_news',
+            name='Akşam Yayın',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # 14:00 - Push Notification
+        scheduler.add_job(
+            push_notification_daily,
+            trigger=CronTrigger(hour=14, minute=0),
+            id='push_notification',
+            name='Push Notification (Bayram/Haber)',
             replace_existing=True,
             max_instances=1,
             coalesce=True
         )
         
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.1 - Dinamik Marj Sistemi)")
+        logger.info("✅ Scheduler başlatıldı! (V5.5 - CPU Spike Önleme + Smooth Margin)")
         logger.info(f"   👷 Worker: Her {worker_interval} saniyede")
-        logger.info("   📸 Snapshot: Her gece 00:00:05")
-        logger.info("   💰 Dinamik Marj: Her gece 00:01 (Gemini) 🔥")
         logger.info("   👮 Şef: Her 10 dakikada")
-        logger.info("   📊 Rapor: Her gün 09:00")
-        logger.info("   🔔 Push: Her gün 14:00 (Bayram/Haber)")
-        logger.info("   🧹 Cleanup: Her gün 03:00")
         logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
-        logger.info("   🌅 Sabah Vardiyası: Her gece 00:03 (CPU spike önleme) 🔥")
-        logger.info("   🌆 Akşam Vardiyası: Her gün 12:00")
-        logger.info("   🚨 Error Listener: AKTİF")
-        logger.info("   🛡️ Overlap Protection: AKTİF")
-        logger.info("   🔒 Thread-Safe Lock: AKTİF")
+        logger.info("   📊 Rapor: Her gün 09:00")
+        logger.info("   🧹 Cleanup: Her gün 03:00")
+        logger.info("")
+        logger.info("   🔥 V5.5 OPTIMIZED TIMELINE:")
+        logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
+        logger.info("   📸 00:00 → Snapshot AL + Sabah YAYINLA (hafif)")
+        logger.info("   💰 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update")
+        logger.info("   🌆 11:55 → Akşam haberlerini HAZIRLA (Gemini)")
+        logger.info("   📰 12:00 → Akşam YAYINLA (hafif)")
+        logger.info("   🔔 14:00 → Push Notification GÖNDER")
+        logger.info("")
+        logger.info("   ✅ CPU spike önleme: AKTİF")
+        logger.info("   ✅ Smooth margin: AKTİF")
+        logger.info("   ✅ Jeweler rebuild: OTOMATİK")
+        logger.info("   ✅ Snapshot update: OTOMATİK")
 
 
 def stop_scheduler():
+    """🛑 Scheduler durdur"""
     global scheduler
     
     with _scheduler_lock:
@@ -532,6 +638,7 @@ def stop_scheduler():
 
 
 def get_scheduler_status() -> Dict[str, Any]:
+    """📊 Scheduler durumunu getir"""
     try:
         if not scheduler:
             return {'running': False, 'jobs': []}
@@ -560,9 +667,13 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'error_listener_active': True,
-            'overlap_protection_active': True,
-            'thread_safe_lock_active': True
+            'version': 'V5.5',
+            'optimizations': {
+                'cpu_spike_prevention': True,
+                'smooth_margin': True,
+                'jeweler_auto_rebuild': True,
+                'snapshot_auto_update': True
+            }
         }
         
         return status
