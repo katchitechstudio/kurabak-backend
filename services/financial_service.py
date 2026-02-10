@@ -336,6 +336,27 @@ def get_dynamic_margins() -> Dict[str, float]:
     logger.warning("⚠️ [DİNAMİK MARJ] Redis'te yok, HAM FİYAT kullanılacak")
     return {}
 
+
+def get_cache_key_for_profile(base_key: str, profile: str) -> str:
+    """
+    Profile göre cache key döner
+    
+    Args:
+        base_key: "currencies_all", "golds_all", "silvers_all"
+        profile: "raw" veya "jeweler"
+    
+    Returns:
+        Redis cache key
+    """
+    if profile == "raw":
+        return Config.CACHE_KEYS[base_key]
+    elif profile == "jeweler":
+        jeweler_key = base_key.replace('_all', '_jeweler')
+        return Config.CACHE_KEYS.get(jeweler_key, Config.CACHE_KEYS[base_key])
+    else:
+        logger.warning(f"⚠️ [CACHE KEY] Bilinmeyen profil: {profile}, raw key döndürülüyor")
+        return Config.CACHE_KEYS[base_key]
+
 # ======================================
 # V5 FETCH
 # ======================================
@@ -659,7 +680,7 @@ def rebuild_jeweler_cache() -> bool:
         
         set_cache(Config.CACHE_KEYS['currencies_jeweler'], jeweler_currencies_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
-        set_cache(Config.CACHE_KEYS['silvers_jeweler'], silvers_silvers_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
         
         logger.info(
             f"✅ [JEWELER REBUILD] Tamamlandı: "
