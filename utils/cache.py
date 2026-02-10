@@ -1,5 +1,5 @@
 """
-Redis Cache Utility - PRODUCTION READY V4.8.1 🚀
+Redis Cache Utility - PRODUCTION READY V5.5 🚀
 =========================================================
 ✅ CONNECTION POOL FIX: Global client kullanımı (V4.8)
 ✅ RAM CACHE CLEANUP: Otomatik çöp toplama (V4.8)
@@ -15,6 +15,12 @@ Redis Cache Utility - PRODUCTION READY V4.8.1 🚀
 ✅ EAGER CONNECTION: Startup'ta hemen bağlan
 ✅ ATOMIC INCR: Race Condition önleme için atomik increment
 ✅ 🔥 RAM CLEANUP INTERVAL: 10 dakika (RAM OPTİMİZASYON - V4.8.1)
+✅ 🔥 V5.5 SNAPSHOT KEYS: raw_snapshot + jeweler_snapshot (Disk backup desteği)
+
+V5.5 Değişiklikler:
+- 🔥 CRITICAL_KEYS güncellendi: raw_snapshot + jeweler_snapshot eklendi
+- 🔥 yesterday_prices deprecated (backward compatibility için hala destekleniyor)
+- 🔥 Disk backup artık her iki snapshot'ı da destekliyor
 """
 
 import os
@@ -417,7 +423,7 @@ class RAMCache:
 ram_cache = RAMCache()
 
 # ======================================
-# KRİTİK VERİ LİSTESİ
+# 🔥 V5.5: KRİTİK VERİ LİSTESİ (SNAPSHOT KEYS GÜNCELLENDI!)
 # ======================================
 
 CRITICAL_KEYS = [
@@ -425,7 +431,8 @@ CRITICAL_KEYS = [
     'kurabak:golds:all',
     'kurabak:silvers:all',
     'kurabak:summary',
-    'kurabak:yesterday_prices',
+    'kurabak:raw_snapshot',      # 🔥 V5.5: Ham fiyat snapshot'ı (disk backup!)
+    'kurabak:jeweler_snapshot',  # 🔥 V5.5: Kuyumcu fiyat snapshot'ı (disk backup!)
     'kurabak:backup:all'
 ]
 
