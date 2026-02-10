@@ -847,6 +847,8 @@ def prepare_morning_news() -> bool:
         # 1. Haberleri topla
         news_list = fetch_all_news()
         
+        logger.info(f"🔍 [DEBUG] Toplanan haber sayısı: {len(news_list)}")  # 🔥 DEBUG
+        
         if not news_list:
             logger.warning("⚠️ [SABAH HAZIRLIK] Haber bulunamadı!")
             pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
@@ -855,6 +857,8 @@ def prepare_morning_news() -> bool:
         
         # 2. Vardiyalar arası dedup
         fresh_news = filter_already_shown(news_list)
+        
+        logger.info(f"🔍 [DEBUG] Dedup sonrası: {len(fresh_news)} yeni haber")  # 🔥 DEBUG
         
         if not fresh_news:
             logger.warning("⚠️ [SABAH HAZIRLIK] Tüm haberler daha önce gösterilmiş!")
@@ -865,6 +869,9 @@ def prepare_morning_news() -> bool:
         # 3. Gemini filtrele
         summaries, bayram_msg = summarize_news_batch(fresh_news)
         
+        logger.info(f"🔍 [DEBUG] Gemini sonrası: {len(summaries)} kritik haber")  # 🔥 DEBUG
+        logger.info(f"🔍 [DEBUG] Bayram: {bayram_msg}")  # 🔥 DEBUG
+        
         # 4. PENDING cache'e kaydet (10 dakika TTL - 00:00'da kullanılacak)
         pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
         set_cache(pending_key, {
@@ -872,6 +879,7 @@ def prepare_morning_news() -> bool:
             'bayram': bayram_msg
         }, ttl=600)
         
+        logger.info(f"🔍 [DEBUG] PENDING cache'e kaydedildi: {pending_key}")  # 🔥 DEBUG
         logger.info(f"✅ [SABAH HAZIRLIK] {len(summaries)} haber hazırlandı (PENDING)")
         if bayram_msg:
             logger.info(f"🏦 [SABAH HAZIRLIK] Bayram: {bayram_msg}")
@@ -1059,6 +1067,8 @@ def bootstrap_news_system() -> bool:
     try:
         current_hour = datetime.now().hour
         
+        logger.info(f"🔍 [DEBUG BOOTSTRAP] Saat: {current_hour}")  # 🔥 DEBUG
+        
         if 0 <= current_hour < 12:
             cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             shift_name = "SABAH"
@@ -1074,6 +1084,10 @@ def bootstrap_news_system() -> bool:
                 return False
             
             existing_data = get_cache(cache_key)
+            
+            logger.info(f"🔍 [DEBUG BOOTSTRAP] Cache key: {cache_key}")  # 🔥 DEBUG
+            logger.info(f"🔍 [DEBUG BOOTSTRAP] Mevcut veri: {existing_data is not None}")  # 🔥 DEBUG
+            
             if existing_data is not None:
                 logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır")
                 return False
@@ -1087,6 +1101,8 @@ def bootstrap_news_system() -> bool:
                 success = prepare_morning_news() and publish_morning_news()
             else:
                 success = prepare_evening_news() and publish_evening_news()
+            
+            logger.info(f"🔍 [DEBUG BOOTSTRAP] Başarı durumu: {success}")  # 🔥 DEBUG
             
             if success:
                 logger.info(f"🚀 [BOOTSTRAP] {shift_name} vardiyası dolduruldu!")
