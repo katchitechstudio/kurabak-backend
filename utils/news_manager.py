@@ -1087,9 +1087,11 @@ def bootstrap_news_system() -> bool:
             
             logger.info(f"🔍 [DEBUG BOOTSTRAP] Cache key: {cache_key}")  # 🔥 DEBUG
             logger.info(f"🔍 [DEBUG BOOTSTRAP] Mevcut veri: {existing_data is not None}")  # 🔥 DEBUG
+            logger.info(f"🔍 [DEBUG BOOTSTRAP] Veri içeriği: {existing_data}")  # 🔥 YENİ DEBUG
             
-            if existing_data is not None:
-                logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır")
+            # 🔥 FIX: Boş liste de bootstrap tetiklemeli!
+            if existing_data is not None and len(existing_data) > 0:
+                logger.info(f"✅ [BOOTSTRAP] {shift_name} vardiyası hazır ({len(existing_data)} haber)")
                 return False
             
             _bootstrap_in_progress[shift_type] = True
