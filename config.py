@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V5.3.2 🧠📰🏦💰🔥
+Configuration - PRODUCTION READY V5.4 🧠📰🏦💰🔥
 =====================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -22,6 +22,8 @@ Configuration - PRODUCTION READY V5.3.2 🧠📰🏦💰🔥
 ✅ 🔥 RAM OPTIMIZATION: %95 threshold (LOG SPAM FİX - V5.3.1)
 ✅ 🔥 CPU OPTIMIZATION: %80 threshold (LOG SPAM FİX - V5.3.1)
 ✅ 🔥 SCHEDULER OPTIMIZATION: CPU spike önleme (00:00→00:03 sabah vardiyası - V5.3.2)
+✅ 🔥 SMART MARGIN FALLBACK: En son başarılı marjları kullan (Config fallback kaldırıldı - V5.4)
+✅ 🔥 MARGIN BOOTSTRAP: İlk kurulumda otomatik marj çekme (V5.4)
 """
 import os
 
@@ -30,7 +32,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "5.3.2"  # 🔥 Dynamic Margin Ayrı Job + Scheduler Optimization
+    APP_VERSION = "5.4"  # 🔥 Smart Margin Fallback + Bootstrap
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -44,98 +46,78 @@ class Config:
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
     
     # ======================================
-    # 💰 MARKET MARGIN SYSTEM V2.0
+    # 💰 MARKET MARGIN SYSTEM V5.4
     # ======================================
     """
     FİYAT PROFİLLERİ:
     - raw: Ham fiyat (API'den direk gelen, borsa/toptan fiyatı)
-    - jeweler: Kuyumcu/Fiziki piyasa fiyatı (YARIM MARJ eklenmiş)
+    - jeweler: Kuyumcu/Fiziki piyasa fiyatı (DİNAMİK MARJ eklenmiş)
     
     KULLANIM:
     - Kullanıcı ayarlardan "Ham Fiyat" veya "Kuyumcu Fiyatı" seçer
     - Backend her iki fiyat serisini de tutar (ayrı snapshot'lar)
     - Yüzdelik değişimler kendi snapshot'larına göre hesaplanır
     
-    DİNAMİK MARJ SİSTEMİ V5.3.2:
+    DİNAMİK MARJ SİSTEMİ V5.4:
     - Günde 1 kere (00:01 - AYRI JOB) Harem fiyatları kontrol edilir
     - Gemini AI ile gerçek marjlar hesaplanır
     - Hesaplanan marjın YARISI kullanılır (alarm patlaması önlenir)
     - Gümüş için özel: %75'i kullanılır (%100 yerine)
     - Redis'e kaydedilir (24 saat TTL)
-    - Fallback: Gemini patlarsa aşağıdaki varsayılan marjlar kullanılır
+    - KALICI BACKUP: margin_last_update (TTL=0, süresiz!)
     
     ZAMANLAMA (CPU Spike Önleme):
     - 00:00:05 → Snapshot (hızlı)
     - 00:01:00 → Dinamik Marj Güncelleme (Gemini - orta hız)
     - 00:03:00 → Sabah Vardiyası Haberler (Gemini - yavaş)
     
-    MARJ ORANLARI (Fallback - Gemini kullanılamazsa):
-    - Altınlar: %0-2.6 (Harem marjının yarısı)
-    - Dövizler: %0.3-0.8 (Kuyumcu gişe farkı)
-    - Gümüş: %15 (Harem marjının %75'i)
+    AKILLI FALLBACK SİSTEMİ V5.4:
+    1. Redis (bugünkü Gemini marjları) → EN GÜNCEL ✅
+    2. margin_last_update (en son başarılı) → SMOOTH FALLBACK ✅
+    3. BOOTSTRAP (ilk kurulum) → HEMEN GEMİNİ ÇAĞIR! ✅
+    
+    NEDEN CONFIG MARJLARI KALDIRILDI?
+    - Gemini çökerse sabit marjlar kullanılıyordu → Ani fiyat değişimi!
+    - Alarmlar patlıyordu, kullanıcılar şaşırıyordu
+    - YENİ ÇÖZÜM: En son başarılı marjları kullan → Smooth geçiş!
+    
+    ÖRNEİLK KURULUM:
+    - margin_last_update yok
+    - get_dynamic_margins() HEMEN Gemini'yi çağırır (BOOTSTRAP)
+    - Marjlar çekilir ve kaydedilir
+    - Sistem çalışmaya başlar
+    
+    ÖRNEK 2: GEMİNİ ÇÖKTÜ:
+    - Gece 00:01 Gemini timeout
+    - Redis boş (24sa TTL doldu)
+    - margin_last_update kullanılır (dünkü marjlar)
+    - Smooth geçiş, kullanıcı fark etmez!
+    
+    ÖRNEK 3: RESTART:
+    - Redis temiz (restart)
+    - margin_last_update disk backup'tan yüklenir
+    - Eski marjlar kullanılır
+    - Gece 00:01 Gemini yenileyecek
     """
     
     PRICE_PROFILES = {
         # RAW PROFILE - Ham Fiyat (API'den gelen)
         "raw": {},  # Hiç marj yok, direkt API fiyatı
         
-        # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı (YARIM MARJ)
-        "jeweler": {
-            # 🟡 ALTINLAR - YARIM MARJ (Fallback değerler)
-            # Redis'te 'dynamic_half_margins' varsa onlar kullanılır
-            "GRA": 0.026,              # Gram Altın: %2.6 (varsayılan yarım marj)
-            "HAS": 0.026,              # Has Altın: %2.6
-            "CEYREKALTIN": 0.001,      # Çeyrek: %0.1
-            "C22": 0.001,              # Çeyrek (alternatif kod): %0.1
-            "YARIMALTIN": 0.0005,      # Yarım: %0.05
-            "YAR": 0.0005,             # Yarım (alternatif kod): %0.05
-            "TAMALTIN": 0.0,           # Tam: %0
-            "TAM": 0.0,                # Tam (alternatif kod): %0
-            "CUMHURIYETALTINI": 0.0,   # Cumhuriyet: %0
-            "CUM": 0.0,                # Cumhuriyet (alternatif kod): %0
-            "ATAALTIN": 0.0,           # Ata: %0
-            "ATA": 0.0,                # Ata (alternatif kod): %0
-            
-            # ⚪ GÜMÜŞ - %15 MARJ (Fallback - Harem marjının %75'i)
-            "GUMUS": 0.15,             # Gümüş: %15
-            "AG": 0.15,                # Gümüş (alternatif kod): %15
-            "SILVER": 0.15,            # Gümüş (İngilizce): %15
-            
-            # 💵 DÖVİZLER - KÜÇÜK SABİT MARJ (Kuyumcu gişe farkı)
-            "USD": 0.005,              # Dolar: %0.5
-            "EUR": 0.003,              # Euro: %0.3
-            "GBP": 0.006,              # Sterlin: %0.6
-            "CHF": 0.004,              # Frank: %0.4
-            "CAD": 0.008,              # Kanada Doları: %0.8
-            "AUD": 0.004,              # Avustralya Doları: %0.4
-            "RUB": 0.005,              # Ruble: %0.5
-            "SAR": 0.005,              # Suudi Riyali: %0.5
-            "AED": 0.005,              # BAE Dirhemi: %0.5
-            "KWD": 0.005,              # Kuveyt Dinarı: %0.5
-            "BHD": 0.005,              # Bahreyn Dinarı: %0.5
-            "OMR": 0.005,              # Umman Riyali: %0.5
-            "QAR": 0.005,              # Katar Riyali: %0.5
-            "CNY": 0.005,              # Çin Yuanı: %0.5
-            "SEK": 0.005,              # İsveç Kronu: %0.5
-            "NOK": 0.005,              # Norveç Kronu: %0.5
-            "PLN": 0.005,              # Polonya Zlotisi: %0.5
-            "RON": 0.005,              # Romanya Leyi: %0.5
-            "CZK": 0.005,              # Çek Kronu: %0.5
-            "EGP": 0.005,              # Mısır Lirası: %0.5
-            "RSD": 0.005,              # Sırp Dinarı: %0.5
-            "HUF": 0.005,              # Macar Forinti: %0.5
-            "BAM": 0.005,              # Bosna Markı: %0.5
-        }
+        # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı (DİNAMİK MARJ)
+        # 🔥 V5.4: Config marjları KALDIRILDI!
+        # Gemini otomatik doldurur + Bootstrap varsa hemen çeker
+        "jeweler": {}  # Gemini dolduracak (Redis + margin_last_update)
     }
     
     # Varsayılan fiyat profili (uygulama ilk açıldığında)
     DEFAULT_PRICE_PROFILE = "jeweler"  # Kuyumcu fiyatı varsayılan
     
     # Profil tanımlanmamış varlıklar için varsayılan marj
-    DEFAULT_MARKET_MARGIN = 0.0  # %0 (marj yok)
+    DEFAULT_MARKET_MARGIN = 0.0  # %0 (marj yok - ham fiyat gibi)
     
     # ======================================
-    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI V5.3.2
+    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI V5.4
     # ======================================
     # Harem veri kaynağı (HTML parse edilecek)
     HAREM_PRICE_URL = "https://altin.doviz.com/harem"
@@ -331,9 +313,9 @@ class Config:
         'news_last_update': 'news:last_update',
         'daily_bayram': 'daily:bayram',
         
-        # 🔥 DİNAMİK YARIM MARJ SİSTEMİ
-        'dynamic_half_margins': 'dynamic:half_margins',  # 24 saat TTL
-        'margin_last_update': 'margin:last_update',       # Son güncelleme zamanı
+        # 🔥 DİNAMİK MARJ SİSTEMİ V5.4
+        'dynamic_half_margins': 'dynamic:half_margins',  # 24 saat TTL (bugünkü Gemini marjları)
+        'margin_last_update': 'margin:last_update',       # TTL=0 süresiz (en son başarılı marjlar)
     }
     
     # ======================================
