@@ -1,5 +1,5 @@
 """
-Event Manager - AKILLI TAKVİM SİSTEMİ V7.0 🗓️📰🏦
+Event Manager - AKILLI TAKVİM SİSTEMİ V7.1 🗓️📰🏦
 ======================================
 ✅ BAYRAMLAR: Gemini otomatik tespit (her vardiya hazırlığında)
 ✅ HABERLER: GNews + NewsData + Gemini özet
@@ -7,16 +7,17 @@ Event Manager - AKILLI TAKVİM SİSTEMİ V7.0 🗓️📰🏦
 ✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
 ✅ BASIT VE ETKİLİ: Gereksiz karmaşıklık yok
 ✅ CLEAN CODE: Yorumsuz, profesyonel, production-ready
+✅ LOG SPAM FIX: Banner sadece değiştiğinde loglanır (V7.1)
 
 Priority Değerleri (Düşük sayı = Yüksek öncelik):
 - 10: Bayram/Tatil
 - 30: Piyasa Kapalı
 - 75: Günlük Haberler
 
-V7.0 Değişiklikler:
-- check_and_notify_events() FONKSİYONU SİLİNDİ (08:00 job kaldırıldı)
-- get_daily_notification_content() EKLENDİ (14:00 push için)
-- Tüm olası senaryolar handle ediliyor
+V7.1 Değişiklikler:
+- LOG SPAM FIX: Banner tekrarını önlemek için cache mekanizması eklendi
+- Sadece banner değiştiğinde log yazılır
+- Global state ile son loglanan banner takip edilir
 """
 
 import logging
@@ -27,6 +28,8 @@ from utils.cache import get_cache
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+_last_logged_banner = None
 
 
 def get_todays_events() -> List[Dict[str, any]]:
@@ -60,9 +63,9 @@ def get_todays_events() -> List[Dict[str, any]]:
                 "valid_until": "15:00",
                 "date": today_str
             })
-            logger.info(f"🏦 [BAYRAM] {bayram_msg} - 15:00'a kadar gösterilecek (Priority: 10)")
+            logger.debug(f"🏦 [BAYRAM] {bayram_msg} - 15:00'a kadar gösterilecek (Priority: 10)")
         elif bayram_msg and current_time.hour >= 15:
-            logger.info(f"🏦 [BAYRAM] Süresi doldu (15:00+), haberler devrede")
+            logger.debug(f"🏦 [BAYRAM] Süresi doldu (15:00+), haberler devrede")
             
     except Exception as e:
         logger.warning(f"⚠️ [BAYRAM] Kontrol hatası: {e}")
@@ -92,10 +95,14 @@ def get_todays_banner() -> Optional[str]:
     """
     App'te gösterilecek banner'ı döndürür (priority sırasına göre).
     
+    V7.1: LOG SPAM FIX - Sadece banner değiştiğinde log yazar
+    
     Returns:
         str: Banner mesajı
         None: Banner yok
     """
+    global _last_logged_banner
+    
     today = date.today()
     current_time = datetime.now()
     weekday = today.weekday()
@@ -104,21 +111,35 @@ def get_todays_banner() -> Optional[str]:
     
     if events:
         top_event = events[0]
-        logger.info(
-            f"📅 [BANNER] {top_event['type'].upper()} (Priority: {top_event['priority']}): "
-            f"{top_event['message'][:60]}..."
-        )
-        return top_event['message']
+        banner_msg = top_event['message']
+        
+        if _last_logged_banner != banner_msg:
+            logger.info(
+                f"📅 [BANNER] {top_event['type'].upper()} (Priority: {top_event['priority']}): "
+                f"{banner_msg[:60]}..."
+            )
+            _last_logged_banner = banner_msg
+        
+        return banner_msg
     
     if weekday == 5 or weekday == 6:
-        logger.info("📅 [BANNER] Piyasa kapalı (Hafta sonu)")
-        return "Piyasalar kapalı, iyi hafta sonları! 🌙"
+        weekend_msg = "Piyasalar kapalı, iyi hafta sonları! 🌙"
+        if _last_logged_banner != weekend_msg:
+            logger.info("📅 [BANNER] Piyasa kapalı (Hafta sonu)")
+            _last_logged_banner = weekend_msg
+        return weekend_msg
     
     if weekday == 4 and current_time.hour >= 18:
-        logger.info("📅 [BANNER] Piyasa kapalı (Cuma akşam)")
-        return "Piyasalar kapandı, iyi hafta sonları! 🌙"
+        friday_msg = "Piyasalar kapandı, iyi hafta sonları! 🌙"
+        if _last_logged_banner != friday_msg:
+            logger.info("📅 [BANNER] Piyasa kapalı (Cuma akşam)")
+            _last_logged_banner = friday_msg
+        return friday_msg
     
-    logger.info("📅 [BANNER] Bugün özel banner yok")
+    if _last_logged_banner is not None:
+        logger.info("📅 [BANNER] Bugün özel banner yok")
+        _last_logged_banner = None
+    
     return None
 
 
@@ -181,7 +202,7 @@ def test_event_manager():
     Terminal'den test etmek için:
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 Event Manager V7.0 📰🏦 Test Ediliyor...\n")
+    print("🧪 Event Manager V7.1 📰🏦 Test Ediliyor...\n")
     print("Priority Sistemi: DÜŞÜK SAYI = YÜKSEK ÖNCELİK\n")
     
     print("=" * 60)
@@ -242,3 +263,4 @@ def test_event_manager():
 
 if __name__ == "__main__":
     test_event_manager()
+```
