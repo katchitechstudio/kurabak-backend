@@ -1,5 +1,5 @@
 """
-Configuration - PRODUCTION READY V5.5 🧠📰🏦💰🔥
+Configuration - PRODUCTION READY V5.6 🧠📰🏦💰🔥
 =====================================================
 ✅ API V5: Tek kaynak (Primary & Only)
 ✅ BACKUP SYSTEM: 15 dakikalık yedek sistem
@@ -18,15 +18,15 @@ Configuration - PRODUCTION READY V5.5 🧠📰🏦💰🔥
 ✅ WORKER INTERVAL: 1 dakika (daha hızlı güncellemeler)
 ✅ 📰 GÜNLÜK HABER SİSTEMİ V3.0: Hazırlama + Yayınlama ayrı (23:55 + 11:55)
 ✅ 💰 MARKET MARGIN SYSTEM: Ham/Kuyumcu fiyat profilleri + İki Snapshot
-✅ 🔥 DYNAMIC FULL MARGIN V5.5: TAM MARJ + Smooth Geçiş (3-4 günde kademeli)
+✅ 🔥 DYNAMIC FULL MARGIN V5.6: TAM MARJ + Smooth Geçiş + HİBRİT SİSTEM
 ✅ 🔥 SMART SCHEDULER V5.5: CPU spike önleme (haberler 5 dakika önce hazırlanır)
 
-V5.5 Değişiklikler (SMOOTH MARGIN TRANSITION + NEWS PREPARE):
+V5.6 Değişiklikler (HİBRİT MARJ SİSTEMİ):
+- 🔥 ALTIN + GÜMÜŞ: Harem + Gemini (6 varlık - dinamik)
+- 🔥 MAJÖR DÖVİZLER: Ziraat Bankası + Gemini (11 döviz - dinamik)
+- 🔥 EXOTIC DÖVİZLER: Config sabit marjlar (12 döviz - statik)
 - 🔥 TAM MARJ: Yarım değil, TAM marj kullanılıyor (kuyumcu gerçeği)
 - 🔥 SMOOTH GEÇİŞ: Marj değişimi kademeli (3-4 gün), alarm patlaması önlenir
-- 🔥 HABER HAZIRLIK: 23:55 + 11:55'te Gemini çağrılır (00:00 + 12:00'da yayınlanır)
-- 🔥 İKİ SNAPSHOT: raw_snapshot + jeweler_snapshot (marj değişiminde sorun yok)
-- 🔥 CPU OPTİMİZASYON: 00:00 civarında 3 ağır iş dağıtıldı (23:55 → 00:00 → 00:05)
 """
 import os
 
@@ -35,7 +35,7 @@ class Config:
     # UYGULAMA AYARLARI
     # ======================================
     APP_NAME = "KuraBak Backend API"
-    APP_VERSION = "5.5"  # 🔥 Smooth Margin Transition + News Prepare System
+    APP_VERSION = "5.6"  # 🔥 Hibrit Margin System (Harem + Ziraat + Config)
     ENVIRONMENT = os.environ.get("FLASK_ENV", "production")
     
     # Zaman Dilimi (Çok Önemli - Loglar, Snapshot ve Raporlar için)
@@ -49,7 +49,7 @@ class Config:
     API_V5_TIMEOUT = (5, 10)  # 5sn bağlanma, 10sn okuma
     
     # ======================================
-    # 💰 MARKET MARGIN SYSTEM V5.5
+    # 💰 MARKET MARGIN SYSTEM V5.6 (HİBRİT)
     # ======================================
     """
     FİYAT PROFİLLERİ:
@@ -61,64 +61,51 @@ class Config:
     - Backend her iki fiyat serisini de tutar (İKİ AYRI SNAPSHOT)
     - Yüzdelik değişimler kendi snapshot'larına göre hesaplanır
     
-    DİNAMİK MARJ SİSTEMİ V5.5 (TAM MARJ + SMOOTH GEÇİŞ):
-    - Günde 1 kere (00:05) Harem fiyatları kontrol edilir
-    - Gemini AI ile gerçek marjlar hesaplanır
-    - TAM MARJ kullanılır (kuyumcu gerçeğini yansıtır)
-    - SMOOTH GEÇİŞ: Marj değişimi kademeli (3-4 gün)
+    HİBRİT MARJ SİSTEMİ V5.6:
+    
+    1. DİNAMİK MARJLAR (Gemini AI hesaplar):
+       - ALTIN + GÜMÜŞ: Harem.com HTML parse (6 varlık)
+       - MAJÖR DÖVİZLER: Ziraat Bankası HTML parse (11 döviz)
+       Toplam: 17 varlık dinamik
+    
+    2. STATİK MARJLAR (Config'den):
+       - EXOTIC DÖVİZLER: Manuel tanımlı (12 döviz)
+       Toplam: 12 döviz statik
+    
+    SMOOTH GEÇİŞ (sadece dinamik marjlar için):
+    - Marj değişimi kademeli (3-4 gün)
       Örnek: %2 → %4 değişimi:
         Gün 1: %3 (ortalama)
         Gün 2: %3.5 (ortalama)
         Gün 3: %3.75 (ortalama)
         Gün 4: %4 (hedef)
-    - Redis'e kaydedilir (24 saat TTL)
-    - KALICI BACKUP: margin_last_update (TTL=0, süresiz!)
+    - Alarmlar patlamaz, kullanıcı şaşırmaz ✅
     
-    İKİ SNAPSHOT SİSTEMİ V5.5:
+    İKİ SNAPSHOT SİSTEMİ V5.6:
     - raw_snapshot: Ham fiyatlar (00:00'da kaydedilir, asla değişmez)
     - jeweler_snapshot: Marjlı fiyatlar (00:00'da + marj değişiminde güncellenir)
     
     ZAMANLAMA (CPU Spike Önleme):
     - 23:55:00 → Sabah haberlerini hazırla (Gemini)
     - 00:00:00 → Snapshot kaydet (RAW + JEWELER) + Sabah haberlerini yayınla
-    - 00:05:00 → Dinamik Marj Güncelle (Gemini + Smooth + Jeweler Rebuild)
+    - 00:05:00 → Dinamik Marj Güncelle (Harem + Ziraat + Config exotic merge)
     - 11:55:00 → Akşam haberlerini hazırla (Gemini)
     - 12:00:00 → Akşam haberlerini yayınla
     - 14:00:00 → Push notification gönder
     
-    AKILLI FALLBACK SİSTEMİ V5.5:
-    1. Redis (bugünkü Gemini marjları) → EN GÜNCEL ✅
-    2. margin_last_update (en son başarılı) → SMOOTH FALLBACK ✅
-    3. BOOTSTRAP (ilk kurulum) → HEMEN GEMİNİ ÇAĞIR! ✅
-    
-    ÖRNEK 1: İLK KURULUM
-    - margin_last_update yok
-    - get_dynamic_margins() HEMEN Gemini'yi çağırır (BOOTSTRAP)
-    - Marjlar çekilir ve kaydedilir
-    - Sistem çalışmaya başlar
-    
-    ÖRNEK 2: GEMİNİ ÇÖKTÜ
-    - Gece 00:05 Gemini timeout
-    - Redis boş (24sa TTL doldu)
-    - margin_last_update kullanılır (dünkü marjlar)
-    - Smooth geçiş, kullanıcı fark etmez!
-    
-    ÖRNEK 3: MARJ DEĞİŞİMİ
-    - Harem: Gram Altın marjı %2 → %4.7 oldu
-    - Smooth: İlk gün %3.35 uygula (ortalama)
-    - Ertesi gün: %4.025 uygula
-    - 3. gün: %4.36 uygula
-    - 4. gün: %4.7 uygula (hedef)
-    - Alarmlar patlamaz, kullanıcı şaşırmaz ✅
+    AKILLI FALLBACK SİSTEMİ V5.6:
+    1. Redis (bugünkü Gemini marjları + exotic) → EN GÜNCEL ✅
+    2. margin_last_update (en son başarılı + exotic) → SMOOTH FALLBACK ✅
+    3. BOOTSTRAP (ilk kurulum + exotic) → HEMEN GEMİNİ ÇAĞIR! ✅
     """
     
     PRICE_PROFILES = {
         # RAW PROFILE - Ham Fiyat (API'den gelen)
         "raw": {},  # Hiç marj yok, direkt API fiyatı
         
-        # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı (DİNAMİK TAM MARJ)
-        # 🔥 V5.5: TAM MARJ + SMOOTH GEÇİŞ
-        "jeweler": {}  # Gemini dolduracak (Redis + margin_last_update)
+        # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı (HİBRİT MARJ)
+        # 🔥 V5.6: Dinamik (Harem + Ziraat) + Statik (Config exotic)
+        "jeweler": {}  # Gemini + Config dolduracak
     }
     
     # Varsayılan fiyat profili (uygulama ilk açıldığında)
@@ -128,20 +115,67 @@ class Config:
     DEFAULT_MARKET_MARGIN = 0.0  # %0 (marj yok - ham fiyat gibi)
     
     # ======================================
-    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI V5.5
+    # 🔥 DİNAMİK MARJ SİSTEMİ AYARLARI V5.6
     # ======================================
-    # Harem veri kaynağı (HTML parse edilecek)
+    # Harem veri kaynağı (Altın + Gümüş için HTML parse)
     HAREM_PRICE_URL = "https://altin.doviz.com/harem"
     HAREM_FETCH_TIMEOUT = 10  # 10 saniye
+    
+    # 🔥 V5.6: Ziraat Bankası veri kaynağı (Majör dövizler için HTML parse)
+    ZIRAAT_CURRENCY_URL = "https://kur.doviz.com/ziraat-bankasi"
+    ZIRAAT_FETCH_TIMEOUT = 10  # 10 saniye
     
     # 🔥 Marj güncelleme saati (AYRI JOB - CPU spike önleme)
     MARGIN_UPDATE_HOUR = 0     # Gece 00:05 (snapshot'tan SONRA)
     MARGIN_UPDATE_MINUTE = 5   # 00:00:00 Snapshot → 00:05:00 Marj → Haberler zaten hazır
     
-    # 🔥 V5.5: TAM MARJ + SMOOTH GEÇİŞ
+    # 🔥 V5.6: TAM MARJ + SMOOTH GEÇİŞ
     MARGIN_CALCULATION_STRATEGY = "full"  # "full" = Tam marj (kuyumcu gerçeği)
-    MARGIN_SMOOTH_TRANSITION = True  # Kademeli geçiş aktif
+    MARGIN_SMOOTH_TRANSITION = True  # Kademeli geçiş aktif (sadece dinamik marjlar için)
     MARGIN_SMOOTH_THRESHOLD = 0.015  # %1.5'ten fazla fark varsa smooth geçiş yap
+    
+    # ======================================
+    # 🔥 EXOTIC DÖVİZ MARJLARI (STATİK) V5.6
+    # ======================================
+    """
+    Ziraat Bankası'nda OLMAYAN 12 döviz için sabit marjlar.
+    Bu marjlar değişmez, Gemini hesaplamaz.
+    
+    MANTIK:
+    - Majör dövizler (USD, EUR, GBP) → Ziraat'tan dinamik
+    - Exotic dövizler (RUB, CNY, PLN) → Config'den statik
+    
+    MARJ ORANLARI:
+    - Orta Doğu: %1.5-1.8 (düşük spread)
+    - Asya: %2.0 (orta spread)
+    - Avrupa exotic: %2.0-2.2 (orta-yüksek spread)
+    - Afrika/Rusya: %2.5 (yüksek spread)
+    """
+    STATIC_EXOTIC_MARGINS = {
+        # Orta Doğu (Ziraat'ta yok)
+        "AED": 0.015,  # %1.5 - BAE Dirhemi
+        "KWD": 0.018,  # %1.8 - Kuveyt Dinarı
+        "BHD": 0.018,  # %1.8 - Bahreyn Dinarı
+        "OMR": 0.018,  # %1.8 - Umman Riyali
+        "QAR": 0.015,  # %1.5 - Katar Riyali
+        
+        # Asya (Ziraat'ta yok)
+        "CNY": 0.020,  # %2.0 - Çin Yuanı
+        
+        # Avrupa Exotic (Ziraat'ta yok)
+        "PLN": 0.020,  # %2.0 - Polonya Zlotisi
+        "RON": 0.020,  # %2.0 - Romanya Leyi
+        "CZK": 0.020,  # %2.0 - Çek Korunası
+        "HUF": 0.022,  # %2.2 - Macar Forinti
+        "RSD": 0.022,  # %2.2 - Sırp Dinarı
+        "BAM": 0.020,  # %2.0 - Bosna Markı
+        
+        # Afrika (Ziraat'ta yok)
+        "EGP": 0.025,  # %2.5 - Mısır Lirası
+        
+        # Rusya (Ziraat'ta yok)
+        "RUB": 0.025,  # %2.5 - Rus Rublesi
+    }
     
     # ======================================
     # 🔥 FIREBASE PUSH NOTIFICATIONS
@@ -290,7 +324,7 @@ class Config:
         # Yedek sistemler
         'backup': 'kurabak:backup:all',
         
-        # 🔥 V5.5: İKİ SNAPSHOT SİSTEMİ
+        # 🔥 V5.6: İKİ SNAPSHOT SİSTEMİ
         'raw_snapshot': 'kurabak:raw_snapshot',           # Ham fiyatlar (asla değişmez)
         'jeweler_snapshot': 'kurabak:jeweler_snapshot',   # Marjlı fiyatlar (marj değişince güncellenir)
         
@@ -340,8 +374,8 @@ class Config:
         'news_last_update': 'news:last_update',
         'daily_bayram': 'daily:bayram',
         
-        # 🔥 DİNAMİK MARJ SİSTEMİ V5.5
-        'dynamic_margins': 'dynamic:margins',          # 24 saat TTL (bugünkü Gemini marjları - TAM MARJ)
+        # 🔥 DİNAMİK MARJ SİSTEMİ V5.6 (HİBRİT)
+        'dynamic_margins': 'dynamic:margins',          # 24 saat TTL (dinamik + exotic birleşmiş)
         'margin_last_update': 'margin:last_update',    # TTL=0 süresiz (en son başarılı marjlar + timestamp)
     }
     
