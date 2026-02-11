@@ -15,15 +15,13 @@ News Manager - GÜNLÜK HABER SİSTEMİ V4.1 ULTIMATE 📰🚀💰
 ✅ 🔥 DİNAMİK TAM MARJ V4.0: Kuyumcu gerçeğini yansıtır
 ✅ 🔥 SMOOTH MARJ GEÇİŞİ: 3-4 günde kademeli (alarm patlaması önlenir)
 ✅ 🔥 PREPARE/PUBLISH AYRI: Haberler 5 dakika önce hazırlanır
+✅ 🔥 GÜMÜŞ + TAM + ATA MARJ FIX: Doğru isimlendirme ve negatif marj desteği
 
-V4.1 Değişiklikler (GEMİNİ 3 FLASH):
-- 🔥 GEMİNİ 3 FLASH: Google'ın yeni modeli (gemini-2.0-flash-exp deprecated)
-- 🔥 TAM MARJ: Yarım değil, TAM marj hesaplanıyor (kuyumcu fiyatları)
-- 🔥 SMOOTH GEÇİŞ: Marj değişimi kademeli (%1.5+ fark varsa ortalama al)
-- 🔥 PREPARE FONKSIYONLARI: prepare_morning_news(), prepare_evening_news()
-- 🔥 PUBLISH FONKSIYONLARI: publish_morning_news(), publish_evening_news()
-- 🔥 YENİ CACHE: news_morning_pending, news_evening_pending (geçici)
-- 🔥 ZAMANLAMA: 23:55 hazırla → 00:00 yayınla (CPU spike önleme)
+V4.2 Değişiklikler (MARJ FIX):
+- 🔥 ATA ALTIN: "Atatürk Altını" değil "Ata Altın" (HTML'deki gerçek isim)
+- 🔥 NEGATİF MARJ: Tam Altın ve Ata için negatif marj desteği
+- 🔥 GÜMÜŞ FIX: %15-20 olması gereken marj düzeltildi
+- 🔥 HTML İSİMLER: Harem sitesindeki tam isimler kullanılıyor
 """
 
 import os
@@ -469,7 +467,7 @@ KURALLAR:
 
 
 # ======================================
-# 🔥 DİNAMİK TAM MARJ SİSTEMİ V4.0
+# 🔥 DİNAMİK TAM MARJ SİSTEMİ V4.2
 # ======================================
 
 def fetch_harem_html() -> Optional[str]:
@@ -533,45 +531,14 @@ def async_margin_bootstrap():
             _margin_bootstrap_in_progress = False
 
 
-def fetch_harem_html() -> Optional[str]:
-    """
-    Harem sayfasının HTML'ini çeker
-    """
-    try:
-        url = Config.HAREM_PRICE_URL
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        logger.info(f"🕷️ [HAREM HTML] Çekiliyor: {url}")
-        response = requests.get(url, headers=headers, timeout=Config.HAREM_FETCH_TIMEOUT)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        table = soup.find('table')
-        
-        if not table:
-            table = soup.find_all('div', class_='data')
-        
-        if table:
-            html_text = str(table)[:5000]
-            logger.info(f"✅ [HAREM HTML] {len(html_text)} karakter alındı")
-            return html_text
-        else:
-            logger.error("❌ [HAREM HTML] Tablo bulunamadı!")
-            return None
-        
-    except Exception as e:
-        logger.error(f"❌ [HAREM HTML] Hata: {e}")
-        return None
-
-
 def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
     """
-    🔥 V4.0: Gemini'ye HTML verisini göndererek TAM MARJLARI hesaplat
+    🔥 V4.2: Gemini'ye HTML verisini göndererek TAM MARJLARI hesaplat
     
-    ÖNCEKİ (V3.9): Yarım marj hesaplıyordu
-    YENİ (V4.0): TAM MARJ hesaplıyor (kuyumcu gerçeği)
+    YENİ (V4.2):
+    - ATA ALTIN: "Atatürk" değil "Ata Altın" (HTML'deki gerçek isim)
+    - NEGATİF MARJ: Tam ve Ata için negatif marj desteği
+    - GÜMÜŞ FIX: %15-20 olması gereken marj
     """
     try:
         if not GEMINI_API_KEY:
@@ -599,6 +566,7 @@ SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatların
 1. HTML tablosundan Harem'in SATIŞ fiyatlarını çıkar
 2. Her ürün için TAM MARJ hesapla: ((Harem Satış - API Satış) / API Satış) × 100
 3. ONDALIK NOKTA KULLAN (virgül değil!)
+4. NEGATİF marjları da hesapla (Harem ucuzsa marj eksi olur)
 
 📐 ÖRNEK HESAPLAMA (Gram Altın):
 - Harem Satış: 7.407,92 ₺ (HTML'deki virgülü noktaya çevir: 7407.92)
@@ -607,25 +575,62 @@ SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatların
 - TAM MARJ: (334.36 / 7073.56) × 100 = 4.73%
 - ÇIKTI: 4.73
 
-⚠️ DİKKAT:
-- HTML'de binlik ayraç NOKTA (7.267,68)
-- Ondalık ayraç VİRGÜL (7267,68)
+📐 NEGATİF MARJ ÖRNEĞİ:
+- Harem Satış: 48.080,00 ₺
+- API Satış: 48.500,00 ₺  
+- Fark: 48080 - 48500 = -420 ₺
+- TAM MARJ: (-420 / 48500) × 100 = -0.87%
+- ÇIKTI: -0.87
+
+⚠️ FORMAT DİKKAT:
+- HTML'de binlik ayraç NOKTA: 7.267,68
+- HTML'de ondalık ayraç VİRGÜL: 7267,68
 - Çıktıda NOKTA kullan: 4.73 (4,73 değil!)
 - SATIŞ sütunundaki değeri al (ALIŞ değil!)
+- NEGATİF marjları eksi işaretiyle yaz: -0.87
 
-🎯 ÜRÜN EŞLEMELERİ:
-GRA = Harem Gram Altın
-C22 = Harem Çeyrek Altın
-YAR = Harem Yarım Altın
-TAM = Harem Tam Altın
-AG = Harem Gümüş
+🎯 ÜRÜN EŞLEMELERİ - HTML'DEKİ TAM İSİMLER:
+GRA = HTML'de "Gram Altın" diye geçiyor
+C22 = HTML'de "Çeyrek Altın" diye geçiyor
+YAR = HTML'de "Yarım Altın" diye geçiyor
+TAM = HTML'de "Tam Altın" diye geçiyor
+ATA = HTML'de "Ata Altın" diye geçiyor (Atatürk DEĞİL!)
+AG = HTML'de "Gram Gümüş" veya "Gümüş" diye geçiyor
 
-📤 ÇIKTI FORMATI (SADECE BU - noktalı sayılar!):
+🔥 ÖZEL UYARI - ATA ALTIN:
+- HTML'de "Ata Altın" diye geçiyor (Atatürk altını değil!)
+- "Ata Altın" satırını bul
+- SATIŞ sütunundaki değeri al
+- Tam Altın ile yakın fiyatlıdır
+- NEGATİF marj çıkabilir, bu normal!
+- Eksi değeri olduğu gibi yaz
+
+🔥 ÖZEL UYARI - TAM ALTIN:
+- HTML'de "Tam Altın" diye geçiyor
+- Harem bazen API'den ucuz olabilir
+- NEGATİF marj çıkabilir, bu normal!
+- Eksi değeri olduğu gibi yaz
+
+🔥 ÖZEL UYARI - GÜMÜŞ:
+- HTML'de "Gram Gümüş" veya sadece "Gümüş" diye geçiyor
+- SATIŞ değeri 120-150 TL civarındadır
+- Gümüş marjı %15-20 olmalıdır
+- Eğer %10'dan düşük hesapladıysan HATALI hesaplamışsındır
+- SATIŞ sütununu çok dikkatli oku!
+- Örnek: API=117.43, Harem=139.49 → Marj=%18.8
+
+🔍 ARAMA TALİMATI:
+- Önce ürün ismini TAM OLARAK HTML'de bul
+- Sonra o satırdaki SATIŞ değerini al
+- Örnek: "Gram Altın" satırını bul → SATIŞ sütunu → değeri al
+
+📤 ÇIKTI FORMATI (SADECE BU - noktalı sayılar, negatif dahil!):
 MARJ_GRA: 4.73
 MARJ_C22: 1.58
 MARJ_YAR: 1.90
-MARJ_TAM: 1.26
-MARJ_AG: 3.54
+MARJ_TAM: -0.87
+MARJ_ATA: 0.52
+MARJ_AG: 18.80
 
 HİÇBİR AÇIKLAMA YAPMA!
 """
@@ -667,13 +672,14 @@ HİÇBİR AÇIKLAMA YAPMA!
 
 def update_dynamic_margins() -> bool:
     """
-    🔥 V4.0: Dinamik marjları güncelle (TAM MARJ + SMOOTH GEÇİŞ)
+    🔥 V4.2: Dinamik marjları güncelle (TAM MARJ + SMOOTH GEÇİŞ + NEGATİF MARJ)
     
     ZAMANLAMA: Gece 00:05 (snapshot'tan sonra, haberlerden önce)
     
     YENİ ÖZELLİKLER:
     - TAM MARJ hesaplama (yarım değil)
     - SMOOTH GEÇİŞ: %1.5+ fark varsa kademeli geçiş (3-4 gün)
+    - NEGATİF MARJ: Tam Altın ve Ata için negatif marj desteği
     - Jeweler cache rebuild
     - Jeweler snapshot güncelleme
     """
@@ -1263,7 +1269,7 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     """Test fonksiyonu"""
-    print("🧪 News Manager V4.0 ULTIMATE - TAM MARJ + SMOOTH + PREPARE/PUBLISH\n")
+    print("🧪 News Manager V4.2 ULTIMATE - TAM MARJ + SMOOTH + PREPARE/PUBLISH + MARJ FIX\n")
     
     print("1️⃣ HABER TOPLAMA:")
     news_list = fetch_all_news()
