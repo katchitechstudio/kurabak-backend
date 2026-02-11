@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V5.5 🚀💰🔥
+Financial Service - PRODUCTION READY V5.6 🚀💰🔥
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -8,17 +8,19 @@ Financial Service - PRODUCTION READY V5.5 🚀💰🔥
 ✅ SELF-HEALING: Otomatik sistem kurtarma
 ✅ CIRCUIT BREAKER V2: Sadece durum değişiminde kaydet
 ✅ TREND ANALİZİ: %5 eşiği ile güçlü trend tespiti
-✅ 💰 MARKET MARGIN SYSTEM V5.5: TAM MARJ + İKİ SNAPSHOT
+✅ 💰 MARKET MARGIN SYSTEM V5.6: HİBRİT MARJ (Harem + Ziraat + Config)
 ✅ 🔥 JEWELER REBUILD: Marj değişince cache otomatik yenilenir
 ✅ 🔥 SNAPSHOT GÜNCELLEME: Marj değişince snapshot düzeltilir
 ✅ 🔥 SMOOTH MARJ GEÇİŞİ: Kademeli geçiş (alarm patlaması önlenir)
 
-V5.5 Değişiklikler:
-- 🔥 get_dynamic_margins(): 'dynamic:margins' (TAM MARJ, yarım değil)
+V5.6 Değişiklikler (HİBRİT MARJ):
+- 🔥 get_dynamic_margins(): Dinamik (Gemini) + Exotic (Config) birleştirir
+- 🔥 ALTIN + GÜMÜŞ: Harem + Gemini (6 varlık)
+- 🔥 MAJÖR DÖVİZLER: Ziraat + Gemini (11 döviz)
+- 🔥 EXOTIC DÖVİZLER: Config static (12 döviz)
 - 🔥 save_daily_snapshot(): İki ayrı snapshot (raw + jeweler)
 - 🔥 rebuild_jeweler_cache(): Marj değişince jeweler yenile
 - 🔥 update_jeweler_snapshot(): Marj değişince snapshot düzelt
-- 🔥 Worker'da jeweler_snapshot kullanımı
 """
 
 import requests
@@ -303,37 +305,63 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     }
 
 # ======================================
-# 🔥 DİNAMİK MARJ SİSTEMİ V5.5 (TAM MARJ)
+# 🔥 HİBRİT MARJ SİSTEMİ V5.6
 # ======================================
 
 def get_dynamic_margins() -> Dict[str, float]:
     """
-    🔥 V5.5: Redis'ten TAM MARJLARI al
+    🔥 V5.6: HİBRİT MARJLARI al (Dinamik + Exotic)
     
-    DEĞİŞİKLİK:
-    - Önceki (V5.4): 'dynamic:half_margins' (yarım marj)
-    - Yeni (V5.5): 'dynamic:margins' (TAM MARJ)
+    MARJ KAYNAKLARI:
+    1. DİNAMİK (Gemini hesaplar - news_manager.py):
+       - ALTIN + GÜMÜŞ: Harem (6 varlık)
+       - MAJÖR DÖVİZLER: Ziraat (11 döviz)
+    2. STATİK (Config.py):
+       - EXOTIC DÖVİZLER: Manuel tanımlı (12 döviz)
+    
+    BİRLEŞTİRME:
+    - news_manager.py zaten dinamik + exotic'i birleştirip Redis'e kaydediyor
+    - Burada sadece Redis'ten alıyoruz
+    - Fallback varsa exotic'leri ekstra olarak ekliyoruz (güvenlik)
     
     Returns:
-        Dict: {"GRA": 0.047, "C22": 0.016, ...}
+        Dict: {"GRA": 0.047, "USD": 0.029, "RUB": 0.025, ...}
     """
-    # 1. Bugünkü TAM marjlar
-    dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
+    # 1. Redis'ten hibrit marjları al (news_manager.py birleştirmiş olmalı)
+    hybrid_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
     
-    if dynamic_margins and isinstance(dynamic_margins, dict):
-        logger.debug(f"✅ [DİNAMİK MARJ] Redis'ten alındı: {len(dynamic_margins)} TAM MARJ")
-        return dynamic_margins
+    if hybrid_margins and isinstance(hybrid_margins, dict):
+        # 🔥 GÜVENLIK: Exotic'ler eksikse Config'den ekle
+        exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
+        for code, margin in exotic_margins.items():
+            if code not in hybrid_margins:
+                hybrid_margins[code] = margin
+        
+        logger.debug(f"✅ [HİBRİT MARJ] Redis: {len(hybrid_margins)} marj (dinamik + exotic)")
+        return hybrid_margins
     
     # 2. Fallback: margin_last_update
     last_update = get_cache(Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update'))
     if last_update and isinstance(last_update, dict):
         margins = last_update.get('margins')
         if margins and isinstance(margins, dict):
-            logger.warning("⚠️ [DİNAMİK MARJ] Fallback kullanıldı (margin_last_update)")
+            # 🔥 GÜVENLIK: Exotic'ler eksikse Config'den ekle
+            exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
+            for code, margin in exotic_margins.items():
+                if code not in margins:
+                    margins[code] = margin
+            
+            logger.warning(f"⚠️ [HİBRİT MARJ] Fallback: {len(margins)} marj (margin_last_update + exotic)")
             return margins
     
-    # 3. Son fallback: Boş dict (ham fiyat)
-    logger.warning("⚠️ [DİNAMİK MARJ] Redis'te yok, HAM FİYAT kullanılacak")
+    # 3. Son fallback: Sadece exotic marjlar
+    exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
+    if exotic_margins:
+        logger.warning(f"⚠️ [HİBRİT MARJ] Bootstrap: {len(exotic_margins)} marj (sadece exotic, dinamikler 0)")
+        return exotic_margins
+    
+    # 4. Hiçbir şey yok → Boş dict
+    logger.warning("⚠️ [HİBRİT MARJ] Redis'te yok, HAM FİYAT kullanılacak")
     return {}
 
 
@@ -455,24 +483,19 @@ def determine_banner_message() -> Optional[str]:
     return auto_banner
 
 # ======================================
-# 🔥 SNAPSHOT SİSTEMİ V5.5 (İKİ AYRI)
+# 🔥 SNAPSHOT SİSTEMİ V5.6 (İKİ AYRI)
 # ======================================
 
 def save_daily_snapshot() -> bool:
     """
-    🔥 V5.5: İKİ AYRI SNAPSHOT KAYDET (RAW + JEWELER)
+    🔥 V5.6: İKİ AYRI SNAPSHOT KAYDET (RAW + JEWELER)
     
     Gece 00:00:00'da çağrılır.
-    
-    DEĞİŞİKLİK:
-    - Önceki isim: take_snapshot()
-    - Yeni isim: save_daily_snapshot()
-    - Yeni özellik: İki ayrı snapshot (raw + jeweler)
     
     GÖREV:
     1. Raw cache'lerden snapshot al
     2. Raw snapshot kaydet (raw_snapshot)
-    3. Dinamik TAM marjları al
+    3. Hibrit marjları al (dinamik + exotic)
     4. Jeweler snapshot hesapla
     5. Jeweler snapshot kaydet (jeweler_snapshot)
     6. Telegram rapor gönder
@@ -525,7 +548,7 @@ def save_daily_snapshot() -> bool:
         )
         logger.info(f"✅ [SNAPSHOT] RAW kaydedildi: {len(raw_snapshot)} varlık (Redis + Disk)")
         
-        # 4. Dinamik TAM marjları al
+        # 4. 🔥 V5.6: Hibrit marjları al (dinamik + exotic)
         margin_map = get_dynamic_margins()
         
         # 5. JEWELER SNAPSHOT hesapla
@@ -542,7 +565,7 @@ def save_daily_snapshot() -> bool:
             ttl=0,
             force_disk_backup=True
         )
-        logger.info(f"✅ [SNAPSHOT] JEWELER kaydedildi: {len(jeweler_snapshot)} varlık (Redis + Disk)")
+        logger.info(f"✅ [SNAPSHOT] JEWELER kaydedildi: {len(jeweler_snapshot)} varlık (HİBRİT MARJ)")
         
         # 7. Telegram rapor gönder
         try:
@@ -592,7 +615,7 @@ def save_daily_snapshot() -> bool:
                     + "\n".join(report_lines) +
                     f"\n\n📦 Toplam: {len(raw_snapshot)} varlık\n"
                     f"✅ İki profil (Raw + Kuyumcu) hazır\n"
-                    f"🔥 TAM MARJ kullanıldı"
+                    f"🔥 HİBRİT MARJ (Harem + Ziraat + Config)"
                 )
                 telegram_instance._send_raw(msg)
                 
@@ -607,22 +630,22 @@ def save_daily_snapshot() -> bool:
 
 
 # ======================================
-# 🔥 JEWELER REBUILD V5.5
+# 🔥 JEWELER REBUILD V5.6
 # ======================================
 
 def rebuild_jeweler_cache() -> bool:
     """
-    🔥 V5.5: JEWELER CACHE'İNİ YENİDEN OLUŞTUR
+    🔥 V5.6: JEWELER CACHE'İNİ YENİDEN OLUŞTUR (HİBRİT MARJ)
     
     Marj güncellendiğinde (00:05) çağrılır.
     
     GÖREV:
     1. Raw cache'leri al
-    2. Yeni TAM marjları al
+    2. Hibrit marjları al (dinamik + exotic)
     3. Jeweler fiyatları hesapla
     4. Jeweler cache'lere kaydet
     """
-    logger.info("🔧 [JEWELER REBUILD] Kuyumcu fiyatları yeniden hesaplanıyor...")
+    logger.info("🔧 [JEWELER REBUILD] Kuyumcu fiyatları yeniden hesaplanıyor (HİBRİT MARJ)...")
     
     try:
         # 1. Raw cache'leri al
@@ -634,7 +657,7 @@ def rebuild_jeweler_cache() -> bool:
             logger.error("❌ [JEWELER REBUILD] Raw cache yok!")
             return False
         
-        # 2. Yeni TAM marjları al
+        # 2. 🔥 V5.6: Hibrit marjları al
         margin_map = get_dynamic_margins()
         
         # 3. Marj uygulama fonksiyonu
@@ -686,7 +709,7 @@ def rebuild_jeweler_cache() -> bool:
             f"✅ [JEWELER REBUILD] Tamamlandı: "
             f"{len(currencies_jeweler)} döviz, "
             f"{len(golds_jeweler)} altın, "
-            f"{len(silvers_jeweler)} gümüş (YENİ TAM MARJLARLA)"
+            f"{len(silvers_jeweler)} gümüş (HİBRİT MARJ)"
         )
         
         return True
@@ -698,17 +721,17 @@ def rebuild_jeweler_cache() -> bool:
 
 def update_jeweler_snapshot() -> bool:
     """
-    🔥 V5.5: JEWELER SNAPSHOT'I GÜNCELLE
+    🔥 V5.6: JEWELER SNAPSHOT'I GÜNCELLE (HİBRİT MARJ)
     
     Marj güncellendiğinde (00:05) çağrılır.
     
     GÖREV:
     1. Raw snapshot al (asla değişmez)
-    2. Yeni TAM marjları al
+    2. Hibrit marjları al (dinamik + exotic)
     3. Jeweler snapshot hesapla
     4. Jeweler snapshot güncelle
     """
-    logger.info("🔧 [JEWELER SNAPSHOT] Güncelleniyor...")
+    logger.info("🔧 [JEWELER SNAPSHOT] Güncelleniyor (HİBRİT MARJ)...")
     
     try:
         # 1. Raw snapshot al
@@ -718,7 +741,7 @@ def update_jeweler_snapshot() -> bool:
             logger.error("❌ [JEWELER SNAPSHOT] Raw snapshot yok!")
             return False
         
-        # 2. Yeni TAM marjları al
+        # 2. 🔥 V5.6: Hibrit marjları al
         margin_map = get_dynamic_margins()
         
         # 3. Jeweler snapshot hesapla
@@ -736,7 +759,7 @@ def update_jeweler_snapshot() -> bool:
             force_disk_backup=True
         )
         
-        logger.info(f"✅ [JEWELER SNAPSHOT] Güncellendi: {len(jeweler_snapshot)} varlık (YENİ TAM MARJLARLA)")
+        logger.info(f"✅ [JEWELER SNAPSHOT] Güncellendi: {len(jeweler_snapshot)} varlık (HİBRİT MARJ)")
         
         return True
         
@@ -768,19 +791,19 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 
 
 # ======================================
-# WORKER V5.5 (TAM MARJ + İKİ SNAPSHOT)
+# WORKER V5.6 (HİBRİT MARJ + İKİ SNAPSHOT)
 # ======================================
 
 def update_financial_data():
     """
-    🔥 V5.5: Worker (TAM MARJ + İKİ SNAPSHOT kullanımı)
+    🔥 V5.6: Worker (HİBRİT MARJ + İKİ SNAPSHOT kullanımı)
     
     Her 1 dakikada bir çalışır.
     
     DEĞİŞİKLİKLER:
-    - raw_snapshot kullanımı (önceki: yesterday_prices)
-    - jeweler_snapshot kullanımı (önceki: yesterday_prices_jeweler)
-    - TAM MARJ (önceki: yarım marj)
+    - Hibrit marj kullanımı (dinamik + exotic)
+    - raw_snapshot kullanımı
+    - jeweler_snapshot kullanımı
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -865,7 +888,7 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
         
-        # 🔥 V5.5: İKİ SNAPSHOT kullanımı
+        # 🔥 V5.6: İKİ SNAPSHOT kullanımı
         raw_snapshot = get_cache(Config.CACHE_KEYS['raw_snapshot']) or {}
         jeweler_snapshot = get_cache(Config.CACHE_KEYS['jeweler_snapshot']) or {}
         
@@ -935,7 +958,7 @@ def update_financial_data():
         jeweler_golds_items = copy.deepcopy(golds)
         jeweler_silvers_items = copy.deepcopy(silvers)
         
-        # 🔥 V5.5: TAM MARJ uygula
+        # 🔥 V5.6: HİBRİT MARJ uygula
         margin_map = get_dynamic_margins()
         
         for item in jeweler_currencies_items:
@@ -976,7 +999,7 @@ def update_financial_data():
         set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
         
-        logger.info(f"✅ JEWELER veriler kaydedildi: {len(jeweler_currencies)} döviz, {len(jeweler_golds)} altın, {len(jeweler_silvers)} gümüş (TAM MARJ)")
+        logger.info(f"✅ JEWELER veriler kaydedildi: {len(jeweler_currencies)} döviz, {len(jeweler_golds)} altın, {len(jeweler_silvers)} gümüş (HİBRİT MARJ)")
         
         # Worker run timestamp
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
@@ -1007,7 +1030,7 @@ def update_financial_data():
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies_raw)} Döviz + {len(golds_raw)} Altın + {len(silvers_raw)} Gümüş "
-            f"(Raw + Jeweler TAM MARJ) ({banner_info}){cb_info}"
+            f"(Raw + Jeweler HİBRİT MARJ) ({banner_info}){cb_info}"
         )
         return True
         
@@ -1038,7 +1061,7 @@ def get_circuit_breaker_status():
 
 def take_snapshot():
     """
-    🔥 V5.5: Geriye uyumluluk için
+    🔥 V5.6: Geriye uyumluluk için
     
     Eski kod save_daily_snapshot() yerine take_snapshot() çağırıyorsa
     çalışmaya devam etsin diye bu wrapper var.
