@@ -12,6 +12,7 @@ Financial Service - PRODUCTION READY V5.6 🚀💰🔥
 ✅ 🔥 JEWELER REBUILD: Marj değişince cache otomatik yenilenir
 ✅ 🔥 SNAPSHOT GÜNCELLEME: Marj değişince snapshot düzeltilir
 ✅ 🔥 SMOOTH MARJ GEÇİŞİ: Kademeli geçiş (alarm patlaması önlenir)
+✅ 🔥 NEGATİF MARJ KORUMASI: Ata Altın sorunu için minimum %0.5 marj
 
 V5.6 Değişiklikler (HİBRİT MARJ):
 - 🔥 get_dynamic_margins(): Dinamik (Gemini) + Exotic (Config) birleştirir
@@ -21,6 +22,7 @@ V5.6 Değişiklikler (HİBRİT MARJ):
 - 🔥 save_daily_snapshot(): İki ayrı snapshot (raw + jeweler)
 - 🔥 rebuild_jeweler_cache(): Marj değişince jeweler yenile
 - 🔥 update_jeweler_snapshot(): Marj değişince snapshot düzelt
+- 🔥 NEGATİF MARJ KORUMASI: margin < 0 → 0.005 (Ata Altın fix)
 """
 
 import requests
@@ -555,6 +557,12 @@ def save_daily_snapshot() -> bool:
         jeweler_snapshot = {}
         for code, raw_price in raw_snapshot.items():
             margin = margin_map.get(code, 0.0)
+            
+            # 🔥 NEGATİF MARJ KORUMASI (Snapshot için de geçerli)
+            if margin < 0:
+                margin = 0.005  # %0.5 minimum
+                logger.warning(f"⚠️ [SNAPSHOT NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
+            
             jeweler_price = raw_price * (1 + margin)
             jeweler_snapshot[code] = round(jeweler_price, 4)
         
@@ -635,14 +643,14 @@ def save_daily_snapshot() -> bool:
 
 def rebuild_jeweler_cache() -> bool:
     """
-    🔥 V5.6: JEWELER CACHE'İNİ YENİDEN OLUŞTUR (HİBRİT MARJ)
+    🔥 V5.6: JEWELER CACHE'İNİ YENİDEN OLUŞTUR (HİBRİT MARJ + NEGATİF MARJ KORUMASI)
     
     Marj güncellendiğinde (00:05) çağrılır.
     
     GÖREV:
     1. Raw cache'leri al
     2. Hibrit marjları al (dinamik + exotic)
-    3. Jeweler fiyatları hesapla
+    3. Jeweler fiyatları hesapla (NEGATİF MARJ KORUMASI)
     4. Jeweler cache'lere kaydet
     """
     logger.info("🔧 [JEWELER REBUILD] Kuyumcu fiyatları yeniden hesaplanıyor (HİBRİT MARJ)...")
@@ -660,7 +668,7 @@ def rebuild_jeweler_cache() -> bool:
         # 2. 🔥 V5.6: Hibrit marjları al
         margin_map = get_dynamic_margins()
         
-        # 3. Marj uygulama fonksiyonu
+        # 3. Marj uygulama fonksiyonu (🔥 NEGATİF MARJ KORUMASI EKLENDI)
         def apply_margins_to_items(items, margin_map):
             result = []
             for item in items:
@@ -668,6 +676,12 @@ def rebuild_jeweler_cache() -> bool:
                 margin = margin_map.get(code, 0.0)
                 
                 new_item = copy.deepcopy(item)
+                
+                # 🔥 NEGATİF MARJ KORUMASI (Ata Altın sorunu için)
+                # Eğer marj negatifse (Harem < API), en az %0.5 ekle
+                if margin < 0:
+                    margin = 0.005  # %0.5 minimum kuyumcu marjı
+                    logger.warning(f"⚠️ [NEGATİF MARJ] {code}: Negatif marj tespit edildi, %0.5 zorla uygulandı")
                 
                 if margin > 0:
                     new_item["selling"] = round(new_item["selling"] * (1 + margin), 4)
@@ -709,7 +723,7 @@ def rebuild_jeweler_cache() -> bool:
             f"✅ [JEWELER REBUILD] Tamamlandı: "
             f"{len(currencies_jeweler)} döviz, "
             f"{len(golds_jeweler)} altın, "
-            f"{len(silvers_jeweler)} gümüş (HİBRİT MARJ)"
+            f"{len(silvers_jeweler)} gümüş (HİBRİT MARJ + NEGATİF KORUAMA)"
         )
         
         return True
@@ -721,14 +735,14 @@ def rebuild_jeweler_cache() -> bool:
 
 def update_jeweler_snapshot() -> bool:
     """
-    🔥 V5.6: JEWELER SNAPSHOT'I GÜNCELLE (HİBRİT MARJ)
+    🔥 V5.6: JEWELER SNAPSHOT'I GÜNCELLE (HİBRİT MARJ + NEGATİF MARJ KORUMASI)
     
     Marj güncellendiğinde (00:05) çağrılır.
     
     GÖREV:
     1. Raw snapshot al (asla değişmez)
     2. Hibrit marjları al (dinamik + exotic)
-    3. Jeweler snapshot hesapla
+    3. Jeweler snapshot hesapla (NEGATİF MARJ KORUMASI)
     4. Jeweler snapshot güncelle
     """
     logger.info("🔧 [JEWELER SNAPSHOT] Güncelleniyor (HİBRİT MARJ)...")
@@ -744,10 +758,16 @@ def update_jeweler_snapshot() -> bool:
         # 2. 🔥 V5.6: Hibrit marjları al
         margin_map = get_dynamic_margins()
         
-        # 3. Jeweler snapshot hesapla
+        # 3. Jeweler snapshot hesapla (🔥 NEGATİF MARJ KORUMASI)
         jeweler_snapshot = {}
         for code, raw_price in raw_snapshot.items():
             margin = margin_map.get(code, 0.0)
+            
+            # 🔥 NEGATİF MARJ KORUMASI
+            if margin < 0:
+                margin = 0.005  # %0.5 minimum
+                logger.warning(f"⚠️ [SNAPSHOT NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
+            
             jeweler_price = raw_price * (1 + margin)
             jeweler_snapshot[code] = round(jeweler_price, 4)
         
@@ -759,7 +779,7 @@ def update_jeweler_snapshot() -> bool:
             force_disk_backup=True
         )
         
-        logger.info(f"✅ [JEWELER SNAPSHOT] Güncellendi: {len(jeweler_snapshot)} varlık (HİBRİT MARJ)")
+        logger.info(f"✅ [JEWELER SNAPSHOT] Güncellendi: {len(jeweler_snapshot)} varlık (HİBRİT MARJ + NEGATİF KORUMA)")
         
         return True
         
@@ -791,12 +811,12 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 
 
 # ======================================
-# WORKER V5.6 (HİBRİT MARJ + İKİ SNAPSHOT)
+# WORKER V5.6 (HİBRİT MARJ + İKİ SNAPSHOT + NEGATİF MARJ KORUMASI)
 # ======================================
 
 def update_financial_data():
     """
-    🔥 V5.6: Worker (HİBRİT MARJ + İKİ SNAPSHOT kullanımı)
+    🔥 V5.6: Worker (HİBRİT MARJ + İKİ SNAPSHOT + NEGATİF MARJ KORUMASI)
     
     Her 1 dakikada bir çalışır.
     
@@ -804,6 +824,7 @@ def update_financial_data():
     - Hibrit marj kullanımı (dinamik + exotic)
     - raw_snapshot kullanımı
     - jeweler_snapshot kullanımı
+    - NEGATİF MARJ KORUMASI (Ata Altın fix)
     """
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -958,12 +979,18 @@ def update_financial_data():
         jeweler_golds_items = copy.deepcopy(golds)
         jeweler_silvers_items = copy.deepcopy(silvers)
         
-        # 🔥 V5.6: HİBRİT MARJ uygula
+        # 🔥 V5.6: HİBRİT MARJ uygula (NEGATİF MARJ KORUMASI)
         margin_map = get_dynamic_margins()
         
         for item in jeweler_currencies_items:
             code = item.get("code")
             margin = margin_map.get(code, 0.0)
+            
+            # 🔥 NEGATİF MARJ KORUMASI
+            if margin < 0:
+                margin = 0.005  # %0.5 minimum
+                logger.warning(f"⚠️ [WORKER NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
+            
             if margin > 0:
                 item["selling"] = round(item["selling"] * (1 + margin), 4)
                 item["buying"] = round(item["buying"] * (1 + margin), 4)
@@ -972,6 +999,12 @@ def update_financial_data():
         for item in jeweler_golds_items:
             code = item.get("code")
             margin = margin_map.get(code, 0.0)
+            
+            # 🔥 NEGATİF MARJ KORUMASI
+            if margin < 0:
+                margin = 0.005  # %0.5 minimum
+                logger.warning(f"⚠️ [WORKER NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
+            
             if margin > 0:
                 item["selling"] = round(item["selling"] * (1 + margin), 4)
                 item["buying"] = round(item["buying"] * (1 + margin), 4)
@@ -980,6 +1013,12 @@ def update_financial_data():
         for item in jeweler_silvers_items:
             code = item.get("code")
             margin = margin_map.get(code, 0.0)
+            
+            # 🔥 NEGATİF MARJ KORUMASI
+            if margin < 0:
+                margin = 0.005  # %0.5 minimum
+                logger.warning(f"⚠️ [WORKER NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
+            
             if margin > 0:
                 item["selling"] = round(item["selling"] * (1 + margin), 4)
                 item["buying"] = round(item["buying"] * (1 + margin), 4)
@@ -999,7 +1038,7 @@ def update_financial_data():
         set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
         set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
         
-        logger.info(f"✅ JEWELER veriler kaydedildi: {len(jeweler_currencies)} döviz, {len(jeweler_golds)} altın, {len(jeweler_silvers)} gümüş (HİBRİT MARJ)")
+        logger.info(f"✅ JEWELER veriler kaydedildi: {len(jeweler_currencies)} döviz, {len(jeweler_golds)} altın, {len(jeweler_silvers)} gümüş (HİBRİT MARJ + NEGATİF KORUMA)")
         
         # Worker run timestamp
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
@@ -1030,7 +1069,7 @@ def update_financial_data():
         logger.info(
             f"✅ [{source}] Worker Başarılı: "
             f"{len(currencies_raw)} Döviz + {len(golds_raw)} Altın + {len(silvers_raw)} Gümüş "
-            f"(Raw + Jeweler HİBRİT MARJ) ({banner_info}){cb_info}"
+            f"(Raw + Jeweler HİBRİT MARJ + NEGATİF KORUMA) ({banner_info}){cb_info}"
         )
         return True
         
