@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V5.6 🚀💰🔥
+Financial Service - PRODUCTION READY V5.7 🚀💰🔥
 =========================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
@@ -13,6 +13,7 @@ Financial Service - PRODUCTION READY V5.6 🚀💰🔥
 ✅ 🔥 SNAPSHOT GÜNCELLEME: Marj değişince snapshot düzeltilir
 ✅ 🔥 SMOOTH MARJ GEÇİŞİ: Kademeli geçiş (alarm patlaması önlenir)
 ✅ 🔥 NEGATİF MARJ KORUMASI: Ata Altın sorunu için minimum %0.5 marj
+✅ 🚦 MARKET STATUS FIX V5.7: Piyasa kapalı & Bakım modu status güncellemesi
 
 V5.6 Değişiklikler (HİBRİT MARJ):
 - 🔥 get_dynamic_margins(): Dinamik (Gemini) + Exotic (Config) birleştirir
@@ -23,6 +24,12 @@ V5.6 Değişiklikler (HİBRİT MARJ):
 - 🔥 rebuild_jeweler_cache(): Marj değişince jeweler yenile
 - 🔥 update_jeweler_snapshot(): Marj değişince snapshot düzelt
 - 🔥 NEGATİF MARJ KORUMASI: margin < 0 → 0.005 (Ata Altın fix)
+
+V5.7 Değişiklikler (MARKET STATUS FIX):
+- 🔴 Piyasa kapalı (Cuma 18:00+, C.Tesi, Pazar sabah): status "CLOSED" (kırmızı)
+- 🟡 Bakım modu aktif: status "MAINTENANCE" veya "MAINTENANCE_FULL" (sarı)
+- 🟢 Normal çalışma: status "OPEN" (yeşil)
+- ✅ Mobil uygulamada 3 renkli durum gösterimi artık doğru çalışıyor
 """
 
 import requests
@@ -833,6 +840,36 @@ def update_financial_data():
     is_maintenance, maint_status, maint_message = check_maintenance_mode()
     if is_maintenance:
         logger.info(f"🚧 [WORKER] Bakım Modu Aktif ({maint_status})")
+        
+        # 🟡 MAINTENANCE MODE FIX: Cache'leri MAINTENANCE olarak güncelle
+        try:
+            update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            maintenance_cache_meta = {
+                "source": "MAINTENANCE",
+                "update_date": update_date_str,
+                "timestamp": time.time(),
+                "status": maint_status,  # 🟡 "MAINTENANCE" veya "MAINTENANCE_FULL"
+                "market_msg": maint_message,
+                "last_update": now.strftime("%H:%M:%S"),
+                "banner": maint_message
+            }
+            
+            # Mevcut cache'leri al ve status'u güncelle
+            for key_name in ['currencies_all', 'golds_all', 'silvers_all', 
+                              'currencies_jeweler', 'golds_jeweler', 'silvers_jeweler']:
+                cache_key = Config.CACHE_KEYS.get(key_name)
+                if cache_key:
+                    existing_data = get_cache(cache_key)
+                    if existing_data:
+                        existing_data.update(maintenance_cache_meta)
+                        set_cache(cache_key, existing_data, ttl=0)
+            
+            logger.info(f"✅ [WORKER] Cache'ler {maint_status} durumuna güncellendi")
+            
+        except Exception as e:
+            logger.error(f"❌ [WORKER] MAINTENANCE status güncellemesi başarısız: {e}")
+        
         return True
     
     # Piyasa kapalı kontrolü
@@ -844,6 +881,37 @@ def update_financial_data():
         if not get_cache("market_closed_logged"):
             logger.info(f"🔒 [WORKER] Piyasa Kapalı - Hafta sonu modu başladı")
             set_cache("market_closed_logged", "true", ttl=43200)
+            
+            # 🔥 MARKET STATUS FIX: Cache'leri CLOSED olarak güncelle
+            try:
+                update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                banner_message = determine_banner_message()
+                
+                closed_meta = {
+                    "source": "CACHED",
+                    "update_date": update_date_str,
+                    "timestamp": time.time(),
+                    "status": "CLOSED",  # 🔴 Kırmızı
+                    "market_msg": "Piyasalar Kapalı - Hafta Sonu",
+                    "last_update": now.strftime("%H:%M:%S"),
+                    "banner": banner_message
+                }
+                
+                # Mevcut cache'leri al ve status'u güncelle
+                for key_name in ['currencies_all', 'golds_all', 'silvers_all', 
+                                  'currencies_jeweler', 'golds_jeweler', 'silvers_jeweler']:
+                    cache_key = Config.CACHE_KEYS.get(key_name)
+                    if cache_key:
+                        existing_data = get_cache(cache_key)
+                        if existing_data:
+                            existing_data.update(closed_meta)
+                            set_cache(cache_key, existing_data, ttl=0)
+                
+                logger.info("✅ [WORKER] Cache'ler CLOSED durumuna güncellendi")
+                
+            except Exception as e:
+                logger.error(f"❌ [WORKER] CLOSED status güncellemesi başarısız: {e}")
+        
         return True
     
     if get_cache("market_closed_logged"):
