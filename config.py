@@ -20,11 +20,13 @@ Configuration - PRODUCTION READY V5.6 🧠📰🏦💰🔥
 ✅ 💰 MARKET MARGIN SYSTEM: Ham/Kuyumcu fiyat profilleri + İki Snapshot
 ✅ 🔥 DYNAMIC FULL MARGIN V5.6: TAM MARJ + Smooth Geçiş + HİBRİT SİSTEM
 ✅ 🔥 SMART SCHEDULER V5.5: CPU spike önleme (haberler 5 dakika önce hazırlanır)
+✅ 🔥 STATIC GOLD MARGINS: Cumhuriyet Altını statik marj desteği
 
 V5.6 Değişiklikler (HİBRİT MARJ SİSTEMİ):
 - 🔥 ALTIN + GÜMÜŞ: Harem + Gemini (6 varlık - dinamik)
 - 🔥 MAJÖR DÖVİZLER: Ziraat Bankası + Gemini (11 döviz - dinamik)
 - 🔥 EXOTIC DÖVİZLER: Config sabit marjlar (12 döviz - statik)
+- 🔥 ALTIN STATİK: Cumhuriyet Altını sabit marj (Harem'de yok)
 - 🔥 TAM MARJ: Yarım değil, TAM marj kullanılıyor (kuyumcu gerçeği)
 - 🔥 SMOOTH GEÇİŞ: Marj değişimi kademeli (3-4 gün), alarm patlaması önlenir
 """
@@ -64,13 +66,14 @@ class Config:
     HİBRİT MARJ SİSTEMİ V5.6:
     
     1. DİNAMİK MARJLAR (Gemini AI hesaplar):
-       - ALTIN + GÜMÜŞ: Harem.com HTML parse (6 varlık)
+       - ALTIN + GÜMÜŞ: Harem.com HTML parse (5 varlık - GRA, C22, YAR, TAM, ATA, AG)
        - MAJÖR DÖVİZLER: Ziraat Bankası HTML parse (11 döviz)
-       Toplam: 17 varlık dinamik
+       Toplam: 16 varlık dinamik
     
     2. STATİK MARJLAR (Config'den):
+       - ALTIN: Cumhuriyet Altını (Harem'de yok)
        - EXOTIC DÖVİZLER: Manuel tanımlı (12 döviz)
-       Toplam: 12 döviz statik
+       Toplam: 13 varlık statik
     
     SMOOTH GEÇİŞ (sadece dinamik marjlar için):
     - Marj değişimi kademeli (3-4 gün)
@@ -88,15 +91,15 @@ class Config:
     ZAMANLAMA (CPU Spike Önleme):
     - 23:55:00 → Sabah haberlerini hazırla (Gemini)
     - 00:00:00 → Snapshot kaydet (RAW + JEWELER) + Sabah haberlerini yayınla
-    - 00:05:00 → Dinamik Marj Güncelle (Harem + Ziraat + Config exotic merge)
+    - 00:05:00 → Dinamik Marj Güncelle (Harem + Ziraat + Config exotic + gold merge)
     - 11:55:00 → Akşam haberlerini hazırla (Gemini)
     - 12:00:00 → Akşam haberlerini yayınla
     - 14:00:00 → Push notification gönder
     
     AKILLI FALLBACK SİSTEMİ V5.6:
-    1. Redis (bugünkü Gemini marjları + exotic) → EN GÜNCEL ✅
-    2. margin_last_update (en son başarılı + exotic) → SMOOTH FALLBACK ✅
-    3. BOOTSTRAP (ilk kurulum + exotic) → HEMEN GEMİNİ ÇAĞIR! ✅
+    1. Redis (bugünkü Gemini marjları + exotic + gold) → EN GÜNCEL ✅
+    2. margin_last_update (en son başarılı + exotic + gold) → SMOOTH FALLBACK ✅
+    3. BOOTSTRAP (ilk kurulum + exotic + gold) → HEMEN GEMİNİ ÇAĞIR! ✅
     """
     
     PRICE_PROFILES = {
@@ -104,7 +107,7 @@ class Config:
         "raw": {},  # Hiç marj yok, direkt API fiyatı
         
         # JEWELER PROFILE - Kuyumcu/Fiziki Piyasa Fiyatı (HİBRİT MARJ)
-        # 🔥 V5.6: Dinamik (Harem + Ziraat) + Statik (Config exotic)
+        # 🔥 V5.6: Dinamik (Harem + Ziraat) + Statik (Config exotic + gold)
         "jeweler": {}  # Gemini + Config dolduracak
     }
     
@@ -133,6 +136,21 @@ class Config:
     MARGIN_CALCULATION_STRATEGY = "full"  # "full" = Tam marj (kuyumcu gerçeği)
     MARGIN_SMOOTH_TRANSITION = True  # Kademeli geçiş aktif (sadece dinamik marjlar için)
     MARGIN_SMOOTH_THRESHOLD = 0.015  # %1.5'ten fazla fark varsa smooth geçiş yap
+    
+    # ======================================
+    # 🔥 ALTIN MARJLARI (STATİK) V5.6
+    # ======================================
+    """
+    Harem.com'da OLMAYAN altınlar için sabit marjlar.
+    
+    CUMHURİYET ALTINI SORUNU:
+    - API'de var ama Harem.com'da satılmıyor
+    - Gemini marj hesaplayamıyor
+    - Çözüm: Statik %1.5 marj (Gram Altın ile aynı seviyede)
+    """
+    STATIC_GOLD_MARGINS = {
+        "CUM": 0.015,  # %1.5 - Cumhuriyet Altını (Harem'de yok)
+    }
     
     # ======================================
     # 🔥 EXOTIC DÖVİZ MARJLARI (STATİK) V5.6
@@ -375,7 +393,7 @@ class Config:
         'daily_bayram': 'daily:bayram',
         
         # 🔥 DİNAMİK MARJ SİSTEMİ V5.6 (HİBRİT)
-        'dynamic_margins': 'dynamic:margins',          # 24 saat TTL (dinamik + exotic birleşmiş)
+        'dynamic_margins': 'dynamic:margins',          # 24 saat TTL (dinamik + exotic + gold birleşmiş)
         'margin_last_update': 'margin:last_update',    # TTL=0 süresiz (en son başarılı marjlar + timestamp)
     }
     
