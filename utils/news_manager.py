@@ -16,6 +16,8 @@ News Manager - GÜNLÜK HABER SİSTEMİ V4.3 ULTIMATE 📰🚀💰
 ✅ 🔥 SMOOTH MARJ GEÇİŞİ: 3-4 günde kademeli (alarm patlaması önlenir)
 ✅ 🔥 PREPARE/PUBLISH AYRI: Haberler 5 dakika önce hazırlanır
 ✅ 🔥 GÜMÜŞ + TAM + ATA MARJ FIX: Doğru isimlendirme ve negatif marj desteği
+✅ 🔥 DÖVİZ PROMPT FIX: Ziraat SATIŞ sütunu uyarısı güçlendirildi
+✅ 🔥 GÜMÜŞ PROMPT FIX: Harem SATIŞ sütunu uyarısı güçlendirildi
 
 V4.3 Değişiklikler (HİBRİT MARJ SİSTEMİ):
 - 🔥 ALTIN + GÜMÜŞ: Harem + Gemini (6 varlık - dinamik)
@@ -23,6 +25,7 @@ V4.3 Değişiklikler (HİBRİT MARJ SİSTEMİ):
 - 🔥 EXOTIC DÖVİZLER: Config sabit marjlar (12 döviz - statik)
 - 🔥 TAM MARJ: Kuyumcu gerçeğini yansıtır
 - 🔥 SMOOTH GEÇİŞ: Marj değişimi kademeli
+- 🔥 PROMPT İYİLEŞTİRMELERİ: Döviz ve Gümüş sütun okuma hataları düzeltildi
 """
 
 import os
@@ -632,17 +635,21 @@ AG = HTML'de "Gram Gümüş" veya "Gümüş" diye geçiyor
 - NEGATİF marj çıkabilir, bu normal!
 - Eksi değeri olduğu gibi yaz
 
-🔥 ÖZEL UYARI - GÜMÜŞ:
+🔥 ÖZEL UYARI - GÜMÜŞ (SATIŞ SÜTUNU!):
 - HTML'de "Gram Gümüş" veya sadece "Gümüş" diye geçiyor
-- SATIŞ değeri 120-150 TL civarındadır
+- HTML'de iki sütun var: ALIŞ ve SATIŞ
+- SADECE SATIŞ SÜTUNUNU AL! (yüksek olanı)
+- SATIŞ değeri 130-150 TL civarındadır (ALIŞ ~115-120)
 - Gümüş marjı %15-20 olmalıdır
-- Eğer %10'dan düşük hesapladıysan HATALI hesaplamışsındır
-- SATIŞ sütununu çok dikkatli oku!
-- Örnek: API=117.43, Harem=139.49 → Marj=%18.8
+- Eğer %10'dan düşük hesapladıysan → YANLIŞ SÜTUNU OKUDUN!
+- Örnek HTML satırı: "119,04   136,22"
+  → 119,04 = ALIŞ (ALMA!) ❌
+  → 136,22 = SATIŞ (AL!) ✅
+- Örnek hesaplama: API=117.43, Harem SATIŞ=136.22 → Marj=%16.0 ✅
 
 🔍 ARAMA TALİMATI:
 - Önce ürün ismini TAM OLARAK HTML'de bul
-- Sonra o satırdaki SATIŞ değerini al
+- Sonra o satırdaki SATIŞ değerini al (ikinci/yüksek değer)
 - Örnek: "Gram Altın" satırını bul → SATIŞ sütunu → değeri al
 
 📤 ÇIKTI FORMATI (SADECE BU - noktalı sayılar, negatif dahil!):
@@ -651,7 +658,7 @@ MARJ_C22: 1.58
 MARJ_YAR: 1.90
 MARJ_TAM: -0.87
 MARJ_ATA: 0.52
-MARJ_AG: 18.80
+MARJ_AG: 16.00
 
 HİÇBİR AÇIKLAMA YAPMA!
 """
@@ -726,17 +733,26 @@ SEN BİR FİNANS ANALİSTİSİN. Ziraat Bankası web sitesindeki BANKA SATIŞ fi
 3. ONDALIK NOKTA KULLAN (virgül değil!)
 
 📐 ÖRNEK HESAPLAMA (Dolar):
-- Ziraat Banka Satış: 44.9334 ₺
-- API (TCMB): 43.6389 ₺
-- Fark: 44.9334 - 43.6389 = 1.2945 ₺
-- MARJ: (1.2945 / 43.6389) × 100 = 2.97%
-- ÇIKTI: 2.97
+- HTML satırı: "43,3205  44,1969  17:05"
+  → 43,3205 = Banka Alış (ALMA!) ❌
+  → 44,1969 = Banka Satış (AL!) ✅
+- API (TCMB): 43.6553 ₺
+- Fark: 44.1969 - 43.6553 = 0.5416 ₺
+- MARJ: (0.5416 / 43.6553) × 100 = 1.24%
+- ÇIKTI: 1.24
 
-⚠️ DİKKAT:
-- HTML'de "Banka Satış" veya "Satış" değerini bul
-- "Banka Alış" değerini ALMA (o farklı!)
-- Marj genellikle %1.0 - %2.5 arası olmalıdır
-- %5'ten yüksek çıkarsa HATALI!
+⚠️ ZİRAAT BANKASI ÖZEL UYARI (ÇOK ÖNEMLİ!):
+- HTML'de iki sütun var: "Banka Alış" ve "Banka Satış"
+- SADECE İKİNCİ SÜTUN (BANKA SATIŞ) AL!
+- İLK SÜTUN (BANKA ALIŞ) ASLA KULLANMA!
+- Örnek satır: "43,3205  44,1969  17:05"
+  → 43,3205 = Banka Alış (ALMA!) ❌
+  → 44,1969 = Banka Satış (AL!) ✅
+- Marj genellikle %1.0 - %1.5 arası olmalıdır
+- %2.5'ten yüksek çıkarsa → YANLIŞ SÜTUNU OKUDUN!
+- Eğer marj %3-5 gibi yüksek çıkıyorsa:
+  → ALIŞ sütununu değil SATIŞ sütununu oku!
+  → İKİNCİ SAYIYI al (yüksek olanı)!
 
 🎯 DÖVIZ EŞLEMELERİ - HTML'DEKİ İSİMLER:
 USD = "Amerikan Doları" veya "Dolar"
@@ -757,17 +773,17 @@ JPY = "Japon Yeni" (100 JPY için fiyat verilir!)
 - Direkt karşılaştır, çarpma/bölme yapma!
 
 📤 ÇIKTI FORMATI (SADECE BU - noktalı sayılar!):
-MARJ_USD: 2.97
-MARJ_EUR: 2.65
-MARJ_GBP: 2.89
-MARJ_CHF: 2.74
-MARJ_CAD: 2.85
-MARJ_AUD: 3.12
-MARJ_SEK: 2.93
-MARJ_NOK: 3.05
-MARJ_SAR: 2.51
-MARJ_DKK: 2.78
-MARJ_JPY: 2.88
+MARJ_USD: 1.24
+MARJ_EUR: 1.02
+MARJ_GBP: 0.98
+MARJ_CHF: 1.15
+MARJ_CAD: 1.28
+MARJ_AUD: 1.34
+MARJ_SEK: 1.19
+MARJ_NOK: 1.42
+MARJ_SAR: 1.26
+MARJ_DKK: 1.08
+MARJ_JPY: 1.31
 
 HİÇBİR AÇIKLAMA YAPMA!
 """
@@ -789,7 +805,7 @@ HİÇBİR AÇIKLAMA YAPMA!
                 if len(parts) == 2:
                     key = parts[0].replace('MARJ_', '').strip()
                     try:
-                        value = float(parts[1].strip()) / 100  # %2.97 → 0.0297
+                        value = float(parts[1].strip()) / 100  # %1.24 → 0.0124
                         margins[key] = value
                     except ValueError:
                         logger.warning(f"⚠️ [DÖVİZ MARJ PARSE] Geçersiz değer: {line}")
@@ -819,6 +835,7 @@ def update_dynamic_margins() -> bool:
        - MAJÖR DÖVİZLER: Ziraat (11 döviz)
     2. STATİK (Config'den):
        - EXOTIC DÖVİZLER: Manuel (12 döviz)
+       - GOLD: Cumhuriyet Altını (Harem'de yok)
     
     ÖZELLİKLER:
     - TAM MARJ hesaplama
@@ -829,7 +846,7 @@ def update_dynamic_margins() -> bool:
     """
     try:
         logger.info("💰 [HİBRİT MARJ] Güncelleme başlıyor...")
-        logger.info("📍 [HİBRİT MARJ] ALTIN+GÜMÜŞ (Harem) + 11 DÖVİZ (Ziraat) + 12 EXOTIC (Config)")
+        logger.info("📍 [HİBRİT MARJ] ALTIN+GÜMÜŞ (Harem) + 11 DÖVİZ (Ziraat) + 12 EXOTIC + 1 GOLD (Config)")
         
         # 1. HTML'leri çek
         harem_html = fetch_harem_html()
@@ -883,24 +900,31 @@ def update_dynamic_margins() -> bool:
         # 5. 🔥 YENİ: Config'den EXOTIC DÖVİZ marjlarını al
         exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
         
-        # 6. HEPSİNİ BİRLEŞTİR
-        all_new_margins = {**gold_silver_margins, **major_currency_margins, **exotic_margins}
+        # 6. 🔥 YENİ: Config'den GOLD marjlarını al (Cumhuriyet)
+        gold_static_margins = getattr(Config, 'STATIC_GOLD_MARGINS', {})
+        
+        # 7. HEPSİNİ BİRLEŞTİR
+        all_new_margins = {**gold_silver_margins, **major_currency_margins, **exotic_margins, **gold_static_margins}
         
         if not all_new_margins:
             logger.warning("⚠️ [HİBRİT MARJ] Hiç marj hesaplanamadı!")
             return False
         
-        logger.info(f"📊 [HİBRİT MARJ] Toplam: {len(all_new_margins)} marj (ALTIN:{len(gold_silver_margins)} + MAJÖR:{len(major_currency_margins)} + EXOTIC:{len(exotic_margins)})")
+        logger.info(
+            f"📊 [HİBRİT MARJ] Toplam: {len(all_new_margins)} marj "
+            f"(DİNAMİK ALTIN:{len(gold_silver_margins)} + DİNAMİK DÖVİZ:{len(major_currency_margins)} + "
+            f"STATİK EXOTIC:{len(exotic_margins)} + STATİK GOLD:{len(gold_static_margins)})"
+        )
         
-        # 7. 🔥 SMOOTH GEÇİŞ - Sadece dinamik marjlar için (exotic marjlar statik, smooth yok!)
+        # 8. 🔥 SMOOTH GEÇİŞ - Sadece dinamik marjlar için (static marjlar değişmez!)
         old_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')) or {}
         
         smooth_margins = {}
         threshold = Config.MARGIN_SMOOTH_THRESHOLD  # 0.015 (%1.5)
         
         for key, new_val in all_new_margins.items():
-            # 🔥 Exotic marjlar için smooth yok (zaten statik)
-            if key in exotic_margins:
+            # 🔥 Statik marjlar için smooth yok (zaten değişmiyor)
+            if key in exotic_margins or key in gold_static_margins:
                 smooth_margins[key] = new_val
                 continue
             
@@ -919,11 +943,11 @@ def update_dynamic_margins() -> bool:
                 # Fark küçük → Direkt uygula
                 smooth_margins[key] = new_val
         
-        # 8. Redis'e kaydet (24 saat TTL - bugünkü marjlar)
+        # 9. Redis'e kaydet (24 saat TTL - bugünkü marjlar)
         margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         set_cache(margin_key, smooth_margins, ttl=86400)
         
-        # 9. 🔥 KALICI BACKUP (TTL=0, süresiz!)
+        # 10. 🔥 KALICI BACKUP (TTL=0, süresiz!)
         update_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
         set_cache(update_key, {
             'timestamp': time.time(),
@@ -942,11 +966,11 @@ def update_dynamic_margins() -> bool:
 
 def get_dynamic_margins() -> Dict[str, float]:
     """
-    🔥 V4.3: HİBRİT MARJLARI getir (Dinamik + Exotic)
+    🔥 V4.3: HİBRİT MARJLARI getir (Dinamik + Exotic + Gold)
     
     FALLBACK SIRASI:
-    1. Redis (bugünkü marjlar: dinamik + exotic birleşmiş) → En taze!
-    2. margin_last_update (en son başarılı: dinamik + exotic) → Fallback
+    1. Redis (bugünkü marjlar: dinamik + exotic + gold birleşmiş) → En taze!
+    2. margin_last_update (en son başarılı: dinamik + exotic + gold) → Fallback
        → 🔥 1 günden eskiyse ASYNC bootstrap tetikle!
     3. BOOTSTRAP (ilk kurulum) → İlk çalışma
     """
