@@ -1,28 +1,3 @@
-"""
-News Manager - GÜNLÜK HABER SİSTEMİ V4.3 ULTIMATE 📰🚀💰
-=========================================================
-✅ ULTRA SIKI FİLTRE: Sadece kritik finansal olaylar
-✅ DUYURU + SONUÇ: Hem "açıklanacak" hem "açıklandı" 
-✅ GELİŞMİŞ DEDUP: Benzerlik + Vardiyalar arası
-✅ GÜÇLÜ FALLBACK: Gemini patlarsa da sistem ayakta
-✅ RATE-LIMIT KORUMA: Retry + exponential backoff
-✅ BAYRAM MANTIKLI TTL: Gece 03:00'e kadar geçerli
-✅ GEMİNİ 3 FLASH: Yeni model desteği 🔥
-✅ RACE CONDITION FIX: Bootstrap lock mekanizması
-✅ ÇİFT KAYNAK: GNews + NewsData
-✅ 3 GÜN GERİYE + 48 SAAT FİLTRE: Optimal zaman aralığı
-✅ VARDİYALAR ARASI DEDUP: Aynı haber 2. kez gösterilmez
-✅ 🔥 DİNAMİK TAM MARJ V4.3: Hibrit sistem (Harem + Ziraat + Config)
-✅ 🔥 SMOOTH MARJ GEÇİŞİ: 3-4 günde kademeli (alarm patlaması önlenir)
-✅ 🔥 PREPARE/PUBLISH AYRI: Haberler 5 dakika önce hazırlanır
-✅ 🔥 GÜMÜŞ + TAM + ATA MARJ FIX: Doğru isimlendirme ve negatif marj desteği
-✅ 🔥 DÖVİZ PROMPT FIX: Ziraat SATIŞ sütunu uyarısı güçlendirildi
-✅ 🔥 GÜMÜŞ PROMPT FIX: Harem SATIŞ sütunu uyarısı güçlendirildi
-✅ 🔥 BOOTSTRAP COOLDOWN: Başarısız olsa bile 1 saat spam yapmaz
-✅ 🔥 YAZIM KURALLARI: Saat formatı düzeltildi (22:00'da gibi)
-✅ 🔥 LOG OPTİMİZASYONU: Gereksiz loglar temizlendi
-"""
-
 import os
 import logging
 import requests
@@ -43,36 +18,27 @@ GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
-# 🔒 BOOTSTRAP LOCK - Race condition önleme
 _bootstrap_lock = threading.Lock()
 _bootstrap_in_progress = {
     'morning': False,
     'evening': False
 }
 
-# 🔥 BOOTSTRAP COOLDOWN - Başarısız olsa bile spam yapmaz
 _bootstrap_last_attempt = {
     'morning': 0,
     'evening': 0
 }
-_bootstrap_cooldown = 3600  # 1 saat (saniye)
+_bootstrap_cooldown = 3600
 
-# 🔥 MARGIN ASYNC BOOTSTRAP LOCK
 _margin_bootstrap_lock = threading.Lock()
 _margin_bootstrap_in_progress = False
 
-
-# ======================================
-# 🔧 GELIŞMIŞ DEDUP - SIMILARITY KONTROLÜ
-# ======================================
+_last_logged_banner = None
 
 def is_similar(text1: str, text2: str, threshold: float = 0.7) -> bool:
-    """İki haberin benzerlik oranını hesaplar"""
     return SequenceMatcher(None, text1.lower(), text2.lower()).ratio() > threshold
 
-
 def deduplicate_news(news_list: List[str]) -> List[str]:
-    """Gelişmiş deduplication - Benzer haberleri temizler"""
     unique_news = []
     
     for news in news_list:
@@ -89,29 +55,19 @@ def deduplicate_news(news_list: List[str]) -> List[str]:
     logger.info(f"🧹 [DEDUP] {len(news_list)} → {len(unique_news)} benzersiz haber")
     return unique_news
 
-
-# ======================================
-# 🛡️ VARDİYALAR ARASI DEDUP
-# ======================================
-
 def get_previously_shown_news() -> List[str]:
-    """Son 24 saatte gösterilen haberleri getir"""
     history_key = "news:shown_history"
     history = get_cache(history_key) or []
     return history
 
-
 def save_shown_news(news_list: List[str]):
-    """Gösterilen haberleri kaydet (24 saat TTL)"""
     history_key = "news:shown_history"
     existing = get_cache(history_key) or []
     updated = existing + news_list
     unique = list(set(updated))
     set_cache(history_key, unique, ttl=86400)
 
-
 def filter_already_shown(news_list: List[str]) -> List[str]:
-    """Daha önce gösterilenleri filtrele"""
     shown_before = get_previously_shown_news()
     
     if not shown_before:
@@ -132,13 +88,7 @@ def filter_already_shown(news_list: List[str]) -> List[str]:
     logger.info(f"🧹 [VARDIYA DEDUP] {len(news_list)} → {len(filtered)} yeni haber")
     return filtered
 
-
-# ======================================
-# 🛡️ RATE-LIMIT KORUMALI API ÇAĞRILARI
-# ======================================
-
 def fetch_with_retry(url: str, max_retries: int = 3, timeout: int = 10) -> Optional[Dict]:
-    """Retry + exponential backoff ile güvenli API çağrısı"""
     for attempt in range(max_retries):
         try:
             response = requests.get(url, timeout=timeout)
@@ -157,9 +107,7 @@ def fetch_with_retry(url: str, max_retries: int = 3, timeout: int = 10) -> Optio
     
     return None
 
-
 def fetch_gnews(max_results: int = 30) -> List[str]:
-    """GNews API'den ekonomi haberleri çeker - SON 3 GÜN"""
     try:
         if not GNEWS_API_KEY:
             return []
@@ -177,7 +125,6 @@ def fetch_gnews(max_results: int = 30) -> List[str]:
             f"&apikey={GNEWS_API_KEY}"
         )
         
-        logger.info("📡 [GNEWS] Haberler çekiliyor...")
         data = fetch_with_retry(url)
         
         if not data or data.get('totalArticles', 0) == 0:
@@ -203,9 +150,7 @@ def fetch_gnews(max_results: int = 30) -> List[str]:
         logger.error(f"❌ [GNEWS] Hata: {e}")
         return []
 
-
 def fetch_newsdata(max_results: int = 40) -> List[str]:
-    """NewsData API'den ekonomi haberleri çeker"""
     try:
         if not NEWSDATA_API_KEY:
             return []
@@ -219,7 +164,6 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
             f"&q=(merkez AND bankası) OR faiz OR TCMB OR FED OR ECB OR enflasyon OR büyüme"
         )
         
-        logger.info("📡 [NEWSDATA] Haberler çekiliyor...")
         data = fetch_with_retry(url)
         
         if not data or data.get('status') != 'success':
@@ -254,9 +198,7 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
         logger.error(f"❌ [NEWSDATA] Hata: {e}")
         return []
 
-
 def fetch_all_news() -> List[str]:
-    """Tüm kaynaklardan haberleri çeker ve dedup yapar"""
     logger.info("📰 [NEWS] Haber toplama başlıyor...")
     
     gnews_list = fetch_gnews(max_results=Config.NEWS_MAX_RESULTS_PER_SOURCE)
@@ -268,19 +210,13 @@ def fetch_all_news() -> List[str]:
     logger.info(f"✅ [NEWS] Toplam {len(unique_news)} benzersiz haber toplandı")
     return unique_news
 
-
-# ======================================
-# 🛡️ GÜÇLÜ FALLBACK İLE GEMİNİ FİLTRE
-# ======================================
-
 def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]]:
-    """ULTRA SIKI FİLTRE + TARİH FİLTRESİ + YAZIM KURALLARI"""
     try:
         if not GEMINI_API_KEY or not news_list:
             return [], None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
@@ -398,7 +334,6 @@ KURALLAR:
         
         lines = result.split('\n')
         
-        # Bayram kontrolü
         bayram_msg = None
         first_line = lines[0].strip()
         
@@ -408,7 +343,6 @@ KURALLAR:
                 bayram_msg = f"🏦 {bayram_text}"
             lines = lines[1:]
         
-        # Filtrelenmiş haberler
         summaries = []
         for line in lines:
             clean_line = line.strip()
@@ -419,7 +353,6 @@ KURALLAR:
             if "HABER:" in clean_line.upper() and "YOK" in clean_line.upper():
                 break
             
-            # Numarayı kaldır
             if '. ' in clean_line:
                 parts = clean_line.split('. ', 1)
                 if len(parts) > 1:
@@ -435,13 +368,7 @@ KURALLAR:
         logger.error(f"❌ [GEMİNİ] Hata: {e}")
         return [], None
 
-
-# ======================================
-# 🔥 DİNAMİK TAM MARJ SİSTEMİ V4.3 (HİBRİT)
-# ======================================
-
 def fetch_harem_html() -> Optional[str]:
-    """Harem sayfasının HTML'ini çeker (Altın + Gümüş)"""
     try:
         url = Config.HAREM_PRICE_URL
         headers = {
@@ -469,9 +396,7 @@ def fetch_harem_html() -> Optional[str]:
         logger.error(f"❌ [HAREM HTML] Hata: {e}")
         return None
 
-
 def fetch_ziraat_html() -> Optional[str]:
-    """Ziraat Bankası döviz kurları HTML'ini çeker"""
     try:
         url = Config.ZIRAAT_CURRENCY_URL
         headers = {
@@ -489,9 +414,7 @@ def fetch_ziraat_html() -> Optional[str]:
         logger.error(f"❌ [ZİRAAT HTML] Hata: {e}")
         return None
 
-
 def async_margin_bootstrap():
-    """Arka planda marj güncelle (non-blocking)"""
     global _margin_bootstrap_in_progress
     
     try:
@@ -508,15 +431,13 @@ def async_margin_bootstrap():
         with _margin_bootstrap_lock:
             _margin_bootstrap_in_progress = False
 
-
 def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
-    """Gemini'ye HTML verisini göndererek TAM MARJLARI hesaplat (ALTIN + GÜMÜŞ)"""
     try:
         if not GEMINI_API_KEY:
             return None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
         api_str = "\n".join([
             f"- {k}: {v:.2f} ₺" for k, v in api_prices.items()
@@ -599,15 +520,13 @@ HİÇBİR AÇIKLAMA YAPMA!
         logger.error(f"❌ [GEMİNİ MARJ] Hata: {e}")
         return None
 
-
 def calculate_currency_margins_with_gemini(html_data: str, api_prices: Dict) -> Optional[Dict]:
-    """Gemini'ye Ziraat HTML'ini göndererek 11 MAJÖR DÖVİZ MARJINI hesaplat"""
     try:
         if not GEMINI_API_KEY:
             return None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
         major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
         api_str = "\n".join([
@@ -695,9 +614,7 @@ HİÇBİR AÇIKLAMA YAPMA!
         logger.error(f"❌ [GEMİNİ DÖVİZ] Hata: {e}")
         return None
 
-
 def update_dynamic_margins() -> bool:
-    """HİBRİT MARJ SİSTEMİ - Dinamik (Harem + Ziraat) + Statik (Config)"""
     try:
         logger.info("💰 [HİBRİT MARJ] Güncelleme başlıyor...")
         
@@ -787,9 +704,7 @@ def update_dynamic_margins() -> bool:
         logger.error(f"❌ [HİBRİT MARJ] Hata: {e}")
         return False
 
-
 def get_dynamic_margins() -> Dict[str, float]:
-    """HİBRİT MARJLARI getir (Dinamik + Exotic + Gold)"""
     global _margin_bootstrap_in_progress
     
     dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
@@ -846,13 +761,7 @@ def get_dynamic_margins() -> Dict[str, float]:
     
     return fallback_margins
 
-
-# ======================================
-# 📅 VARDİYA PLANLAMA
-# ======================================
-
 def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) -> List[Dict]:
-    """Haberleri saatlere eşit dağıt"""
     if not news_list:
         return []
     
@@ -889,24 +798,14 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
     
     return schedule
 
-
 def calculate_bayram_ttl() -> int:
-    """Bayram mesajı için TTL hesapla (gece 03:00'e kadar)"""
     now = datetime.now()
     tomorrow_3am = (now + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
     ttl = int((tomorrow_3am - now).total_seconds())
     return ttl
 
-
-# ======================================
-# 🔥 PREPARE & PUBLISH FONKSIYONLARI
-# ======================================
-
 def prepare_morning_news() -> bool:
-    """SABAH HABERLERİNİ HAZIRLA (23:55'te çağrılır)"""
     try:
-        logger.info("🌅 [SABAH HAZIRLIK] Haberler hazırlanıyor...")
-        
         news_list = fetch_all_news()
         
         if not news_list:
@@ -936,9 +835,7 @@ def prepare_morning_news() -> bool:
         logger.error(f"❌ [SABAH HAZIRLIK] Hata: {e}")
         return False
 
-
 def publish_morning_news() -> bool:
-    """SABAH HABERLERİNİ YAYINLA (00:00'da çağrılır)"""
     try:
         logger.info("🌅 [SABAH YAYINLA] Hazır haberler yayınlanıyor...")
         
@@ -983,12 +880,8 @@ def publish_morning_news() -> bool:
         logger.error(f"❌ [SABAH YAYINLA] Hata: {e}")
         return False
 
-
 def prepare_evening_news() -> bool:
-    """AKŞAM HABERLERİNİ HAZIRLA (11:55'te çağrılır)"""
     try:
-        logger.info("🌆 [AKŞAM HAZIRLIK] Haberler hazırlanıyor...")
-        
         news_list = fetch_all_news()
         
         if not news_list:
@@ -1018,9 +911,7 @@ def prepare_evening_news() -> bool:
         logger.error(f"❌ [AKŞAM HAZIRLIK] Hata: {e}")
         return False
 
-
 def publish_evening_news() -> bool:
-    """AKŞAM HABERLERİNİ YAYINLA (12:00'da çağrılır)"""
     try:
         logger.info("🌆 [AKŞAM YAYINLA] Hazır haberler yayınlanıyor...")
         
@@ -1065,13 +956,7 @@ def publish_evening_news() -> bool:
         logger.error(f"❌ [AKŞAM YAYINLA] Hata: {e}")
         return False
 
-
-# ======================================
-# BOOTSTRAP & BANNER
-# ======================================
-
 def bootstrap_news_system() -> bool:
-    """İlk çalıştırma bootstrap + COOLDOWN koruması"""
     global _bootstrap_last_attempt
     
     try:
@@ -1086,7 +971,6 @@ def bootstrap_news_system() -> bool:
             shift_name = "AKŞAM"
             shift_type = "evening"
         
-        # 🔥 COOLDOWN KONTROLÜ
         last_attempt = _bootstrap_last_attempt[shift_type]
         now = time.time()
         
@@ -1101,7 +985,6 @@ def bootstrap_news_system() -> bool:
             
             existing_data = get_cache(cache_key)
             
-            # 🔥 FİX: None ile boş liste ayrımı
             if existing_data is not None and len(existing_data) > 0:
                 return False
             
@@ -1114,7 +997,6 @@ def bootstrap_news_system() -> bool:
             else:
                 success = prepare_evening_news() and publish_evening_news()
             
-            # 🔥 Başarılı veya başarısız, cooldown başlat
             _bootstrap_last_attempt[shift_type] = now
             
             if success:
@@ -1139,9 +1021,9 @@ def bootstrap_news_system() -> bool:
             pass
         return False
 
-
 def get_current_news_banner() -> Optional[str]:
-    """Şu anki saate uygun haber başlığını döndürür"""
+    global _last_logged_banner
+    
     try:
         current_hour = datetime.now().hour
         current_time = datetime.now().strftime("%H:%M")
@@ -1153,12 +1035,10 @@ def get_current_news_banner() -> Optional[str]:
         
         schedule = get_cache(cache_key)
         
-        # 🔥 FİX: None ile boş liste ayrımı
         if schedule is None:
             bootstrap_news_system()
             schedule = get_cache(cache_key)
         
-        # Boş liste = haber yok (normal durum, log yok)
         if not schedule or len(schedule) == 0:
             return None
         
@@ -1167,10 +1047,22 @@ def get_current_news_banner() -> Optional[str]:
             end_time = news_slot['end']
             
             if start_time <= current_time < end_time:
-                return f"📰 {news_slot['text']}"
+                banner_msg = f"📰 {news_slot['text']}"
+                
+                if _last_logged_banner != banner_msg:
+                    logger.info(f"📰 [BANNER] Değişti: {banner_msg[:50]}...")
+                    _last_logged_banner = banner_msg
+                
+                return banner_msg
         
         if schedule:
-            return f"📰 {schedule[0]['text']}"
+            banner_msg = f"📰 {schedule[0]['text']}"
+            
+            if _last_logged_banner != banner_msg:
+                logger.info(f"📰 [BANNER] Değişti: {banner_msg[:50]}...")
+                _last_logged_banner = banner_msg
+            
+            return banner_msg
         
         return None
         
@@ -1178,10 +1070,8 @@ def get_current_news_banner() -> Optional[str]:
         logger.error(f"❌ [BANNER] Hata: {e}")
         return None
 
-
 def test_news_manager():
-    """Test fonksiyonu"""
-    print("🧪 News Manager V4.3 - Temiz Versiyon\n")
+    print("🧪 News Manager Test\n")
     
     print("1️⃣ HABER TOPLAMA:")
     news_list = fetch_all_news()
@@ -1228,7 +1118,6 @@ def test_news_manager():
         print(f"   ✅ {banner}\n")
     else:
         print("   ℹ️ Haber yok\n")
-
 
 if __name__ == "__main__":
     test_news_manager()
