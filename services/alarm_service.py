@@ -153,9 +153,6 @@ def check_alarm_trigger(alarm_data: dict, current_price: float) -> bool:
         return False
 
 def send_alarm_notification_legacy(fcm_token: str, alarm_data: dict, current_price: float) -> bool:
-    """
-    🔥 V5.3: notification_service.py'deki yeni send_alarm_notification() fonksiyonunu kullanır
-    """
     try:
         from utils.notification_service import send_alarm_notification
         
@@ -164,11 +161,6 @@ def send_alarm_notification_legacy(fcm_token: str, alarm_data: dict, current_pri
         target_price = alarm_data.get('target_price', 0)
         start_price = alarm_data.get('start_price', current_price)
         alarm_type = alarm_data.get('alarm_type', 'HIGH')
-        
-        logger.info(f"📤 [ALARM] V5.3 Detaylı bildirim gönderiliyor...")
-        logger.info(f"   Token: {fcm_token[:20]}...{fcm_token[-10:]}")
-        logger.info(f"   Varlık: {currency_name} ({currency_code})")
-        logger.info(f"   Hedef: ₺{target_price:,.2f} | Anlık: ₺{current_price:,.2f}")
         
         success = send_alarm_notification(
             fcm_token=fcm_token,
@@ -181,7 +173,7 @@ def send_alarm_notification_legacy(fcm_token: str, alarm_data: dict, current_pri
         )
         
         if success:
-            logger.info(f"✅ [ALARM] Bildirim gönderildi: {currency_name} → Mevcut: ₺{current_price:,.2f}")
+            logger.info(f"✅ [ALARM] Bildirim gönderildi: {currency_name} → ₺{current_price:,.2f}")
             return True
         else:
             logger.error(f"❌ [ALARM] Bildirim gönderilemedi: {currency_name}")
@@ -189,10 +181,6 @@ def send_alarm_notification_legacy(fcm_token: str, alarm_data: dict, current_pri
         
     except Exception as e:
         logger.error(f"❌ [ALARM] Bildirim gönderme hatası: {e}")
-        logger.error(f"   Token: {fcm_token[:20] if fcm_token else 'None'}...")
-        logger.error(f"   Currency: {alarm_data.get('currency_code', 'Unknown')}")
-        import traceback
-        logger.error(f"   Traceback: {traceback.format_exc()}")
         return False
 
 def get_all_alarm_keys_safe(redis_client) -> List[str]:
@@ -251,7 +239,6 @@ def check_all_alarms() -> Dict:
         total_alarms = len(alarm_keys)
         
         if total_alarms == 0:
-            logger.info("ℹ️ [ALARM] Kontrol edilecek alarm yok")
             return {
                 'total_alarms': 0,
                 'checked': 0,
@@ -260,7 +247,7 @@ def check_all_alarms() -> Dict:
                 'duration_ms': 0
             }
         
-        logger.info(f"📊 [ALARM] {total_alarms} alarm kontrol ediliyor... (SCAN modu)")
+        logger.info(f"📊 [ALARM] {total_alarms} alarm kontrol ediliyor...")
         
         checked_count = 0
         triggered_count = 0
@@ -271,7 +258,6 @@ def check_all_alarms() -> Dict:
                 alarm_data = redis_client.get(key)
                 
                 if not alarm_data:
-                    logger.warning(f"⚠️ [ALARM] Veri bulunamadı: {key}")
                     failed_count += 1
                     continue
                 
@@ -281,14 +267,12 @@ def check_all_alarms() -> Dict:
                 alarm_obj = json.loads(alarm_data)
                 
                 if not alarm_obj.get('is_active', True):
-                    logger.debug(f"⏸️ [ALARM] Pasif alarm atlandı: {key}")
                     continue
                 
                 checked_count += 1
                 
                 currency_code = alarm_obj.get('currency_code')
                 if not currency_code:
-                    logger.warning(f"⚠️ [ALARM] Currency code yok: {key}")
                     failed_count += 1
                     continue
                 
@@ -297,7 +281,6 @@ def check_all_alarms() -> Dict:
                 current_price = get_current_price(currency_code, profile=alarm_profile)
                 
                 if current_price is None or current_price <= 0:
-                    logger.warning(f"⚠️ [ALARM] Fiyat bulunamadı: {currency_code} ({alarm_profile})")
                     failed_count += 1
                     continue
                 
@@ -309,18 +292,15 @@ def check_all_alarms() -> Dict:
                     token_hash = extract_fcm_token_from_key(key)
                     
                     if not token_hash:
-                        logger.error(f"❌ [ALARM] Token hash parse edilemedi: {key}")
                         failed_count += 1
                         continue
                     
                     fcm_token = get_fcm_token_from_hash(token_hash)
                     
                     if not fcm_token:
-                        logger.error(f"❌ [ALARM] FCM token bulunamadı: {token_hash}")
-                        failed_count += 1
-                        
                         redis_client.delete(key)
                         logger.info(f"🗑️ [ALARM] Geçersiz alarm silindi: {key}")
+                        failed_count += 1
                         continue
                     
                     notification_sent = send_alarm_notification_legacy(
@@ -329,24 +309,19 @@ def check_all_alarms() -> Dict:
                         current_price
                     )
                     
+                    redis_client.delete(key)
+                    
                     if notification_sent:
-                        redis_client.delete(key)
                         triggered_count += 1
-                        logger.info(f"✅ [ALARM] Bildirim gönderildi ve alarm silindi: {currency_code} ({alarm_profile})")
                     else:
-                        redis_client.delete(key)
                         failed_count += 1
-                        logger.warning(f"⚠️ [ALARM] Bildirim gönderilemedi ama alarm silindi: {currency_code} ({alarm_profile})")
                 
-            except json.JSONDecodeError as json_err:
-                logger.error(f"❌ [ALARM] JSON parse hatası ({key}): {json_err}")
+            except json.JSONDecodeError:
                 failed_count += 1
                 continue
                 
             except Exception as alarm_err:
-                logger.error(f"❌ [ALARM] Alarm kontrolü hatası ({key}): {alarm_err}")
-                import traceback
-                logger.error(f"   Traceback: {traceback.format_exc()}")
+                logger.error(f"❌ [ALARM] Kontrol hatası ({key}): {alarm_err}")
                 failed_count += 1
                 continue
         
@@ -360,20 +335,16 @@ def check_all_alarms() -> Dict:
             'duration_ms': round(duration_ms, 2)
         }
         
-        logger.info(
-            f"✅ [ALARM] Kontrol tamamlandı (SCAN modu): "
-            f"{checked_count} kontrol edildi, "
-            f"{triggered_count} tetiklendi, "
-            f"{failed_count} hata ({duration_ms:.2f}ms)"
-        )
+        if triggered_count > 0:
+            logger.info(f"🔔 [ALARM] {triggered_count} alarm tetiklendi!")
+        elif failed_count > 5:
+            logger.warning(f"⚠️ [ALARM] {failed_count} hata!")
         
         return result
         
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
         logger.error(f"❌ [ALARM] Genel kontrol hatası: {e}")
-        import traceback
-        logger.error(f"   Traceback: {traceback.format_exc()}")
         
         return {
             'total_alarms': 0,
