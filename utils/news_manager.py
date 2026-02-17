@@ -216,7 +216,7 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
             return [], None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today = datetime.now().strftime('%d %B %Y, %A')
@@ -437,7 +437,7 @@ def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict) -> Opti
             return None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         api_str = "\n".join([
             f"- {k}: {v:.2f} ₺" for k, v in api_prices.items()
@@ -526,7 +526,7 @@ def calculate_currency_margins_with_gemini(html_data: str, api_prices: Dict) -> 
             return None
         
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
         api_str = "\n".join([
