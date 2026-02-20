@@ -25,6 +25,10 @@ V5.4 Changes:
 - 🔥 TELEGRAM FEEDBACK FIX: get_telegram_monitor() fonksiyonu kullanılıyor
 - telegram_instance import sorunu çözüldü
 - Runtime'da singleton instance alınıyor
+
+V5.4.1 Changes (BUG FIX):
+- 🔥 Bug 1-2 FIX: replace(day=...) → timedelta kullanımı (ay sonu çökmesi önlendi)
+- 🔥 Bug 4 FIX: end_time=None → sonsuz bakım modu sorunu düzeltildi
 """
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
@@ -32,7 +36,7 @@ from flask_limiter.util import get_remote_address
 import logging
 import time
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import Config
 from utils.cache import get_cache, set_cache, incr_cache
@@ -172,15 +176,12 @@ def get_all_currencies():
     track_online_user()
     
     try:
-        # 🔥 Kullanıcı profilini al (varsayılan: jeweler)
         profile = request.args.get('profile', Config.DEFAULT_PRICE_PROFILE).lower()
         
-        # Profil validasyonu
         if profile not in ["raw", "jeweler"]:
             logger.warning(f"⚠️ Geçersiz profil: {profile}, jeweler kullanılıyor")
             profile = "jeweler"
         
-        # 🔥 Profil için cache key'i al
         cache_key = get_cache_key_for_profile('currencies_all', profile)
         
         result = get_data_guaranteed(cache_key)
@@ -239,15 +240,12 @@ def get_all_golds():
     track_online_user()
     
     try:
-        # 🔥 Kullanıcı profilini al (varsayılan: jeweler)
         profile = request.args.get('profile', Config.DEFAULT_PRICE_PROFILE).lower()
         
-        # Profil validasyonu
         if profile not in ["raw", "jeweler"]:
             logger.warning(f"⚠️ Geçersiz profil: {profile}, jeweler kullanılıyor")
             profile = "jeweler"
         
-        # 🔥 Profil için cache key'i al
         cache_key = get_cache_key_for_profile('golds_all', profile)
         
         result = get_data_guaranteed(cache_key)
@@ -289,15 +287,12 @@ def get_all_silvers():
     track_online_user()
     
     try:
-        # 🔥 Kullanıcı profilini al (varsayılan: jeweler)
         profile = request.args.get('profile', Config.DEFAULT_PRICE_PROFILE).lower()
         
-        # Profil validasyonu
         if profile not in ["raw", "jeweler"]:
             logger.warning(f"⚠️ Geçersiz profil: {profile}, jeweler kullanılıyor")
             profile = "jeweler"
         
-        # 🔥 Profil için cache key'i al
         cache_key = get_cache_key_for_profile('silvers_all', profile)
         
         result = get_data_guaranteed(cache_key)
@@ -331,22 +326,11 @@ def get_all_silvers():
 def get_regional_currencies():
     """
     🔥 V5.3: get_cache_key_for_profile() kullanımı ile tutarlı hale getirildi
-    
-    ÖNCEKİ KOD:
-        result = get_data_guaranteed(Config.CACHE_KEYS['currencies_all'])  # ❌ Direkt Config kullanımı
-    
-    YENİ KOD:
-        cache_key = get_cache_key_for_profile('currencies_all', 'jeweler')  # ✅ Fonksiyon kullanımı
-        result = get_data_guaranteed(cache_key)
-    
-    NOT: Regional endpoint profil parametresi almıyor, varsayılan jeweler kullanıyor
     """
     check_user_agent()
     track_online_user()
     
     try:
-        # 🔥 V5.3 FIX: get_cache_key_for_profile() kullan (tutarlılık için)
-        # Regional endpoint her zaman jeweler profili kullanır (kullanıcı seçimi yok)
         cache_key = get_cache_key_for_profile('currencies_all', 'jeweler')
         
         result = get_data_guaranteed(cache_key)
@@ -387,6 +371,9 @@ def get_regional_currencies():
 def get_market_status():
     """
     🔥 V5.3: YENİ ENDPOINT - Market durumunu döner (Android için)
+    🔥 V5.4.1 BUG FIX:
+        - timedelta kullanımı (ay sonu replace(day=...) hatası giderildi)
+        - end_time=None → sonsuz bakım sorunu düzeltildi
     
     Response:
         {
@@ -402,14 +389,6 @@ def get_market_status():
                 "timezone": "Europe/Istanbul"
             }
         }
-    
-    Status Renkleri:
-        - OPEN → 🟢 green
-        - CLOSED → 🔴 red
-        - MAINTENANCE / MAINTENANCE_FULL → 🟡 yellow
-    
-    Örnek:
-        GET /api/market/status
     """
     check_user_agent()
     track_online_user()
@@ -418,14 +397,21 @@ def get_market_status():
         tz = pytz.timezone(Config.DEFAULT_TIMEZONE)
         now = datetime.now(tz)
         
+        meta = {
+            "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "timezone": Config.DEFAULT_TIMEZONE
+        }
+        
         # 1️⃣ BAKIM MODU KONTROLÜ
         maintenance_data = get_cache("system_maintenance")
         if maintenance_data and isinstance(maintenance_data, dict):
             end_time = maintenance_data.get("end_time")
             
-            # Bakım süresi bitti mi?
-            if end_time and time.time() > end_time:
-                # Bakım süresi doldu, normal akışa dön
+            # 🔥 V5.4.1 BUG FIX: end_time=None iken sonsuz bakım kalıyordu
+            # Önceki: if end_time and time.time() > end_time: pass → None durumunda else'e düşüyordu
+            # Yeni: end_time yoksa veya süresi dolduysa normal akışa dön
+            if not end_time or time.time() > end_time:
+                # Bakım süresi doldu veya süre tanımlanmamış → normal akışa dön
                 pass
             else:
                 # Hala bakımda
@@ -442,39 +428,36 @@ def get_market_status():
                     },
                     200,
                     "Market durumu (Bakım)",
-                    {
-                        "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-                        "timezone": Config.DEFAULT_TIMEZONE
-                    }
+                    meta
                 )
         
         # 2️⃣ HAFTA SONU KONTROLÜ
-        # 🔥 V5.3: Piyasa saatleri düzeltildi
-        
-        # Cumartesi tüm gün kapalı
-        is_saturday = now.weekday() == 5
-        
-        # Cuma 18:00 ve sonrası kapalı
-        is_friday_closed = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
-        
-        # Pazar sabahı (00:00'dan önce) kapalı
+        is_saturday              = now.weekday() == 5
+        is_friday_closed         = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
         is_sunday_morning_closed = now.weekday() == 6 and now.hour < Config.WEEKEND_REOPEN_HOUR
         
         if is_saturday or is_friday_closed or is_sunday_morning_closed:
-            # Piyasa kapalı - Sonraki açılış zamanını hesapla
+            
+            # 🔥 V5.4.1 BUG FIX: replace(day=now.day + N) → ay sonu ValueError
+            # Önceki: next_open.replace(day=now.day + days_until_sunday) → 31+2=33 ÇÖKÜYOR
+            # Yeni: timedelta ile güvenli tarih hesaplama
             
             if is_friday_closed:
                 # Cuma akşam → Pazar 00:00'da açılır
                 days_until_sunday = (6 - now.weekday()) % 7
-                next_open = now.replace(hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0)
-                next_open = next_open.replace(day=now.day + days_until_sunday)
+                next_open = (now + timedelta(days=days_until_sunday)).replace(
+                    hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0
+                )
             elif is_saturday:
                 # Cumartesi → Pazar 00:00'da açılır
-                next_open = now.replace(hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0)
-                next_open = next_open.replace(day=now.day + 1)
+                next_open = (now + timedelta(days=1)).replace(
+                    hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0
+                )
             else:
-                # Pazar sabah erken → Bugün 00:00'da açılır (geçmiş olabilir ama mantık doğru)
-                next_open = now.replace(hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0)
+                # Pazar sabah erken → Bugün WEEKEND_REOPEN_HOUR'da açılır
+                next_open = now.replace(
+                    hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0
+                )
             
             return create_response(
                 {
@@ -485,10 +468,7 @@ def get_market_status():
                 },
                 200,
                 "Market durumu (Kapalı)",
-                {
-                    "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-                    "timezone": Config.DEFAULT_TIMEZONE
-                }
+                meta
             )
         
         # 3️⃣ PIYASA AÇIK
@@ -501,16 +481,12 @@ def get_market_status():
             },
             200,
             "Market durumu (Açık)",
-            {
-                "current_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-                "timezone": Config.DEFAULT_TIMEZONE
-            }
+            meta
         )
         
     except Exception as e:
         logger.error(f"❌ [MARKET STATUS] Hata: {e}")
         
-        # Hata durumunda güvenli varsayılan döndür
         return create_response(
             {
                 "status": "OPEN",
@@ -705,19 +681,6 @@ def fcm_status():
 def send_feedback():
     """
     🔥 V5.4 FIX: get_telegram_monitor() fonksiyonu kullanılıyor
-    
-    ÖNCEKİ SORUN (V5.1-V5.3):
-    - telegram_instance import edildiğinde None geliyordu
-    - Import anında henüz init_telegram_monitor() çağrılmamıştı
-    
-    YENİ ÇÖZÜM (V5.4):
-    - get_telegram_monitor() FONKSİYONUNU çağır
-    - Bu fonksiyon runtime'da singleton instance'ı döner
-    - Instance başlatıldıktan sonra erişim sağlanır
-    
-    NEDEN ÇALIŞIYOR:
-    - telegram_instance: Module-level variable (import anında None)
-    - get_telegram_monitor(): Runtime function (çağrıldığında instance döner)
     """
     try:
         data = request.get_json()
@@ -754,15 +717,14 @@ def send_feedback():
                 "Mesaj en fazla 500 karakter olabilir"
             )
         
-        user_id = request.headers.get('X-Client-Id', 'Bilinmiyor')
-        device_id = request.headers.get('X-Device-Id', 'Bilinmiyor')
+        user_id    = request.headers.get('X-Client-Id', 'Bilinmiyor')
+        device_id  = request.headers.get('X-Device-Id', 'Bilinmiyor')
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        # 🔥 V5.4 FIX: get_telegram_monitor() FONKSIYONUNU KULLAN!
         from utils.telegram_monitor import get_telegram_monitor
         
-        telegram_bot = get_telegram_monitor()  # ✅ RUNTIME'DA INSTANCE AL!
+        telegram_bot = get_telegram_monitor()
         
         if telegram_bot:
             feedback_text = (
