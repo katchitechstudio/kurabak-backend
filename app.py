@@ -17,6 +17,10 @@ V5.3 Değişiklikler:
 - post_fork hook eklendi (Gunicorn multi-process fix)
 - Her worker kendi Firebase instance'ını alır
 - Production ortamda worker çoğalması sorunu çözüldü
+
+V5.3.1 Değişiklikler (BUG FIX):
+- 🔥 Bug 3 FIX: Deprecated "kurabak:yesterday_prices" key yerine
+  Config.CACHE_KEYS['raw_snapshot'] kullanılıyor
 """
 import os
 import logging
@@ -42,19 +46,12 @@ from utils.notification_service import register_fcm_token, send_test_notificatio
 import firebase_admin
 from firebase_admin import credentials
 
-# Global Firebase durumu
 _firebase_initialized = False
 _firebase_lock = threading.Lock()
 
 def init_firebase():
     """
     🔥 V5.3 FIX: Gunicorn worker-safe Firebase başlatma
-    
-    Her worker process kendi Firebase instance'ını alır.
-    
-    Render Secret Files dosyaları otomatik olarak /etc/secrets/ altına koyar
-    Dosya adı: firebase_credentials.json
-    Erişim yolu: /etc/secrets/firebase_credentials.json
     """
     global _firebase_initialized
     
@@ -72,22 +69,16 @@ def init_firebase():
                 _firebase_initialized = True
                 return True
             
-            # 🔥 V5.2 FIX: Render Secret Files path düzeltmesi
             if os.environ.get("RENDER"):
-                # Render Secret Files'da dosya adı: firebase_credentials.json
-                # Render otomatik olarak /etc/secrets/ altına koyar
                 cred_path = "/etc/secrets/firebase_credentials.json"
             else:
-                # Local development
                 cred_path = Config.FIREBASE_CREDENTIALS_PATH or "firebase_credentials.json"
             
             logger.info(f"🔍 [Firebase] Credentials yolu: {cred_path}")
             
-            # Dosya var mı kontrol et
             if not os.path.exists(cred_path):
                 logger.error(f"❌ [Firebase] Credentials dosyası bulunamadı: {cred_path}")
                 
-                # Alternatif yolları dene
                 alternative_paths = [
                     "firebase_credentials.json",
                     "./firebase_credentials.json",
@@ -109,7 +100,6 @@ def init_firebase():
             
             logger.info(f"✅ [Firebase] Credentials dosyası bulundu: {cred_path}")
             
-            # Firebase'i başlat
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {
                 'projectId': 'kurabak-f1950'
@@ -167,9 +157,6 @@ _telegram_instance = None
 _telegram_lock = threading.Lock()
 
 def get_telegram_instance():
-    """
-    🔥 V5.1 FIX: Telegram instance'ı singleton pattern ile al
-    """
     global _telegram_instance
     
     if _telegram_instance is not None:
@@ -195,25 +182,13 @@ def get_telegram_instance():
 def post_fork(server, worker):
     """
     🔥 V5.3 FIX: Gunicorn her worker başlattığında çalışır
-    
-    SORUN:
-    - Master process Firebase'i başlatır
-    - Worker process'ler kendi Firebase instance'ına ihtiyaç duyar
-    - Her worker'da init_firebase() çağrılmalı
-    
-    ÇÖZÜM:
-    - post_fork hook ile her worker'da Firebase'i başlat
-    - Her worker kendi instance'ını alır
-    - 404 hatası ortadan kalkar
     """
     global _firebase_initialized
     
     logger.info(f"🔥 [Worker {worker.pid}] Post-fork hook tetiklendi")
     
-    # Worker'da flag'i sıfırla (master'dan kalan flag'i temizle)
     _firebase_initialized = False
     
-    # Firebase'i worker'da başlat
     try:
         firebase_status = init_firebase()
         if firebase_status:
@@ -376,7 +351,10 @@ def system_status():
         else:
             worker_status = "⚪ Henüz Çalışmadı"
         
-        snapshot_exists = bool(get_cache("kurabak:yesterday_prices"))
+        # 🔥 V5.3.1 BUG FIX: Deprecated key yerine Config.CACHE_KEYS['raw_snapshot'] kullan
+        # ESKİ (deprecated): get_cache("kurabak:yesterday_prices")
+        # YENİ: Config.CACHE_KEYS['raw_snapshot'] → 'kurabak:raw_snapshot'
+        snapshot_exists = bool(get_cache(Config.CACHE_KEYS['raw_snapshot']))
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
         
         last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
@@ -390,9 +368,8 @@ def system_status():
         else:
             alarm_status = "⚪ Henüz Çalışmadı"
         
-        firebase_status = "🟢 Aktif" if _firebase_initialized else "🔴 Devre Dışı"
-        
-        telegram_status = "🟢 Aktif" if _telegram_instance else "🔴 Devre Dışı"
+        firebase_status  = "🟢 Aktif" if _firebase_initialized else "🔴 Devre Dışı"
+        telegram_status  = "🟢 Aktif" if _telegram_instance else "🔴 Devre Dışı"
         
         return jsonify({
             "success": True,
