@@ -136,7 +136,8 @@ class TestRunner:
             scheduler = get_scheduler_status()
             report_lines.append(f"   {'✅' if scheduler['running'] else '❌'} Scheduler: {'Çalışıyor' if scheduler['running'] else 'Durdu'}")
             
-            snapshot = get_cache(Config.CACHE_KEYS['yesterday_prices'])
+            # V5.5 — güncel snapshot key
+            snapshot = get_cache(Config.CACHE_KEYS['daily_snapshot'])
             report_lines.append(f"   {'✅' if snapshot else '❌'} Snapshot: {'Mevcut' if snapshot else 'Kayıp'}")
             
         except Exception as e:
@@ -555,7 +556,6 @@ class TestRunner:
         return final_report
 
     def _get_play_store_status(self, success_rate: float, avg_response: float) -> str:
-        """Google Play Store hazırlık durumu"""
         if success_rate >= 99 and avg_response < 0.5:
             return "HAZIR 🚀"
         elif success_rate >= 95 and avg_response < 1.0:
@@ -566,7 +566,6 @@ class TestRunner:
             return "HAZIR DEĞİL ❌"
 
     def _get_recommendation(self, success_rate: float, avg_response: float) -> str:
-        """Test sonuçlarına göre tavsiye üret"""
         if success_rate >= 99 and avg_response < 0.5:
             return "Sistem mükemmel durumda! Google Play'e çıkabilirsin. 🚀"
         elif success_rate >= 95 and avg_response < 1.0:
@@ -581,15 +580,6 @@ test_runner = TestRunner(base_url="http://localhost:10000")
 
 
 def run_test(test_type: str = "basic") -> str:
-    """
-    Test çalıştırıcı (Telegram'dan çağrılır)
-    
-    Args:
-        test_type: "basic", "mobile", "detailed"
-    
-    Returns:
-        str: Test raporu (Markdown formatında)
-    """
     if test_type == "basic":
         return test_runner.run_basic_test()
     elif test_type == "mobile" or test_type == "mobil":
@@ -601,13 +591,4 @@ def run_test(test_type: str = "basic") -> str:
 
 
 def run_stress_test(level: str = "light") -> str:
-    """
-    💪 Stres testi çalıştırıcı (Telegram'dan çağrılır)
-    
-    Args:
-        level: "light" (10dk), "medium" (20dk), "hard" (30dk)
-    
-    Returns:
-        str: Stres test raporu (Markdown formatında)
-    """
     return test_runner.run_stress_test(level)
