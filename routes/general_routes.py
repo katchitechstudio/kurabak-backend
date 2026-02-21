@@ -12,23 +12,9 @@ General Routes - API Endpoints V5.4 (TELEGRAM FEEDBACK FIX!) 🔥
 ✅ 🚦 MARKET STATUS ENDPOINT (V5.3)
 ✅ 📬 TELEGRAM FEEDBACK (V5.4 - TAMAMEN DÜZELTİLDİ!)
 
-V5.2 Changes:
-- Profile parametresi eklendi (raw | jeweler)
-- get_cache_key_for_profile() kullanımı TUTARLI HER YERDE
-- Response meta'da profile bilgisi
-
-V5.3 Changes:
-- get_regional_currencies() → get_cache_key_for_profile() kullanıyor (tutarlılık)
-- /api/market/status endpoint eklendi (Android için)
-
-V5.4 Changes:
-- 🔥 TELEGRAM FEEDBACK FIX: get_telegram_monitor() fonksiyonu kullanılıyor
-- telegram_instance import sorunu çözüldü
-- Runtime'da singleton instance alınıyor
-
-V5.4.1 Changes (BUG FIX):
-- 🔥 Bug 1-2 FIX: replace(day=...) → timedelta kullanımı (ay sonu çökmesi önlendi)
-- 🔥 Bug 4 FIX: end_time=None → sonsuz bakım modu sorunu düzeltildi
+V5.4.2 Changes (BUG FIX):
+- 🔥 Bug Fix: is_sunday_morning_closed → Pazar tüm gün kapalı
+  (WEEKEND_REOPEN_HOUR=0 ile now.hour < 0 hiçbir zaman true olmuyordu)
 """
 from flask import Blueprint, jsonify, request, current_app
 from flask_limiter import Limiter
@@ -149,29 +135,6 @@ def get_smart_banner():
 @api_bp.route('/currency/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_currencies():
-    """
-    🔥 V5.2: Profile parametresi eklendi
-    
-    Query Params:
-        profile: "raw" | "jeweler" (varsayılan: "jeweler")
-    
-    Örnek:
-        GET /api/currency/all?profile=raw
-        GET /api/currency/all?profile=jeweler
-        GET /api/currency/all  (varsayılan: jeweler)
-    
-    Response:
-        {
-            "success": true,
-            "data": [...],
-            "meta": {
-                "count": 23,
-                "profile": "jeweler",
-                "last_update": "...",
-                ...
-            }
-        }
-    """
     check_user_agent()
     track_online_user()
     
@@ -230,12 +193,6 @@ def get_all_currencies():
 @api_bp.route('/currency/gold/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_golds():
-    """
-    🔥 V5.2: Profile parametresi eklendi
-    
-    Query Params:
-        profile: "raw" | "jeweler" (varsayılan: "jeweler")
-    """
     check_user_agent()
     track_online_user()
     
@@ -277,12 +234,6 @@ def get_all_golds():
 @api_bp.route('/currency/silver/all', methods=['GET'])
 @limiter.limit("60 per minute")
 def get_all_silvers():
-    """
-    🔥 V5.2: Profile parametresi eklendi
-    
-    Query Params:
-        profile: "raw" | "jeweler" (varsayılan: "jeweler")
-    """
     check_user_agent()
     track_online_user()
     
@@ -324,9 +275,6 @@ def get_all_silvers():
 @api_bp.route('/currency/regional', methods=['GET'])
 @limiter.limit("30 per minute")
 def get_regional_currencies():
-    """
-    🔥 V5.3: get_cache_key_for_profile() kullanımı ile tutarlı hale getirildi
-    """
     check_user_agent()
     track_online_user()
     
@@ -370,25 +318,9 @@ def get_regional_currencies():
 @limiter.limit("120 per minute")
 def get_market_status():
     """
-    🔥 V5.3: YENİ ENDPOINT - Market durumunu döner (Android için)
-    🔥 V5.4.1 BUG FIX:
-        - timedelta kullanımı (ay sonu replace(day=...) hatası giderildi)
-        - end_time=None → sonsuz bakım sorunu düzeltildi
-    
-    Response:
-        {
-            "success": true,
-            "data": {
-                "status": "OPEN" | "CLOSED" | "MAINTENANCE" | "MAINTENANCE_FULL",
-                "color": "green" | "red" | "yellow",
-                "message": "Piyasalar Açık",
-                "next_open": "2026-02-10 00:00:00"  # Sadece CLOSED durumunda
-            },
-            "meta": {
-                "current_time": "2026-02-09 14:30:00",
-                "timezone": "Europe/Istanbul"
-            }
-        }
+    🔥 V5.4.2 BUG FIX:
+        - is_sunday_morning_closed → Pazar tüm gün kapalı
+          (WEEKEND_REOPEN_HOUR=0 ile now.hour < 0 hiçbir zaman true olmuyordu)
     """
     check_user_agent()
     track_online_user()
@@ -407,14 +339,9 @@ def get_market_status():
         if maintenance_data and isinstance(maintenance_data, dict):
             end_time = maintenance_data.get("end_time")
             
-            # 🔥 V5.4.1 BUG FIX: end_time=None iken sonsuz bakım kalıyordu
-            # Önceki: if end_time and time.time() > end_time: pass → None durumunda else'e düşüyordu
-            # Yeni: end_time yoksa veya süresi dolduysa normal akışa dön
             if not end_time or time.time() > end_time:
-                # Bakım süresi doldu veya süre tanımlanmamış → normal akışa dön
                 pass
             else:
-                # Hala bakımda
                 message = maintenance_data.get("message", "Sistem Bakımda")
                 mode = maintenance_data.get("mode", "limited")
                 status = "MAINTENANCE_FULL" if mode == "full" else "MAINTENANCE"
@@ -432,31 +359,32 @@ def get_market_status():
                 )
         
         # 2️⃣ HAFTA SONU KONTROLÜ
-        is_saturday              = now.weekday() == 5
-        is_friday_closed         = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
-        is_sunday_morning_closed = now.weekday() == 6 and now.hour < Config.WEEKEND_REOPEN_HOUR
+        is_saturday      = now.weekday() == 5
+        is_friday_closed = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
         
-        if is_saturday or is_friday_closed or is_sunday_morning_closed:
-            
-            # 🔥 V5.4.1 BUG FIX: replace(day=now.day + N) → ay sonu ValueError
-            # Önceki: next_open.replace(day=now.day + days_until_sunday) → 31+2=33 ÇÖKÜYOR
-            # Yeni: timedelta ile güvenli tarih hesaplama
+        # 🔥 V5.4.2 FIX: Pazar tüm gün kapalı
+        # Eski: now.weekday() == 6 and now.hour < Config.WEEKEND_REOPEN_HOUR
+        # → WEEKEND_REOPEN_HOUR=0 olunca now.hour < 0 hiçbir zaman true olmuyordu!
+        # Yeni: Pazar günü her zaman kapalı (gece 00:00'da Pazartesi başlar zaten)
+        is_sunday = now.weekday() == 6
+        
+        if is_saturday or is_friday_closed or is_sunday:
             
             if is_friday_closed:
-                # Cuma akşam → Pazar 00:00'da açılır
-                days_until_sunday = (6 - now.weekday()) % 7
-                next_open = (now + timedelta(days=days_until_sunday)).replace(
-                    hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0
+                # Cuma akşam → Pazartesi 00:00'da açılır
+                days_until_monday = (7 - now.weekday()) % 7
+                next_open = (now + timedelta(days=days_until_monday)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
                 )
             elif is_saturday:
-                # Cumartesi → Pazar 00:00'da açılır
-                next_open = (now + timedelta(days=1)).replace(
-                    hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0
+                # Cumartesi → Pazartesi 00:00'da açılır
+                next_open = (now + timedelta(days=2)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
                 )
             else:
-                # Pazar sabah erken → Bugün WEEKEND_REOPEN_HOUR'da açılır
-                next_open = now.replace(
-                    hour=Config.WEEKEND_REOPEN_HOUR, minute=0, second=0, microsecond=0
+                # Pazar → Pazartesi 00:00'da açılır
+                next_open = (now + timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
                 )
             
             return create_response(
@@ -679,9 +607,6 @@ def fcm_status():
 @api_bp.route('/feedback/send', methods=['POST'])
 @limiter.limit("5 per hour")
 def send_feedback():
-    """
-    🔥 V5.4 FIX: get_telegram_monitor() fonksiyonu kullanılıyor
-    """
     try:
         data = request.get_json()
         
