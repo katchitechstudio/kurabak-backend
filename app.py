@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.3 🚀 (GUNICORN WORKER FIX)
+KuraBak Backend - ENTRY POINT V5.4 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -10,21 +10,10 @@ KuraBak Backend - ENTRY POINT V5.3 🚀 (GUNICORN WORKER FIX)
 ✅ ALARM SİSTEMİ: Redis tabanlı fiyat alarmları
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
 ✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
-✅ FIREBASE PATH FIX V5.2: Render Secret Files path düzeltmesi 🔥
-✅ GUNICORN WORKER FIX V5.3: Her worker'da Firebase başlatılır 🔥
-
-V5.3 Değişiklikler:
-- post_fork hook eklendi (Gunicorn multi-process fix)
-- Her worker kendi Firebase instance'ını alır
-- Production ortamda worker çoğalması sorunu çözüldü
-
-V5.3.1 Değişiklikler (BUG FIX):
-- 🔥 Bug 3 FIX: Deprecated "kurabak:yesterday_prices" key yerine
-  Config.CACHE_KEYS['raw_snapshot'] kullanılıyor
-
-V5.3.2 Değişiklikler (BUG FIX):
-- 🔥 Duplicate endpoint FIX: /api/feedback/send app.py'den kaldırıldı
-  (general_routes.py'deki endpoint kullanılıyor)
+✅ FIREBASE PATH FIX V5.2: Render Secret Files path düzeltmesi
+✅ GUNICORN WORKER FIX V5.3: Her worker'da Firebase başlatılır
+✅ ADMIN CLEANUP GÜVENLİĞİ V5.4: Token auth + güvenli temizlik
+✅ REDIS LOCK TTL FIX V5.4: Kısa TTL ile zombie lock önleme
 """
 import os
 import logging
@@ -40,11 +29,21 @@ from routes.general_routes import api_bp
 from routes.alarm_routes import alarm_bp
 
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
-
 from utils.notification_service import register_fcm_token, send_test_notification
 
 # ======================================
-# 🔥 V5.2: FIREBASE SINGLETON (PATH FIX!)
+# LOGGING AYARLARI
+# ======================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger("KuraBak")
+
+# ======================================
+# 🔥 V5.2: FIREBASE SINGLETON
 # ======================================
 
 import firebase_admin
@@ -54,9 +53,6 @@ _firebase_initialized = False
 _firebase_lock = threading.Lock()
 
 def init_firebase():
-    """
-    🔥 V5.3 FIX: Gunicorn worker-safe Firebase başlatma
-    """
     global _firebase_initialized
     
     if _firebase_initialized:
@@ -105,9 +101,7 @@ def init_firebase():
             logger.info(f"✅ [Firebase] Credentials dosyası bulundu: {cred_path}")
             
             cred = credentials.Certificate(cred_path)
-            firebase_admin.initialize_app(cred, {
-                'projectId': 'kurabak-f1950'
-            })
+            firebase_admin.initialize_app(cred, {'projectId': 'kurabak-f1950'})
             
             _firebase_initialized = True
             logger.info("✅ [Firebase] Admin SDK başarıyla başlatıldı! (Singleton)")
@@ -131,17 +125,6 @@ def init_firebase():
             return False
 
 # ======================================
-# LOGGING AYARLARI
-# ======================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger("KuraBak")
-
-# ======================================
 # FLASK APP KURULUMU
 # ======================================
 
@@ -154,7 +137,7 @@ app.register_blueprint(api_bp)
 app.register_blueprint(alarm_bp)
 
 # ======================================
-# 🔥 V5.1: TELEGRAM SINGLETON (MEMORY LEAK FİX!)
+# 🔥 V5.1: TELEGRAM SINGLETON
 # ======================================
 
 _telegram_instance = None
@@ -185,7 +168,8 @@ def get_telegram_instance():
 
 def post_fork(server, worker):
     """
-    🔥 V5.3 FIX: Gunicorn her worker başlattığında çalışır
+    Gunicorn her worker başlattığında çalışır.
+    Sadece Firebase başlatır — scheduler burada başlatılmaz.
     """
     global _firebase_initialized
     
@@ -208,12 +192,16 @@ def post_fork(server, worker):
 
 def background_initialization():
     """
-    🔥 V5.3 FIX: Redis Lock ile scheduler çoğalmasını önle
+    Redis Lock ile scheduler çoğalmasını önle.
+    🔥 V5.4: Lock TTL 3600s — zombie lock önleme
     """
     from utils.cache import get_redis_client
     
     current_pid = os.getpid()
-    lock_key = "kurabak:scheduler:lock"
+    lock_key    = "kurabak:scheduler:lock"
+
+    # 🔥 V5.4: TTL 86400 → 3600 (sunucu ölse bile 1 saat sonra lock kalkar)
+    LOCK_TTL = 3600
     
     try:
         redis_client = get_redis_client()
@@ -229,6 +217,7 @@ def background_initialization():
                 logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (zombie önleme)")
                 return
             
+            # 🔥 V5.4: Kısa TTL ile başlangıç lock'u
             redis_client.set(lock_key, current_pid, ex=60)
             logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid}")
         
@@ -239,32 +228,33 @@ def background_initialization():
     logger.info(f"⏳ [Arka Plan] Sistem servisleri başlatılıyor (PID: {current_pid})...")
     time.sleep(1)
     
-    # 1. Firebase'i Başlat (SINGLETON!)
+    # 1. Firebase
     firebase_status = init_firebase()
     if firebase_status:
         logger.info("🔥 [Firebase] Push notification sistemi aktif!")
     else:
         logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
     
-    # 2. Telegram Monitor'ü Başlat (SINGLETON!)
+    # 2. Telegram
     telegram = get_telegram_instance()
     if telegram:
         logger.info("📱 [Telegram] Komut sistemi aktif!")
     else:
         logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
     
-    # 3. Scheduler'ı (Zamanlayıcı) Başlat
+    # 3. Scheduler
     start_scheduler()
     
     try:
         redis_client = get_redis_client()
         if redis_client:
-            redis_client.set(lock_key, current_pid, ex=86400)
-            logger.info(f"🔒 [Redis Lock] Scheduler owner PID kaydedildi: {current_pid} (24h lock)")
+            # 🔥 V5.4: Kalıcı lock da 3600s TTL
+            redis_client.set(lock_key, current_pid, ex=LOCK_TTL)
+            logger.info(f"🔒 [Redis Lock] Scheduler owner PID kaydedildi: {current_pid} ({LOCK_TTL}s lock)")
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Kalıcı lock yazılamadı: {e}")
     
-    # 4. İLK ŞEF KONTROLÜ (Acil Durum Snapshot için)
+    # 4. İlk Şef Kontrolü
     logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
     
     try:
@@ -282,7 +272,7 @@ def background_initialization():
             pass
 
 # ======================================
-# 🔥 PRODUCTION FIX: Render için thread başlatma
+# PRODUCTION / LOCAL BAŞLATMA
 # ======================================
 
 is_render = os.environ.get("RENDER") is not None
@@ -303,24 +293,21 @@ else:
 
 @app.route('/', methods=['GET'])
 def index():
-    """Health Check & Info"""
     return jsonify({
-        "app": Config.APP_NAME,
-        "version": Config.APP_VERSION,
-        "status": "active",
+        "app":         Config.APP_NAME,
+        "version":     Config.APP_VERSION,
+        "status":      "active",
         "environment": Config.ENVIRONMENT,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "timestamp":   datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }), 200
 
 @app.route('/health', methods=['GET'])
 @app.route('/healthz', methods=['GET'])
 def health():
-    """Basit Sağlık Kontrolü (Load Balancer için)"""
     return jsonify({"status": "ok"}), 200
 
 @app.route('/api/system/status', methods=['GET'])
 def system_status():
-    """Detaylı Sistem Durumu"""
     try:
         from services.maintenance_service import scheduler, get_scheduler_status
         from services.financial_service import get_service_metrics
@@ -328,7 +315,7 @@ def system_status():
         from utils.cache import get_cache
         
         scheduler_running = False
-        active_job_list = []
+        active_job_list   = []
         
         if scheduler is not None:
             try:
@@ -341,11 +328,11 @@ def system_status():
                 logger.warning(f"⚠️ Scheduler kontrol hatası: {sched_err}")
         
         scheduler_status = get_scheduler_status()
-        metrics = get_service_metrics()
-        alarm_stats = get_alarm_stats()
+        metrics          = get_service_metrics()
+        alarm_stats      = get_alarm_stats()
         
         last_worker_run = get_cache("kurabak:last_worker_run")
-        worker_status = "🟢 Aktif"
+        worker_status   = "🟢 Aktif"
         if last_worker_run:
             time_diff = time.time() - float(last_worker_run)
             if time_diff > 600:
@@ -359,7 +346,7 @@ def system_status():
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
         
         last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
-        alarm_status = "🟢 Aktif"
+        alarm_status     = "🟢 Aktif"
         if last_alarm_check:
             time_diff = time.time() - float(last_alarm_check)
             if time_diff > 1800:
@@ -369,56 +356,41 @@ def system_status():
         else:
             alarm_status = "⚪ Henüz Çalışmadı"
         
-        firebase_status  = "🟢 Aktif" if _firebase_initialized else "🔴 Devre Dışı"
-        telegram_status  = "🟢 Aktif" if _telegram_instance else "🔴 Devre Dışı"
+        firebase_status = "🟢 Aktif" if _firebase_initialized else "🔴 Devre Dışı"
+        telegram_status = "🟢 Aktif" if _telegram_instance else "🔴 Devre Dışı"
         
         return jsonify({
-            "success": True,
+            "success":   True,
             "timestamp": datetime.now().isoformat(),
             "scheduler": {
-                "running": scheduler_running,
+                "running":     scheduler_running,
                 "active_jobs": active_job_list
             },
             "components": {
-                "worker": {
-                    "status": worker_status,
-                    "last_run": last_worker_run
-                },
-                "snapshot": {
-                    "status": snapshot_status
-                },
-                "controller": {
-                    "status": "🟢 Aktif" if scheduler_running else "🔴 Durdu"
-                },
+                "worker":     {"status": worker_status, "last_run": last_worker_run},
+                "snapshot":   {"status": snapshot_status},
+                "controller": {"status": "🟢 Aktif" if scheduler_running else "🔴 Durdu"},
                 "alarm": {
-                    "status": alarm_status,
-                    "last_check": last_alarm_check,
+                    "status":       alarm_status,
+                    "last_check":   last_alarm_check,
                     "total_alarms": alarm_stats.get('total_alarms', 0),
                     "unique_users": alarm_stats.get('unique_users', 0),
-                    "alarm_types": alarm_stats.get('alarm_types', {})
+                    "alarm_types":  alarm_stats.get('alarm_types', {})
                 },
-                "firebase": {
-                    "status": firebase_status
-                },
-                "telegram": {
-                    "status": telegram_status
-                }
+                "firebase": {"status": firebase_status},
+                "telegram": {"status": telegram_status}
             },
             "metrics": metrics
         }), 200
         
     except Exception as e:
         logger.error(f"System status error: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/device/register', methods=['POST'])
 def register_device():
-    """FCM Token kaydı"""
     try:
-        data = request.json
+        data  = request.json
         token = data.get('token')
         
         if not token:
@@ -438,7 +410,6 @@ def register_device():
 
 @app.route('/api/device/test-push', methods=['GET'])
 def trigger_test_push():
-    """Manuel Push Notification testi"""
     try:
         result = send_test_notification()
         return jsonify(result), 200
@@ -448,14 +419,43 @@ def trigger_test_push():
 
 @app.route('/api/admin/cleanup', methods=['POST'])
 def emergency_cleanup():
-    """ACİL TEMİZLİK"""
+    """
+    🔥 DÜZELTİLDİ (V5.4):
+    - Admin token authentication eklendi
+    - flush_all_cache() → güvenli kurabak:* pattern silme
+    - FCM token seti ve alarm keyleri korunuyor
+    """
     try:
-        from utils.cache import flush_all_cache, cleanup_old_disk_backups
+        # 🔥 V5.4: Token authentication
+        admin_token = request.headers.get('X-Admin-Token') or request.json.get('admin_token') if request.json else None
+        expected_token = os.environ.get('ADMIN_SECRET_TOKEN')
+
+        if not expected_token:
+            logger.warning("⚠️ [CLEANUP] ADMIN_SECRET_TOKEN env değişkeni tanımlı değil!")
+            return jsonify({"success": False, "error": "Sunucu yapılandırma hatası"}), 500
+
+        if not admin_token or admin_token != expected_token:
+            logger.warning(f"🚨 [CLEANUP] Yetkisiz erişim denemesi! IP: {request.remote_addr}")
+            return jsonify({"success": False, "error": "Yetkisiz erişim"}), 403
+
+        from utils.cache import get_redis_client, cleanup_old_disk_backups
         
         logger.warning("🚨 [CLEANUP] ACİL TEMİZLİK BAŞLADI!")
         
-        flush_all_cache()
-        logger.info("✅ [CLEANUP] Cache temizlendi")
+        # 🔥 V5.4: flush_all_cache() YERİNE güvenli temizlik
+        # FCM token seti (fcm_tokens) ve alarm keyleri (alarm:*) korunuyor
+        deleted_count = 0
+        redis_client  = get_redis_client()
+        
+        if redis_client:
+            keys = redis_client.keys("kurabak:*")
+            if keys:
+                for key in keys:
+                    redis_client.delete(key)
+                    deleted_count += 1
+            logger.info(f"✅ [CLEANUP] {deleted_count} kurabak:* key silindi (FCM ve alarm keyleri korundu)")
+        else:
+            logger.warning("⚠️ [CLEANUP] Redis bağlantısı yok, cache temizlenemedi")
         
         cleanup_result = cleanup_old_disk_backups(max_age_days=7)
         logger.info(f"✅ [CLEANUP] {cleanup_result['deleted_count']} eski backup silindi")
@@ -469,8 +469,8 @@ def emergency_cleanup():
         if telegram:
             telegram._send_raw(
                 "✅ *ACİL TEMİZLİK TAMAMLANDI!*\n\n"
-                f"🧹 Redis temizlendi\n"
-                f"🧹 RAM temizlendi\n"
+                f"🧹 {deleted_count} Redis key silindi\n"
+                f"🔒 FCM tokenlar ve alarmlar korundu\n"
                 f"🧹 {cleanup_result['deleted_count']} eski backup silindi\n"
                 f"🔄 Scheduler yeniden başlatıldı\n\n"
                 "Sistem şimdi temiz ve hazır!"
@@ -480,9 +480,10 @@ def emergency_cleanup():
             "success": True,
             "message": "Sistem temizlendi ve yeniden başlatıldı",
             "details": {
-                "cache_cleared": True,
+                "cache_keys_deleted":  deleted_count,
                 "old_backups_deleted": cleanup_result['deleted_count'],
-                "scheduler_restarted": True
+                "scheduler_restarted": True,
+                "protected":           ["fcm_tokens", "alarm:*"]
             }
         }), 200
         
@@ -495,7 +496,6 @@ def emergency_cleanup():
 # ======================================
 
 def on_exit():
-    """Temiz kapanış"""
     global _firebase_initialized, _telegram_instance
     
     logger.info("🛑 Uygulama kapatılıyor...")
