@@ -231,11 +231,11 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     turkish_name = TURKISH_NAMES.get(code, code)
     
     return {
-        "code": code, 
+        "code": code,
         "name": turkish_name,
-        "buying": round(buying, 4), 
+        "buying": round(buying, 4),
         "selling": round(selling, 4),
-        "rate": round(selling, 4), 
+        "rate": round(selling, 4),
         "change_percent": round(change, 2),
         "type": item_type
     }
@@ -512,20 +512,15 @@ def rebuild_jeweler_cache() -> bool:
             for item in items:
                 code = item.get("code")
                 margin = margin_map.get(code, 0.0)
-                
                 new_item = copy.deepcopy(item)
-                
                 if margin < 0:
                     margin = 0.005
                     logger.warning(f"⚠️ [NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
-                
                 if margin > 0:
                     new_item["selling"] = round(new_item["selling"] * (1 + margin), 4)
                     new_item["buying"] = round(new_item["buying"] * (1 + margin), 4)
                     new_item["rate"] = new_item["selling"]
-                
                 result.append(new_item)
-            
             return result
         
         currencies_jeweler = apply_margins_to_items(currencies_raw.get("data", []), margin_map)
@@ -535,12 +530,14 @@ def rebuild_jeweler_cache() -> bool:
         tz = pytz.timezone('Europe/Istanbul')
         now = datetime.now(tz)
         
+        # FIX: status ve market_msg her zaman raw cache'den alınır
+        # Jeweler endpoint sabit OPEN döndürmez, raw ile senkron kalır
         base_meta = {
-            "source": "V5",
-            "update_date": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "source": currencies_raw.get("source", "V5"),
+            "update_date": currencies_raw.get("update_date", now.strftime("%Y-%m-%d %H:%M:%S")),
             "timestamp": time.time(),
-            "status": "OPEN",
-            "market_msg": "Piyasalar Canlı",
+            "status": currencies_raw.get("status", "OPEN"),
+            "market_msg": currencies_raw.get("market_msg", "Piyasalar Canlı"),
             "last_update": now.strftime("%H:%M:%S"),
             "banner": determine_banner_message()
         }
@@ -557,7 +554,8 @@ def rebuild_jeweler_cache() -> bool:
             f"✅ [JEWELER REBUILD] Tamamlandı: "
             f"{len(currencies_jeweler)} döviz, "
             f"{len(golds_jeweler)} altın, "
-            f"{len(silvers_jeweler)} gümüş"
+            f"{len(silvers_jeweler)} gümüş | "
+            f"Status: {base_meta['status']}"
         )
         
         return True
@@ -641,7 +639,7 @@ def update_financial_data():
                 "banner": maint_message
             }
             
-            for key_name in ['currencies_all', 'golds_all', 'silvers_all', 
+            for key_name in ['currencies_all', 'golds_all', 'silvers_all',
                               'currencies_jeweler', 'golds_jeweler', 'silvers_jeweler']:
                 cache_key = Config.CACHE_KEYS.get(key_name)
                 if cache_key:
@@ -680,7 +678,7 @@ def update_financial_data():
                     "banner": banner_message
                 }
                 
-                for key_name in ['currencies_all', 'golds_all', 'silvers_all', 
+                for key_name in ['currencies_all', 'golds_all', 'silvers_all',
                                   'currencies_jeweler', 'golds_jeweler', 'silvers_jeweler']:
                     cache_key = Config.CACHE_KEYS.get(key_name)
                     if cache_key:
@@ -822,10 +820,8 @@ def update_financial_data():
         for item in jeweler_currencies_items:
             code = item.get("code")
             margin = margin_map.get(code, 0.0)
-            
             if margin < 0:
                 margin = 0.005
-            
             if margin > 0:
                 item["selling"] = round(item["selling"] * (1 + margin), 4)
                 item["buying"] = round(item["buying"] * (1 + margin), 4)
@@ -834,10 +830,8 @@ def update_financial_data():
         for item in jeweler_golds_items:
             code = item.get("code")
             margin = margin_map.get(code, 0.0)
-            
             if margin < 0:
                 margin = 0.005
-            
             if margin > 0:
                 item["selling"] = round(item["selling"] * (1 + margin), 4)
                 item["buying"] = round(item["buying"] * (1 + margin), 4)
@@ -846,10 +840,8 @@ def update_financial_data():
         for item in jeweler_silvers_items:
             code = item.get("code")
             margin = margin_map.get(code, 0.0)
-            
             if margin < 0:
                 margin = 0.005
-            
             if margin > 0:
                 item["selling"] = round(item["selling"] * (1 + margin), 4)
                 item["buying"] = round(item["buying"] * (1 + margin), 4)
@@ -859,6 +851,7 @@ def update_financial_data():
         jeweler_golds = enrich_with_calculation(jeweler_golds_items, jeweler_snapshot)
         jeweler_silvers = enrich_with_calculation(jeweler_silvers_items, jeweler_snapshot)
         
+        # FIX: Jeweler cache'e de aynı base_meta yaz (status raw ile senkron)
         jeweler_currencies_payload = {**base_meta, "data": jeweler_currencies}
         jeweler_golds_payload = {**base_meta, "data": jeweler_golds}
         jeweler_silvers_payload = {**base_meta, "data": jeweler_silvers}
