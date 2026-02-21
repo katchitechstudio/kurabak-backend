@@ -13,15 +13,11 @@ Firebase Push Notification Service V5.4 🔥 - ALARM NOTIFICATION ULTIMATE
 ✅ 🔥 V5.1: FCM HTTP v1 API 404 HATASI ÇÖZÜLDÜ!
 ✅ 🔥 V5.2: FIREBASE CHECK FIX - Singleton pattern uyumlu
 ✅ 🔥 V5.3: ALARM BİLDİRİMİ YENİDEN TASARLANDI
-✅ 🔥 V5.4: PERCENT ALARM DESTEĞİ EKLENDİ (YENİ!)
-
-V5.4 Değişiklikler (PERCENT ALARM SUPPORT):
-- send_alarm_notification() artık hem PRICE hem PERCENT modunu destekliyor
-- alarm_mode parametresi eklendi
-- percent_value ve percent_direction parametreleri eklendi
-- Mesaj formatı alarm moduna göre dinamik oluşturuluyor
+✅ 🔥 V5.4: PERCENT ALARM DESTEĞİ EKLENDİ
+✅ 🔥 V5.5: BATCH RATE LIMIT EKLENDİ (Firebase spam koruması)
 """
 import logging
+import time
 import json
 from typing import List, Dict, Optional, Generator
 from datetime import datetime
@@ -36,15 +32,6 @@ FCM_BATCH_SIZE = 500
 
 
 def register_fcm_token(token: str) -> bool:
-    """
-    Yeni bir FCM token'ı kaydet
-    
-    Args:
-        token: Firebase Cloud Messaging token
-        
-    Returns:
-        bool: Başarılı ise True
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
@@ -52,7 +39,6 @@ def register_fcm_token(token: str) -> bool:
             return False
         
         redis_client.sadd(Config.CACHE_KEYS['fcm_tokens'], token)
-        
         logger.info(f"✅ [FCM] Token kaydedildi: {token[:20]}...")
         return True
         
@@ -62,15 +48,6 @@ def register_fcm_token(token: str) -> bool:
 
 
 def unregister_fcm_token(token: str) -> bool:
-    """
-    FCM token'ı sil
-    
-    Args:
-        token: Silinecek token
-        
-    Returns:
-        bool: Başarılı ise True
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
@@ -88,23 +65,17 @@ def unregister_fcm_token(token: str) -> bool:
 def get_tokens_generator(batch_size: int = 500) -> Generator[List[str], None, None]:
     """
     🔥 Tokenları Redis'ten parça parça okuyan Generator
-    
+
     SMEMBERS sorunu: 100,000 token'ı RAM'e yükler (200-300 MB) → OOM Kill
     SSCAN çözümü: Parça parça okur, RAM kullanımı sabit kalır
-    
-    Args:
-        batch_size: Her batch'te kaç token (varsayılan 500)
-        
-    Yields:
-        List[str]: Token batch'i
     """
     redis_client = get_redis_client()
     if not redis_client:
         return
 
-    key = Config.CACHE_KEYS['fcm_tokens']
+    key    = Config.CACHE_KEYS['fcm_tokens']
     cursor = 0
-    batch = []
+    batch  = []
 
     try:
         while True:
@@ -134,12 +105,9 @@ def get_tokens_generator(batch_size: int = 500) -> Generator[List[str], None, No
 def get_all_tokens() -> List[str]:
     """
     Tüm kayıtlı FCM tokenlarını getir (DEPRECATED - Geriye uyumluluk için)
-    
+
     ⚠️ UYARI: Bu fonksiyon RAM dostu değildir!
     Yeni kod için get_tokens_generator() kullanın.
-    
-    Returns:
-        List[str]: Token listesi
     """
     try:
         redis_client = get_redis_client()
@@ -155,12 +123,6 @@ def get_all_tokens() -> List[str]:
 
 
 def get_token_count() -> int:
-    """
-    Kayıtlı token sayısını getir
-    
-    Returns:
-        int: Token sayısı
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
@@ -183,40 +145,24 @@ def send_notification(
 ) -> Dict:
     """
     🔥 V5.2 FIX: FCM bildirimi gönder (Singleton pattern uyumlu)
-    
-    V5.1 → V5.2 Değişiklik:
-    - firebase_admin._apps kontrolü KALDIRILDI
-    - app.py'deki init_firebase() singleton pattern ile başlatıyor
-    - Hata varsa try-catch yakalıyor
-    
-    Args:
-        tokens: Hedef cihaz tokenları
-        title: Bildirim başlığı
-        body: Bildirim metni
-        data: Ek veri (dict)
-        priority: Öncelik (high/normal)
-        sound: Ses (default/silent)
-        
-    Returns:
-        Dict: Sonuç bilgisi
     """
     try:
         if not tokens:
             logger.warning("⚠️ [FCM] Token bulunamadı!")
             return {"success": False, "error": "No tokens"}
         
-        total_success = 0
-        total_failure = 0
-        failed_tokens_all = []
+        total_success      = 0
+        total_failure      = 0
+        failed_tokens_all  = []
         
         total_tokens = len(tokens)
-        batch_count = (total_tokens + FCM_BATCH_SIZE - 1) // FCM_BATCH_SIZE
+        batch_count  = (total_tokens + FCM_BATCH_SIZE - 1) // FCM_BATCH_SIZE
         
         logger.info(f"📦 [FCM] {total_tokens} token, {batch_count} batch'e bölünüyor...")
         
         for i in range(0, total_tokens, FCM_BATCH_SIZE):
             batch_tokens = tokens[i:i + FCM_BATCH_SIZE]
-            batch_num = (i // FCM_BATCH_SIZE) + 1
+            batch_num    = (i // FCM_BATCH_SIZE) + 1
             
             logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
             
@@ -249,7 +195,7 @@ def send_notification(
                 
             except Exception as batch_error:
                 logger.error(f"❌ [FCM] Batch {batch_num} kritik hata: {batch_error}")
-                total_failure += len(batch_tokens)
+                total_failure     += len(batch_tokens)
                 failed_tokens_all.extend(batch_tokens)
         
         if failed_tokens_all:
@@ -258,12 +204,12 @@ def send_notification(
                 unregister_fcm_token(token)
         
         result = {
-            "success": True,
+            "success":       True,
             "success_count": total_success,
             "failure_count": total_failure,
-            "total_tokens": total_tokens,
-            "batch_count": batch_count,
-            "timestamp": datetime.now().isoformat()
+            "total_tokens":  total_tokens,
+            "batch_count":   batch_count,
+            "timestamp":     datetime.now().isoformat()
         }
         
         logger.info(f"🎉 [FCM] Gönderim tamamlandı!")
@@ -287,25 +233,18 @@ def send_notification(
 def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
     """
     TÜM kayıtlı cihazlara bildirim gönder (RAM dostu - Generator ile)
-    
+
     🔥 V4.5: Generator pattern kullanır, RAM şişmesi olmaz
     🔥 V5.1: HTTP v1 API uyumlu send_notification() kullanır
     🔥 V5.2: Singleton pattern uyumlu
-    
-    Args:
-        title: Bildirim başlığı
-        body: Bildirim metni
-        data: Ek veri
-        
-    Returns:
-        Dict: Sonuç
+    🔥 V5.5: Batch arası rate limit eklendi
     """
     try:
         logger.info("📢 [FCM] Toplu bildirim gönderiliyor (Generator modu)...")
         
         total_success = 0
         total_failure = 0
-        total_tokens = 0
+        total_tokens  = 0
         
         token_generator = get_tokens_generator(batch_size=FCM_BATCH_SIZE)
         
@@ -328,23 +267,28 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
             if result.get('success'):
                 total_success += result.get('success_count', 0)
                 total_failure += result.get('failure_count', 0)
-                total_tokens += len(batch_tokens)
+                total_tokens  += len(batch_tokens)
             else:
                 logger.error(f"❌ [FCM] Batch {batch_num} tamamen başarısız!")
                 total_failure += len(batch_tokens)
-                total_tokens += len(batch_tokens)
+                total_tokens  += len(batch_tokens)
+            
+            # 🔥 DÜZELTİLDİ (V5.5): Firebase rate limit koruması
+            # Birden fazla batch varsa araya kısa bekleme ekle
+            if batch_num > 1:
+                time.sleep(0.1)
         
         if total_tokens == 0:
             logger.warning("⚠️ [FCM] Hiç kayıtlı cihaz yok!")
             return {"success": False, "error": "No registered devices"}
         
         result = {
-            "success": True,
-            "total_sent": total_tokens,
+            "success":       True,
+            "total_sent":    total_tokens,
             "success_count": total_success,
             "failure_count": total_failure,
-            "batch_count": batch_num,
-            "timestamp": datetime.now().isoformat()
+            "batch_count":   batch_num,
+            "timestamp":     datetime.now().isoformat()
         }
         
         logger.info(f"🏁 [FCM] Toplu gönderim tamamlandı!")
@@ -377,38 +321,27 @@ def send_alarm_notification(
 ) -> bool:
     """
     🔥 V5.4: Fiyat alarmı bildirimi gönder (PERCENT DESTEĞI EKLENDİ!)
-    
-    Bildirim İçeriği:
-    - Varlık adı + tür (Dolar / USD)
-    - Hedef fiyat veya yüzde değişim
-    - Anlık fiyat
-    - Alarm durumu (Hedef ÜZERİNE çıktı / ALTINA düştü)
-    - Değişim bilgisi
-    
+
     Args:
         fcm_token: FCM token
         currency_code: Döviz kodu (USD, EUR, XAU, vb.)
         currency_name: Döviz adı (Dolar, Euro, Gram Altın)
         current_price: Mevcut fiyat
         alarm_mode: "PRICE" veya "PERCENT" (varsayılan: PRICE)
-        
+
         PRICE MODE için:
         target_price: Hedef fiyat
         start_price: Alarm kurulduğu andaki fiyat
         alarm_type: HIGH veya LOW
-        
+
         PERCENT MODE için:
         start_price: Başlangıç fiyatı
         percent_value: Yüzde değeri (örn: 3.0)
         percent_direction: UP veya DOWN
-        
-    Returns:
-        bool: Başarılı ise True
     """
     try:
         alarm_mode = alarm_mode.upper()
         
-        # Emoji ve durum metni
         if alarm_mode == "PRICE":
             if not target_price or not alarm_type:
                 logger.error("❌ [ALARM] PRICE modunda target_price ve alarm_type gerekli!")
@@ -417,38 +350,36 @@ def send_alarm_notification(
             if not start_price:
                 start_price = current_price
             
-            price_diff = current_price - target_price
+            price_diff        = current_price - target_price
             change_from_start = current_price - start_price
-            change_percent = (change_from_start / start_price) * 100 if start_price > 0 else 0
+            change_percent    = (change_from_start / start_price) * 100 if start_price > 0 else 0
             
-            emoji = "📈" if alarm_type == "HIGH" else "📉"
+            emoji        = "📈" if alarm_type == "HIGH" else "📉"
             alarm_status = "Hedef ÜZERİNE çıktı" if alarm_type == "HIGH" else "Hedef ALTINA düştü"
             change_symbol = "+" if change_from_start >= 0 else ""
             
             title = f"{emoji} Fiyat Alarmı!"
-            
-            body = f"""{currency_name} / {currency_code}
-
-Hedef: ₺{target_price:,.2f}
-Anlık: ₺{current_price:,.2f}
-
-{alarm_status}
-
-{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{change_percent:.2f}%)"""
+            body  = (
+                f"{currency_name} / {currency_code}\n\n"
+                f"Hedef: ₺{target_price:,.2f}\n"
+                f"Anlık: ₺{current_price:,.2f}\n\n"
+                f"{alarm_status}\n\n"
+                f"{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{change_percent:.2f}%)"
+            )
             
             data = {
-                "type": "alarm_triggered",
-                "alarm_mode": "PRICE",
-                "currency_code": currency_code,
-                "currency_name": currency_name,
-                "target_price": f"{target_price:.2f}",
-                "current_price": f"{current_price:.2f}",
-                "start_price": f"{start_price:.2f}",
-                "alarm_type": alarm_type,
-                "alarm_status": alarm_status,
-                "price_diff": f"{price_diff:.2f}",
+                "type":              "alarm_triggered",
+                "alarm_mode":        "PRICE",
+                "currency_code":     currency_code,
+                "currency_name":     currency_name,
+                "target_price":      f"{target_price:.2f}",
+                "current_price":     f"{current_price:.2f}",
+                "start_price":       f"{start_price:.2f}",
+                "alarm_type":        alarm_type,
+                "alarm_status":      alarm_status,
+                "price_diff":        f"{price_diff:.2f}",
                 "change_from_start": f"{change_from_start:.2f}",
-                "change_percent": f"{change_percent:.2f}"
+                "change_percent":    f"{change_percent:.2f}"
             }
             
         elif alarm_mode == "PERCENT":
@@ -457,47 +388,42 @@ Anlık: ₺{current_price:,.2f}
                 return False
             
             change_from_start = current_price - start_price
-            actual_percent = (change_from_start / start_price) * 100 if start_price > 0 else 0
+            actual_percent    = (change_from_start / start_price) * 100 if start_price > 0 else 0
             
-            emoji = "📈" if percent_direction == "UP" else "📉"
+            emoji        = "📈" if percent_direction == "UP" else "📉"
             alarm_status = f"%{percent_value:.1f} YÜKSELDİ" if percent_direction == "UP" else f"%{percent_value:.1f} DÜŞTÜ"
             change_symbol = "+" if change_from_start >= 0 else ""
             
             title = f"{emoji} Fiyat Alarmı!"
-            
-            body = f"""{currency_name} / {currency_code}
-
-Başlangıç: ₺{start_price:,.2f}
-Anlık: ₺{current_price:,.2f}
-
-{alarm_status}
-
-{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{actual_percent:.2f}%)"""
+            body  = (
+                f"{currency_name} / {currency_code}\n\n"
+                f"Başlangıç: ₺{start_price:,.2f}\n"
+                f"Anlık: ₺{current_price:,.2f}\n\n"
+                f"{alarm_status}\n\n"
+                f"{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{actual_percent:.2f}%)"
+            )
             
             data = {
-                "type": "alarm_triggered",
-                "alarm_mode": "PERCENT",
-                "currency_code": currency_code,
-                "currency_name": currency_name,
-                "start_price": f"{start_price:.2f}",
-                "current_price": f"{current_price:.2f}",
-                "percent_value": f"{percent_value:.1f}",
+                "type":              "alarm_triggered",
+                "alarm_mode":        "PERCENT",
+                "currency_code":     currency_code,
+                "currency_name":     currency_name,
+                "start_price":       f"{start_price:.2f}",
+                "current_price":     f"{current_price:.2f}",
+                "percent_value":     f"{percent_value:.1f}",
                 "percent_direction": percent_direction,
-                "alarm_status": alarm_status,
+                "alarm_status":      alarm_status,
                 "change_from_start": f"{change_from_start:.2f}",
-                "actual_percent": f"{actual_percent:.2f}"
+                "actual_percent":    f"{actual_percent:.2f}"
             }
         
         else:
             logger.error(f"❌ [ALARM] Geçersiz alarm_mode: {alarm_mode}")
             return False
         
-        response = messaging.send(
+        messaging.send(
             messaging.Message(
-                notification=messaging.Notification(
-                    title=title,
-                    body=body
-                ),
+                notification=messaging.Notification(title=title, body=body),
                 data=data,
                 token=fcm_token,
                 android=messaging.AndroidConfig(
@@ -528,28 +454,17 @@ Anlık: ₺{current_price:,.2f}
 
 
 def send_price_alert(currency_code: str, price: float, change_percent: float) -> Dict:
-    """
-    Fiyat alarm bildirimi (Genel fiyat uyarısı - alarm sistemi değil)
-    
-    Args:
-        currency_code: Döviz kodu (USD, EUR, vb.)
-        price: Güncel fiyat
-        change_percent: Değişim yüzdesi
-        
-    Returns:
-        Dict: Sonuç
-    """
-    emoji = "🔥" if abs(change_percent) >= 2.0 else "📊"
+    emoji     = "🔥" if abs(change_percent) >= 2.0 else "📊"
     direction = "📈" if change_percent > 0 else "📉"
     
     title = f"{emoji} {currency_code} Fiyat Uyarısı!"
-    body = f"{direction} {price:.4f} TL ({change_percent:+.2f}%)"
+    body  = f"{direction} {price:.4f} TL ({change_percent:+.2f}%)"
     
     data = {
-        "type": "price_alert",
+        "type":     "price_alert",
         "currency": currency_code,
-        "price": str(price),
-        "change": str(change_percent)
+        "price":    str(price),
+        "change":   str(change_percent)
     }
     
     return send_to_all(title, body, data)
@@ -558,23 +473,11 @@ def send_price_alert(currency_code: str, price: float, change_percent: float) ->
 def send_daily_summary() -> Dict:
     """
     🔔 GÜNLÜK BİLDİRİM (14:00)
-    
-    🔥 V5.0: Bayram/Haber sistemi ile entegre
-    
+
     ÖNCELİK SIRASI:
     1. Bayram varsa → Bayram mesajı
     2. Bayram yoksa → Günün haberi
     3. İkisi de yoksa → Bildirim gönderilmez
-    
-    Returns:
-        Dict: {
-            'success': bool,
-            'type': 'bayram' | 'news' | None,
-            'recipient_count': int,
-            'title': str,
-            'body': str,
-            'error': str (opsiyonel)
-        }
     """
     try:
         logger.info("🔔 [DAILY SUMMARY] Günlük bildirim hazırlanıyor...")
@@ -586,16 +489,16 @@ def send_daily_summary() -> Dict:
         if not notification_content:
             logger.warning("⚠️ [DAILY SUMMARY] Gönderilecek içerik yok (Ne bayram ne haber)")
             return {
-                'success': False,
-                'type': None,
+                'success':         False,
+                'type':            None,
                 'recipient_count': 0,
-                'error': 'Gönderilecek içerik yok'
+                'error':           'Gönderilecek içerik yok'
             }
         
         data = {
-            "type": "daily_summary",
+            "type":         "daily_summary",
             "content_type": notification_content['type'],
-            "timestamp": str(datetime.now().timestamp())
+            "timestamp":    str(datetime.now().timestamp())
         }
         
         result = send_to_all(
@@ -610,48 +513,40 @@ def send_daily_summary() -> Dict:
                 f"✅ [DAILY SUMMARY] {notification_content['type'].upper()} bildirimi gönderildi "
                 f"({recipient_count} kullanıcı)"
             )
-            
             return {
-                'success': True,
-                'type': notification_content['type'],
+                'success':         True,
+                'type':            notification_content['type'],
                 'recipient_count': recipient_count,
-                'title': notification_content['title'],
-                'body': notification_content['body']
+                'title':           notification_content['title'],
+                'body':            notification_content['body']
             }
         else:
             logger.error(f"❌ [DAILY SUMMARY] Gönderim başarısız: {result.get('error')}")
             return {
-                'success': False,
-                'type': notification_content['type'],
+                'success':         False,
+                'type':            notification_content['type'],
                 'recipient_count': 0,
-                'error': result.get('error')
+                'error':           result.get('error')
             }
         
     except Exception as e:
         logger.error(f"❌ [DAILY SUMMARY] Hata: {e}")
         import traceback
         logger.error(f"   Traceback: {traceback.format_exc()}")
-        
         return {
-            'success': False,
-            'type': None,
+            'success':         False,
+            'type':            None,
             'recipient_count': 0,
-            'error': str(e)
+            'error':           str(e)
         }
 
 
 def send_test_notification() -> Dict:
-    """
-    Test bildirimi gönder
-    
-    Returns:
-        Dict: Sonuç
-    """
     title = "🔔 KuraBak Test Bildirimi"
-    body = f"Bildirim sistemi çalışıyor! {datetime.now().strftime('%H:%M:%S')}"
+    body  = f"Bildirim sistemi çalışıyor! {datetime.now().strftime('%H:%M:%S')}"
     
     data = {
-        "type": "test",
+        "type":      "test",
         "timestamp": str(datetime.now().timestamp())
     }
     
