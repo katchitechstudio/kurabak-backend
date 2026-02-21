@@ -530,8 +530,6 @@ def rebuild_jeweler_cache() -> bool:
         tz = pytz.timezone('Europe/Istanbul')
         now = datetime.now(tz)
         
-        # FIX: status ve market_msg her zaman raw cache'den alınır
-        # Jeweler endpoint sabit OPEN döndürmez, raw ile senkron kalır
         base_meta = {
             "source": currencies_raw.get("source", "V5"),
             "update_date": currencies_raw.get("update_date", now.strftime("%Y-%m-%d %H:%M:%S")),
@@ -618,6 +616,34 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
         return True, status, message
     return False, "OPEN", None
 
+def is_weekend_closed(now) -> bool:
+    """
+    Hafta sonu kapalı mı kontrolü.
+
+    Kapalı saatler:
+    - Cuma 18:00'dan itibaren
+    - Cumartesi tüm gün
+    - Pazar 00:00 - 23:57 arası (API Pazar 23:58'de yeni veri göndermeye başlıyor)
+
+    Açık:
+    - Pazar 23:58'den itibaren (API başlıyor)
+    - Pazartesi ve sonrası normal
+    """
+    weekday = now.weekday()  # 0=Pazartesi, 4=Cuma, 5=Cumartesi, 6=Pazar
+    hour = now.hour
+    minute = now.minute
+
+    # Cuma 18:00'dan sonra kapalı
+    is_friday_closed = (weekday == 4 and hour >= Config.MARKET_CLOSE_FRIDAY_HOUR)
+
+    # Cumartesi tüm gün kapalı
+    is_saturday_closed = (weekday == 5)
+
+    # Pazar: 23:58'e kadar kapalı, 23:58'den sonra açık (API başlıyor)
+    is_sunday_closed = (weekday == 6 and not (hour == 23 and minute >= 58))
+
+    return is_friday_closed or is_saturday_closed or is_sunday_closed
+
 def update_financial_data():
     tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
@@ -654,12 +680,9 @@ def update_financial_data():
             logger.error(f"❌ [WORKER] MAINTENANCE status güncellemesi başarısız: {e}")
         
         return True
-    
-    is_saturday = now.weekday() == 5
-    is_friday_closed = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
-    is_sunday_morning_closed = now.weekday() == 6 and now.hour < Config.WEEKEND_REOPEN_HOUR
-    
-    if is_saturday or is_friday_closed or is_sunday_morning_closed:
+
+    # ✅ Hafta sonu kapalı kontrolü (Cuma 18:00 → Pazar 23:58)
+    if is_weekend_closed(now):
         if not get_cache("market_closed_logged"):
             logger.info(f"🔒 [WORKER] Piyasa Kapalı - Hafta sonu modu başladı")
             set_cache("market_closed_logged", "true", ttl=43200)
@@ -851,7 +874,6 @@ def update_financial_data():
         jeweler_golds = enrich_with_calculation(jeweler_golds_items, jeweler_snapshot)
         jeweler_silvers = enrich_with_calculation(jeweler_silvers_items, jeweler_snapshot)
         
-        # FIX: Jeweler cache'e de aynı base_meta yaz (status raw ile senkron)
         jeweler_currencies_payload = {**base_meta, "data": jeweler_currencies}
         jeweler_golds_payload = {**base_meta, "data": jeweler_golds}
         jeweler_silvers_payload = {**base_meta, "data": jeweler_silvers}
