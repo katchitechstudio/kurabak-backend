@@ -253,7 +253,7 @@ BAYRAM: [VAR/YOK veya isim]
 
         try:
             # timeout=25 — 30sn'de session drop oluyordu
-            response = model.generate_content(prompt, request_options={"timeout": 25})
+            response = model.generate_content(prompt, request_options={"timeout": 60})
             result = response.text.strip()
             if not result or len(result) < 10:
                 logger.error("❌ [GEMİNİ] Boş yanıt!")
@@ -384,7 +384,7 @@ H�ÇBİR AÇIKLAMA YAPMA!
 """
 
         # timeout=25 — Gemini 30sn'de drop ediyor
-        response = model.generate_content(prompt, request_options={"timeout": 25})
+        response = model.generate_content(prompt, request_options={"timeout": 60})
         result = response.text.strip()
 
         if not result or len(result) < 10:
@@ -457,7 +457,7 @@ H�ÇBİR AÇIKLAMA YAPMA!
 """
 
         # timeout=25
-        response = model.generate_content(prompt, request_options={"timeout": 25})
+        response = model.generate_content(prompt, request_options={"timeout": 60})
         result = response.text.strip()
 
         if not result or len(result) < 10:
