@@ -21,6 +21,10 @@ V5.3 Değişiklikler:
 V5.3.1 Değişiklikler (BUG FIX):
 - 🔥 Bug 3 FIX: Deprecated "kurabak:yesterday_prices" key yerine
   Config.CACHE_KEYS['raw_snapshot'] kullanılıyor
+
+V5.3.2 Değişiklikler (BUG FIX):
+- 🔥 Duplicate endpoint FIX: /api/feedback/send app.py'den kaldırıldı
+  (general_routes.py'deki endpoint kullanılıyor)
 """
 import os
 import logging
@@ -351,9 +355,6 @@ def system_status():
         else:
             worker_status = "⚪ Henüz Çalışmadı"
         
-        # 🔥 V5.3.1 BUG FIX: Deprecated key yerine Config.CACHE_KEYS['raw_snapshot'] kullan
-        # ESKİ (deprecated): get_cache("kurabak:yesterday_prices")
-        # YENİ: Config.CACHE_KEYS['raw_snapshot'] → 'kurabak:raw_snapshot'
         snapshot_exists = bool(get_cache(Config.CACHE_KEYS['raw_snapshot']))
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
         
@@ -412,34 +413,6 @@ def system_status():
             "success": False,
             "error": str(e)
         }), 500
-
-@app.route('/api/feedback/send', methods=['POST'])
-def send_feedback():
-    """Kullanıcı geri bildirimleri"""
-    try:
-        data = request.json
-        message = data.get('message', '').strip()
-        
-        if not message:
-            return jsonify({"success": False, "error": "Mesaj boş olamaz"}), 400
-        
-        if len(message) > 250:
-            return jsonify({"success": False, "error": "Mesaj çok uzun (max 250 karakter)"}), 400
-
-        telegram = get_telegram_instance()
-        
-        if telegram:
-            telegram_msg = f"📩 **YENİ GERİ BİLDİRİM**\n\n{message}"
-            telegram._send_raw(telegram_msg)
-            logger.info(f"✅ [Feedback] Anonim mesaj iletildi ({len(message)} karakter)")
-        else:
-            logger.warning("⚠️ [Feedback] Telegram devre dışı, mesaj kaydedildi ama gönderilemedi")
-        
-        return jsonify({"success": True, "message": "Mesajınız iletildi"}), 200
-
-    except Exception as e:
-        logger.error(f"❌ [Feedback] Hata: {e}")
-        return jsonify({"success": False, "error": "Sunucu hatası"}), 500
 
 @app.route('/api/device/register', methods=['POST'])
 def register_device():
