@@ -15,6 +15,10 @@ V5.6 Değişiklikler (KOMBO TAKTİK):
 - 🔥 OTOMATİK KURTARMA: 00:05 job'ı başarısız olsa bile 6 saat sonra düzeltir
 - 🔥 İLK DEPLOYMENT: 5 dakika sonra marjları otomatik oluşturur
 
+V5.6.1 Değişiklikler (BUG FIX):
+- 🔥 Import hatası FIX: check_and_refresh_margins() içinde get_cache artık
+  utils.cache'den import ediliyor (utils.news_manager yerine)
+
 Timeline:
 23:55 → Sabah haberlerini HAZIRLA (Gemini)
 00:00 → Snapshot AL + Sabah YAYINLA (hafif)
@@ -475,7 +479,9 @@ def check_and_refresh_margins():
     try:
         logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor...")
         
-        from utils.news_manager import get_cache, update_dynamic_margins
+        # 🔥 V5.6.1 FIX: get_cache utils.cache'den import edilmeli
+        from utils.cache import get_cache
+        from utils.news_manager import update_dynamic_margins
         from config import Config
         import time
         
