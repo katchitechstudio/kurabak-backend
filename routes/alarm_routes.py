@@ -8,7 +8,7 @@ import hashlib
 
 from config import Config
 from utils.cache import get_cache, set_cache, get_redis_client
-from services.alarm_service import save_fcm_token_mapping
+from services.alarm_service import save_fcm_token_mapping, get_all_alarm_keys_safe
 
 logger = logging.getLogger(__name__)
 
@@ -101,16 +101,16 @@ def validate_alarm_data(data: dict) -> tuple:
 def parse_alarm_data(data: dict) -> dict:
     alarm_mode = data.get('alarm_mode', 'PRICE').strip().upper()
     obj = {
-        'currency_code':   data['currency_code'].strip().upper(),
-        'currency_name':   data['currency_name'].strip(),
-        'target_price':    float(data['target_price']),
-        'start_price':     float(data.get('start_price', 0)),
-        'alarm_type':      data['alarm_type'].strip().upper(),
-        'alarm_mode':      alarm_mode,
-        'profile':         data.get('profile', 'jeweler').strip().lower(),
-        'created_at':      int(time.time()),
-        'is_active':       True,
-        'percent_value':     float(data['percent_value'])     if alarm_mode == 'PERCENT' else None,
+        'currency_code':     data['currency_code'].strip().upper(),
+        'currency_name':     data['currency_name'].strip(),
+        'target_price':      float(data['target_price']),
+        'start_price':       float(data.get('start_price', 0)),
+        'alarm_type':        data['alarm_type'].strip().upper(),
+        'alarm_mode':        alarm_mode,
+        'profile':           data.get('profile', 'jeweler').strip().lower(),
+        'created_at':        int(time.time()),
+        'is_active':         True,
+        'percent_value':     float(data['percent_value'])             if alarm_mode == 'PERCENT' else None,
         'percent_direction': data['percent_direction'].strip().upper() if alarm_mode == 'PERCENT' else None,
     }
     return obj
@@ -134,10 +134,10 @@ def create_alarm():
         if not is_valid:
             return jsonify({"success": False, "message": error_msg}), 400
 
-        fcm_token    = data['fcm_token'].strip()
+        fcm_token     = data['fcm_token'].strip()
         currency_code = data['currency_code'].strip().upper()
-        alarm_type   = data['alarm_type'].strip().upper()
-        profile      = data.get('profile', 'jeweler').strip().lower()
+        alarm_type    = data['alarm_type'].strip().upper()
+        profile       = data.get('profile', 'jeweler').strip().lower()
 
         redis_client = get_redis_client()
         if not redis_client:
@@ -294,7 +294,6 @@ def sync_alarms():
 
         save_fcm_token_mapping(fcm_token, _token_hash(fcm_token))
 
-        # Eski alarmları temizle
         old_keys = scan_keys(redis_client, get_user_alarm_pattern(fcm_token))
         if old_keys:
             redis_client.delete(*old_keys)
@@ -373,12 +372,17 @@ def delete_all_alarms():
 @alarm_bp.route('/stats', methods=['GET'])
 @limiter.limit("10 per minute")
 def alarm_stats():
+    """
+    🔥 DÜZELTİLDİ: Ham scan_keys yerine get_all_alarm_keys_safe kullanılıyor.
+    fcm_token_map ve price:last_check keyleri istatistiğe dahil edilmiyor.
+    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
             return _no_redis()
 
-        all_keys = scan_keys(redis_client, "alarm:*")
+        # 🔥 DÜZELTİLDİ: get_all_alarm_keys_safe filtreli listeyi döndürüyor
+        all_keys = get_all_alarm_keys_safe(redis_client)
 
         unique_users  = set()
         high_count    = 0
@@ -408,12 +412,12 @@ def alarm_stats():
         return jsonify({
             "success": True,
             "data": {
-                "total_alarms":  len(all_keys),
-                "unique_users":  len(unique_users),
-                "alarm_types":   {"HIGH": high_count, "LOW": low_count},
-                "profiles":      {"raw": raw_count, "jeweler": jeweler_count},
-                "max_per_user":  Config.MAX_ALARMS_PER_USER,
-                "ttl_days":      Config.ALARM_TTL // (24 * 60 * 60)
+                "total_alarms": len(all_keys),
+                "unique_users": len(unique_users),
+                "alarm_types":  {"HIGH": high_count, "LOW": low_count},
+                "profiles":     {"raw": raw_count, "jeweler": jeweler_count},
+                "max_per_user": Config.MAX_ALARMS_PER_USER,
+                "ttl_days":     Config.ALARM_TTL // (24 * 60 * 60)
             }
         }), 200
 
