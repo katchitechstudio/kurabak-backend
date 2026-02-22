@@ -1,5 +1,5 @@
 """
-Maintenance Service - PRODUCTION READY V5.6 🚧
+Maintenance Service - PRODUCTION READY V5.7 🚧
 ===============================================
 ✅ SCHEDULER OPTIMIZATION: CPU spike önleme (prepare/publish ayrımı)
 ✅ SMOOTH MARGIN TRANSITION: Kademeli marj geçişi
@@ -8,22 +8,21 @@ Maintenance Service - PRODUCTION READY V5.6 🚧
 ✅ JEWELER REBUILD: Marj değişince cache otomatik yenilenir
 ✅ SNAPSHOT UPDATE: Marj değişince snapshot düzeltilir
 ✅ 🔥 KOMBO TAKTİK: Async margin bootstrap + 6 saatlik sağlık kontrolü
+✅ 🎉 MİLLİ & DİNİ BAYRAM BİLDİRİMLERİ: Sabit takvim, Gemini'ye bağımlı değil
 
-V5.6 Değişiklikler (KOMBO TAKTİK):
-- 🔥 ASYNC MARGIN BOOTSTRAP: Worker'ı yavaşlatmadan arka planda marj günceller
-- 🔥 MARJ SAĞLIK KONTROLÜ: Her 6 saatte marj yaşını kontrol eder
-- 🔥 OTOMATİK KURTARMA: 00:05 job'ı başarısız olsa bile 6 saat sonra düzeltir
-- 🔥 İLK DEPLOYMENT: 5 dakika sonra marjları otomatik oluşturur
-
-V5.6.1 Değişiklikler (BUG FIX):
-- 🔥 Import hatası FIX: check_and_refresh_margins() içinde get_cache artık
-  utils.cache'den import ediliyor (utils.news_manager yerine)
+V5.7 Değişiklikler (BAYRAM BİLDİRİMLERİ):
+- 🎉 Dini bayramlar (Ramazan, Kurban) → 09:00'da bildirim, sadece ilk gün
+- 🏛️ Milli bayramlar (23 Nisan, 19 Mayıs, 15 Temmuz, 30 Ağustos, 29 Ekim) → 09:00'da bildirim
+- 🕯️ 10 Kasım → 09:05'te özel saygı bildirimi
+- 📅 Sabit takvim: 2025, 2026, 2027 tarihleri hardcode
 
 Timeline:
 23:55 → Sabah haberlerini HAZIRLA (Gemini)
 00:00 → Snapshot AL + Sabah YAYINLA (hafif)
 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update
 00:05, 06:05, 12:05, 18:05 → 🔥 Marj Sağlık Kontrolü (Her 6 saat)
+09:00 → 🎉 Bayram/Milli Gün Bildirim Kontrolü
+09:05 → 🕯️ 10 Kasım Atatürk'ü Anma Bildirimi
 11:55 → Akşam haberlerini HAZIRLA (Gemini)
 12:00 → Akşam YAYINLA (hafif)
 14:00 → Push notification GÖNDER
@@ -32,7 +31,7 @@ Timeline:
 import logging
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, Dict, Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -47,6 +46,36 @@ logger = logging.getLogger(__name__)
 scheduler = None
 _scheduler_lock = threading.Lock()
 
+
+# ======================================
+# 🎉 V5.7 - BAYRAM TAKVİMİ
+# ======================================
+
+# Sadece ilk günler — bildirim bir kez gönderilir
+DINI_BAYRAMLAR = {
+    # Ramazan Bayramı
+    "2025-03-30": ("Ramazan Bayramı Mübarek Olsun", "Ramazan Bayramınızı en içten dileklerimizle kutlarız."),
+    "2026-03-20": ("Ramazan Bayramı Mübarek Olsun", "Ramazan Bayramınızı en içten dileklerimizle kutlarız."),
+    "2027-03-09": ("Ramazan Bayramı Mübarek Olsun", "Ramazan Bayramınızı en içten dileklerimizle kutlarız."),
+    # Kurban Bayramı
+    "2025-06-06": ("Kurban Bayramı Mübarek Olsun", "Kurban Bayramınızı en içten dileklerimizle kutlarız."),
+    "2026-05-27": ("Kurban Bayramı Mübarek Olsun", "Kurban Bayramınızı en içten dileklerimizle kutlarız."),
+    "2027-05-16": ("Kurban Bayramı Mübarek Olsun", "Kurban Bayramınızı en içten dileklerimizle kutlarız."),
+}
+
+# Sabit tarihler — her yıl tekrar eder
+MILLI_BAYRAMLAR = {
+    "04-23": ("23 Nisan Ulusal Egemenlik ve Çocuk Bayramı", "Nice senelere, nice bayramlara."),
+    "05-19": ("19 Mayıs Gençlik ve Spor Bayramı", "Nice senelere, nice bayramlara."),
+    "07-15": ("15 Temmuz Demokrasi ve Millî Birlik Günü", "Nice senelere, nice bayramlara."),
+    "08-30": ("30 Ağustos Zafer Bayramı", "Nice senelere, nice bayramlara."),
+    "10-29": ("29 Ekim Cumhuriyet Bayramı", "Nice senelere, nice bayramlara."),
+}
+
+
+# ======================================
+# MAINTENANCE UTILS
+# ======================================
 
 def check_maintenance_status() -> Dict[str, Any]:
     maintenance_data = get_cache(Config.CACHE_KEYS['maintenance'])
@@ -459,33 +488,96 @@ def push_notification_daily():
 
 
 # ======================================
+# 🎉 V5.7 - BAYRAM BİLDİRİM JOB'LARI
+# ======================================
+
+def bayram_notification_job():
+    """
+    🎉 09:00 - Dini ve Milli Bayram Bildirimi
+
+    Dini bayramlar → Sadece ilk gün (DINI_BAYRAMLAR dict)
+    Milli bayramlar → Her yıl aynı tarih (MILLI_BAYRAMLAR dict)
+    10 Kasım → Ayrı job, 09:05'te
+    """
+    try:
+        today = date.today()
+        today_full = today.strftime("%Y-%m-%d")   # 2026-03-20
+        today_md   = today.strftime("%m-%d")       # 03-20
+
+        title = None
+        body  = None
+
+        # 1. Dini bayram kontrolü (ilk gün)
+        if today_full in DINI_BAYRAMLAR:
+            title, body = DINI_BAYRAMLAR[today_full]
+            logger.info(f"🎉 [BAYRAM] Dini bayram tespit edildi: {title}")
+
+        # 2. Milli bayram kontrolü
+        elif today_md in MILLI_BAYRAMLAR:
+            title, body = MILLI_BAYRAMLAR[today_md]
+            logger.info(f"🏛️ [BAYRAM] Milli bayram tespit edildi: {title}")
+
+        else:
+            logger.info("ℹ️ [BAYRAM] Bugün bayram yok, bildirim gönderilmeyecek")
+            return
+
+        from utils.notification_service import send_to_all
+        send_to_all(title, body, data={"type": "bayram"})
+        logger.info(f"✅ [BAYRAM] Bildirim gönderildi: {title}")
+
+    except Exception as e:
+        logger.error(f"❌ [BAYRAM] Hata: {e}")
+        raise
+
+
+def kasim_notification_job():
+    """
+    🕯️ 09:05 - 10 Kasım Atatürk'ü Anma Bildirimi
+
+    Sadece 10 Kasım'da çalışır.
+    Saat 09:05 — Atatürk'ün vefat ettiği saat.
+    """
+    try:
+        today_md = date.today().strftime("%m-%d")
+
+        if today_md != "11-10":
+            return
+
+        logger.info("🕯️ [10 KASIM] Atatürk'ü Anma bildirimi gönderiliyor...")
+
+        title = "10 Kasım — Atatürk'ü Anma"
+        body  = "Mustafa Kemal Atatürk'ü saygı, minnet ve özlemle anıyoruz."
+
+        from utils.notification_service import send_to_all
+        send_to_all(title, body, data={"type": "anma"})
+        logger.info("✅ [10 KASIM] Bildirim gönderildi")
+
+    except Exception as e:
+        logger.error(f"❌ [10 KASIM] Hata: {e}")
+        raise
+
+
+# ======================================
 # 🔥 V5.6 KOMBO TAKTİK - MARJ SAĞLIK
 # ======================================
 
 def check_and_refresh_margins():
     """
     🔥 KOMBO TAKTİK: MARJ SAĞLIK KONTROLÜ
-    
+
     Her 6 saatte bir çalışır:
     1. En son marj güncellemesini kontrol eder
     2. 24 saatten eskiyse → Güncelle!
     3. Gemini başarısız olsa bile 6 saat sonra tekrar dener
-    
-    AVANTAJLAR:
-    - Marjlar asla 24 saatten eski olmaz ✅
-    - 00:05 job'ı hata verse bile kurtarır ✅
-    - Smooth geçiş sistemi korunur ✅
     """
     try:
         logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor...")
         
-        # 🔥 V5.6.1 FIX: get_cache utils.cache'den import edilmeli
         from utils.cache import get_cache
         from utils.news_manager import update_dynamic_margins
         from config import Config
         import time
         
-        # En son başarılı marj güncellemesini kontrol et
         last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
         last_successful = get_cache(last_successful_key)
         
@@ -503,7 +595,6 @@ def check_and_refresh_margins():
         hours_ago = (time.time() - timestamp) / 3600
         days_ago = hours_ago / 24
         
-        # 24 saatten eski mi kontrol et
         if hours_ago > 24:
             logger.warning(
                 f"⚠️ [MARJ SAĞLIK] Marjlar çok eski ({days_ago:.1f} gün önce)! "
@@ -529,7 +620,7 @@ def check_and_refresh_margins():
 # ======================================
 
 def start_scheduler():
-    """🚀 Scheduler başlat - V5.6 KOMBO TAKTİK"""
+    """🚀 Scheduler başlat - V5.7 BAYRAM BİLDİRİMLERİ"""
     global scheduler
     
     with _scheduler_lock:
@@ -690,18 +781,46 @@ def start_scheduler():
             next_run_time=datetime.now() + timedelta(minutes=5)
         )
         
+        # ======================================
+        # 🎉 V5.7 - BAYRAM BİLDİRİM JOB'LARI
+        # ======================================
+
+        # 09:00 - Dini & Milli Bayram Bildirimi
+        scheduler.add_job(
+            bayram_notification_job,
+            trigger=CronTrigger(hour=9, minute=0),
+            id='bayram_notification',
+            name='Bayram Bildirimi (Dini & Milli)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+
+        # 09:05 - 10 Kasım Atatürk'ü Anma
+        scheduler.add_job(
+            kasim_notification_job,
+            trigger=CronTrigger(hour=9, minute=5),
+            id='kasim_notification',
+            name='10 Kasım Atatürk\'ü Anma',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+        
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V5.6 - KOMBO TAKTİK)")
+        logger.info("✅ Scheduler başlatıldı! (V5.7 - BAYRAM BİLDİRİMLERİ)")
         logger.info(f"   👷 Worker: Her {worker_interval} saniyede")
         logger.info("   👮 Şef: Her 10 dakikada")
         logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
         logger.info("   📊 Rapor: Her gün 09:00")
         logger.info("   🧹 Cleanup: Her gün 03:00")
         logger.info("")
-        logger.info("   🔥 V5.6 OPTIMIZED TIMELINE:")
+        logger.info("   🔥 V5.7 OPTIMIZED TIMELINE:")
         logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
         logger.info("   📸 00:00 → Snapshot AL + Sabah YAYINLA (hafif)")
         logger.info("   💰 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update")
+        logger.info("   🎉 09:00 → Bayram Bildirimi (Dini & Milli)")
+        logger.info("   🕯️ 09:05 → 10 Kasım Atatürk'ü Anma")
         logger.info("   🌆 11:55 → Akşam haberlerini HAZIRLA (Gemini)")
         logger.info("   📰 12:00 → Akşam YAYINLA (hafif)")
         logger.info("   🔔 14:00 → Push Notification GÖNDER")
@@ -713,6 +832,8 @@ def start_scheduler():
         logger.info("   ✅ Snapshot update: OTOMATİK")
         logger.info("   ✅ Marj sağlık kontrolü: AKTİF (Her 6 saat)")
         logger.info("   ✅ Async margin bootstrap: AKTİF (Worker'da)")
+        logger.info("   ✅ Dini & Milli bayram bildirimleri: AKTİF")
+        logger.info("   ✅ 10 Kasım anma bildirimi: AKTİF (09:05)")
 
 
 def stop_scheduler():
@@ -757,14 +878,16 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V5.6',
+            'version': 'V5.7',
             'optimizations': {
                 'cpu_spike_prevention': True,
                 'smooth_margin': True,
                 'jeweler_auto_rebuild': True,
                 'snapshot_auto_update': True,
                 'async_margin_bootstrap': True,
-                'margin_health_check': True
+                'margin_health_check': True,
+                'bayram_notifications': True,
+                'kasim_anma': True,
             }
         }
         
