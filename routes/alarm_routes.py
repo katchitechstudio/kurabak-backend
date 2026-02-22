@@ -64,13 +64,6 @@ def validate_alarm_data(data: dict) -> tuple:
     except (ValueError, TypeError):
         return False, "Geçersiz target_price formatı"
 
-    if 'start_price' in data:
-        try:
-            if float(data['start_price']) <= 0:
-                return False, "Başlangıç fiyatı 0'dan büyük olmalı"
-        except (ValueError, TypeError):
-            return False, "Geçersiz start_price formatı"
-
     if data['alarm_type'].strip().upper() not in ['HIGH', 'LOW']:
         return False, "alarm_type sadece HIGH veya LOW olabilir"
 
@@ -82,6 +75,27 @@ def validate_alarm_data(data: dict) -> tuple:
     if profile not in ['raw', 'jeweler']:
         return False, "profile sadece raw veya jeweler olabilir"
 
+    # ─── start_price kontrolü ────────────────────────────────────────────────
+    # PERCENT modunda start_price ZORUNLU — olmadan alarm hiç tetiklenemez.
+    # PRICE modunda isteğe bağlı, gönderilmişse geçerli olmalı.
+    if alarm_mode == 'PERCENT':
+        if 'start_price' not in data:
+            return False, "PERCENT modunda start_price zorunludur"
+        try:
+            if float(data['start_price']) <= 0:
+                return False, "Başlangıç fiyatı 0'dan büyük olmalı"
+        except (ValueError, TypeError):
+            return False, "Geçersiz start_price formatı"
+    else:
+        # PRICE modu — start_price opsiyonel ama gönderildiyse geçerli olmalı
+        if 'start_price' in data:
+            try:
+                if float(data['start_price']) <= 0:
+                    return False, "Başlangıç fiyatı 0'dan büyük olmalı"
+            except (ValueError, TypeError):
+                return False, "Geçersiz start_price formatı"
+
+    # ─── PERCENT modu ek alanlar ─────────────────────────────────────────────
     if alarm_mode == 'PERCENT':
         if 'percent_value' not in data:
             return False, "percent_value gerekli"
@@ -381,7 +395,6 @@ def alarm_stats():
         if not redis_client:
             return _no_redis()
 
-        # 🔥 DÜZELTİLDİ: get_all_alarm_keys_safe filtreli listeyi döndürüyor
         all_keys = get_all_alarm_keys_safe(redis_client)
 
         unique_users  = set()
