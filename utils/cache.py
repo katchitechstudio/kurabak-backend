@@ -1,5 +1,5 @@
 """
-Redis Cache Utility - PRODUCTION READY V5.5 🚀
+Redis Cache Utility - PRODUCTION READY V5.6 🚀
 =========================================================
 ✅ CONNECTION POOL FIX: Global client kullanımı (V4.8)
 ✅ RAM CACHE CLEANUP: Otomatik çöp toplama (V4.8)
@@ -16,11 +16,12 @@ Redis Cache Utility - PRODUCTION READY V5.5 🚀
 ✅ ATOMIC INCR: Race Condition önleme için atomik increment
 ✅ 🔥 RAM CLEANUP INTERVAL: 10 dakika (RAM OPTİMİZASYON - V4.8.1)
 ✅ 🔥 V5.5 SNAPSHOT KEYS: raw_snapshot + jeweler_snapshot (Disk backup desteği)
+✅ 🔥 V5.6 SCHEDULER LOCK: renew_scheduler_lock buraya taşındı (circular import fix)
+   app.py → maintenance_service.py → app.py döngüsü kırıldı.
 
-V5.5 Değişiklikler:
-- 🔥 CRITICAL_KEYS güncellendi: raw_snapshot + jeweler_snapshot eklendi
-- 🔥 yesterday_prices deprecated (backward compatibility için hala destekleniyor)
-- 🔥 Disk backup artık her iki snapshot'ı da destekliyor
+V5.6 Değişiklikler:
+- 🔥 SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL, renew_scheduler_lock() eklendi
+- app.py ve maintenance_service.py artık buradan import eder
 """
 
 import os
@@ -669,3 +670,28 @@ def recover_from_disk():
         logger.info("ℹ️ Kurtarılacak veri bulunamadı (Normal durum)")
 
 recover_from_disk()
+
+
+# ======================================
+# 🔥 V5.6: SCHEDULER LOCK (circular import fix)
+# Buraya taşındı: app.py → maintenance_service.py → app.py döngüsü kırıldı.
+# app.py ve maintenance_service.py her ikisi de buradan import eder.
+# ======================================
+
+SCHEDULER_LOCK_KEY = "kurabak:scheduler:lock"
+SCHEDULER_LOCK_TTL = 120  # 2 dakika — worker her 60s'de yeniler, çökerse 120s'de kalkar
+
+
+def renew_scheduler_lock():
+    """
+    Scheduler'ın hâlâ yaşadığını Redis'e bildirir.
+    maintenance_service.py içindeki worker_job her çalışmasında (60s) bunu çağırır.
+    Sunucu çökerse SCHEDULER_LOCK_TTL sonunda lock otomatik kalkar,
+    yeni Render worker'ı devralır.
+    """
+    try:
+        client = get_redis_client()
+        if client:
+            client.set(SCHEDULER_LOCK_KEY, os.getpid(), ex=SCHEDULER_LOCK_TTL)
+    except Exception:
+        pass  # Lock yenileme kritik değil, sessizce geç
