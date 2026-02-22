@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.4 🚀
+KuraBak Backend - ENTRY POINT V5.5 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -13,7 +13,9 @@ KuraBak Backend - ENTRY POINT V5.4 🚀
 ✅ FIREBASE PATH FIX V5.2: Render Secret Files path düzeltmesi
 ✅ GUNICORN WORKER FIX V5.3: Her worker'da Firebase başlatılır
 ✅ ADMIN CLEANUP GÜVENLİĞİ V5.4: Token auth + güvenli temizlik
-✅ REDIS LOCK TTL FIX V5.4: Kısa TTL ile zombie lock önleme
+✅ REDIS LOCK ZOMBIE FIX V5.5: Lock worker_job tarafından her 60s'de yenilenir.
+   Sunucu çökerse 120s içinde lock kalkar, yeni worker devralır.
+   Eski 60s geçici + 3600s kalıcı çift yazma stratejisi kaldırıldı.
 """
 import os
 import logging
@@ -187,84 +189,116 @@ def post_fork(server, worker):
         logger.error(f"❌ [Worker {worker.pid}] Firebase başlatma hatası: {e}")
 
 # ======================================
+# 🔥 V5.5: LOCK SABİTLERİ VE YENİLEME
+# ======================================
+
+# Tek yerden yönetilen lock sabitleri
+SCHEDULER_LOCK_KEY = "kurabak:scheduler:lock"
+SCHEDULER_LOCK_TTL = 120  # 2 dakika — worker her 60s'de yeniler, çökerse 120s'de kalkar
+
+
+def renew_scheduler_lock():
+    """
+    Scheduler'ın hâlâ yaşadığını Redis'e bildirir.
+    maintenance_service.py içindeki worker_job her çalışmasında (60s) bunu çağırır.
+    Sunucu çökerse SCHEDULER_LOCK_TTL sonunda lock otomatik kalkar,
+    yeni Render worker'ı devralır.
+    """
+    try:
+        from utils.cache import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.set(SCHEDULER_LOCK_KEY, os.getpid(), ex=SCHEDULER_LOCK_TTL)
+    except Exception as e:
+        logger.debug(f"⚠️ [Redis Lock] Yenileme hatası (önemsiz): {e}")
+
+# ======================================
 # ASENKRON BAŞLATICI
 # ======================================
 
 def background_initialization():
     """
-    Redis Lock ile scheduler çoğalmasını önle.
-    🔥 V5.4: Lock TTL 3600s — zombie lock önleme
+    🔥 V5.5: Redis Lock Zombie Fix
+
+    Eski V5.4 davranışı:
+      1. 60s TTL ile geçici lock yaz
+      2. Firebase + Telegram + Scheduler başlat
+      3. 3600s TTL ile kalıcı lock yaz
+      → Sunucu 3. adımdan sonra çökerse yeni worker lock'u görür,
+        scheduler başlatmaz. Ama eski scheduler da ölmüş.
+        3600 saniye boyunca hiç scheduler yok.
+
+    Yeni V5.5 davranışı:
+      1. SCHEDULER_LOCK_TTL (120s) ile lock yaz (tek adım)
+      2. Firebase + Telegram + Scheduler başlat
+      3. Lock'u hemen yenile (scheduler başladı sinyali)
+      4. worker_job her 60s'de renew_scheduler_lock() çağırır → lock sürekli yenilenir
+      → Sunucu çökerse 120s içinde lock kalkar, yeni worker devralır.
     """
     from utils.cache import get_redis_client
-    
-    current_pid = os.getpid()
-    lock_key    = "kurabak:scheduler:lock"
 
-    # 🔥 V5.4: TTL 86400 → 3600 (sunucu ölse bile 1 saat sonra lock kalkar)
-    LOCK_TTL = 3600
-    
+    current_pid = os.getpid()
+
     try:
         redis_client = get_redis_client()
-        
+
         if not redis_client:
             logger.warning("⚠️ [Redis Lock] Redis bağlantısı yok, fallback mode")
         else:
-            existing_pid = redis_client.get(lock_key)
-            
+            existing_pid = redis_client.get(SCHEDULER_LOCK_KEY)
+
             if existing_pid:
                 existing_pid_str = existing_pid if isinstance(existing_pid, str) else str(existing_pid)
                 logger.info(f"⏭️ [Redis Lock] Scheduler zaten PID {existing_pid_str} tarafından başlatıldı")
-                logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (zombie önleme)")
+                logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak")
                 return
-            
-            # 🔥 V5.4: Kısa TTL ile başlangıç lock'u
-            redis_client.set(lock_key, current_pid, ex=60)
-            logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid}")
-        
+
+            # 🔥 V5.5: Tek adımda SCHEDULER_LOCK_TTL ile yaz
+            # Eski: 60s geçici → scheduler başlat → 3600s kalıcı (zombie riski)
+            # Yeni: 120s → scheduler başlat → worker_job her 60s'de yeniler
+            redis_client.set(SCHEDULER_LOCK_KEY, current_pid, ex=SCHEDULER_LOCK_TTL)
+            logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid} ({SCHEDULER_LOCK_TTL}s TTL)")
+
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Redis erişim hatası: {e}")
         logger.warning("   Redis olmadan devam ediliyor (fallback mode)")
-    
+
     logger.info(f"⏳ [Arka Plan] Sistem servisleri başlatılıyor (PID: {current_pid})...")
     time.sleep(1)
-    
+
     # 1. Firebase
     firebase_status = init_firebase()
     if firebase_status:
         logger.info("🔥 [Firebase] Push notification sistemi aktif!")
     else:
         logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
-    
+
     # 2. Telegram
     telegram = get_telegram_instance()
     if telegram:
         logger.info("📱 [Telegram] Komut sistemi aktif!")
     else:
         logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
-    
+
     # 3. Scheduler
     start_scheduler()
-    
-    try:
-        redis_client = get_redis_client()
-        if redis_client:
-            # 🔥 V5.4: Kalıcı lock da 3600s TTL
-            redis_client.set(lock_key, current_pid, ex=LOCK_TTL)
-            logger.info(f"🔒 [Redis Lock] Scheduler owner PID kaydedildi: {current_pid} ({LOCK_TTL}s lock)")
-    except Exception as e:
-        logger.warning(f"⚠️ [Redis Lock] Kalıcı lock yazılamadı: {e}")
-    
+
+    # 🔥 V5.5: Scheduler başlar başlamaz lock'u yenile.
+    # Artık ikinci bir redis.set() yok — worker_job devam ettirir.
+    renew_scheduler_lock()
+    logger.info(f"🔒 [Redis Lock] Scheduler başladı, ilk yenileme yapıldı (PID: {current_pid})")
+
     # 4. İlk Şef Kontrolü
     logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
-    
+
     try:
         supervisor_check()
         logger.info("✅ [İlk Kontrol] Şef kontrolü tamamlandı!")
     except Exception as e:
         logger.error(f"⚠️ [İlk Kontrol] Şef hatası: {e}")
-    
+
     logger.info("✅ [Arka Plan] Tüm sistemler devrede!")
-    
+
     if telegram:
         try:
             telegram.send_startup_message()
@@ -426,8 +460,7 @@ def emergency_cleanup():
     - FCM token seti ve alarm keyleri korunuyor
     """
     try:
-        # 🔥 V5.4: Token authentication
-        admin_token = request.headers.get('X-Admin-Token') or request.json.get('admin_token') if request.json else None
+        admin_token    = request.headers.get('X-Admin-Token') or request.json.get('admin_token') if request.json else None
         expected_token = os.environ.get('ADMIN_SECRET_TOKEN')
 
         if not expected_token:
@@ -442,8 +475,6 @@ def emergency_cleanup():
         
         logger.warning("🚨 [CLEANUP] ACİL TEMİZLİK BAŞLADI!")
         
-        # 🔥 V5.4: flush_all_cache() YERİNE güvenli temizlik
-        # FCM token seti (fcm_tokens) ve alarm keyleri (alarm:*) korunuyor
         deleted_count = 0
         redis_client  = get_redis_client()
         
@@ -463,6 +494,8 @@ def emergency_cleanup():
         stop_scheduler()
         time.sleep(2)
         start_scheduler()
+        # 🔥 V5.5: Scheduler yeniden başlayınca lock'u da yenile
+        renew_scheduler_lock()
         logger.info("✅ [CLEANUP] Scheduler yeniden başlatıldı")
         
         telegram = get_telegram_instance()
@@ -505,8 +538,7 @@ def on_exit():
         from utils.cache import get_redis_client
         redis_client = get_redis_client()
         if redis_client:
-            lock_key = "kurabak:scheduler:lock"
-            redis_client.delete(lock_key)
+            redis_client.delete(SCHEDULER_LOCK_KEY)
             logger.info("🔒 [Redis Lock] Temizlendi.")
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Temizleme hatası: {e}")
