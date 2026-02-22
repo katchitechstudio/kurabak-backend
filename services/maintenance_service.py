@@ -225,7 +225,7 @@ def worker_job():
         # app.py'deki renew_scheduler_lock() çağrılır.
         # Sunucu çökerse 120s sonra lock kalkar, yeni worker devralır.
         try:
-            from app import renew_scheduler_lock
+            from utils.cache import renew_scheduler_lock
             renew_scheduler_lock()
         except Exception:
             pass  # Lock yenileme kritik değil, veri güncelleme devam etsin
