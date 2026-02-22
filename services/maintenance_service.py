@@ -9,6 +9,7 @@ Maintenance Service - PRODUCTION READY V5.7 🚧
 ✅ SNAPSHOT UPDATE: Marj değişince snapshot düzeltilir
 ✅ 🔥 KOMBO TAKTİK: Async margin bootstrap + 6 saatlik sağlık kontrolü
 ✅ 🎉 MİLLİ & DİNİ BAYRAM BİLDİRİMLERİ: Sabit takvim, Gemini'ye bağımlı değil
+✅ 🔒 REDIS LOCK YENİLEME V5.5: worker_job her çalışmada lock'u yeniler
 
 V5.7 Değişiklikler (BAYRAM BİLDİRİMLERİ):
 - 🎉 Dini bayramlar (Ramazan, Kurban) → 09:00'da bildirim, sadece ilk gün
@@ -220,6 +221,15 @@ def job_error_listener(event):
 def worker_job():
     """👷 Worker - Her dakika veri güncelle"""
     try:
+        # 🔥 V5.5: Lock yenile — scheduler yaşıyor sinyali
+        # app.py'deki renew_scheduler_lock() çağrılır.
+        # Sunucu çökerse 120s sonra lock kalkar, yeni worker devralır.
+        try:
+            from app import renew_scheduler_lock
+            renew_scheduler_lock()
+        except Exception:
+            pass  # Lock yenileme kritik değil, veri güncelleme devam etsin
+
         logger.info("👷 [WORKER] Veri güncelleme başlıyor...")
         
         from services.financial_service import update_financial_data
@@ -834,6 +844,7 @@ def start_scheduler():
         logger.info("   ✅ Async margin bootstrap: AKTİF (Worker'da)")
         logger.info("   ✅ Dini & Milli bayram bildirimleri: AKTİF")
         logger.info("   ✅ 10 Kasım anma bildirimi: AKTİF (09:05)")
+        logger.info("   ✅ Redis lock yenileme: AKTİF (Her worker çalışmasında)")
 
 
 def stop_scheduler():
@@ -888,6 +899,7 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'margin_health_check': True,
                 'bayram_notifications': True,
                 'kasim_anma': True,
+                'redis_lock_renewal': True,
             }
         }
         
