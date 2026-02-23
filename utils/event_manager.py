@@ -33,20 +33,6 @@ _last_logged_banner = None
 
 
 def get_todays_events() -> List[Dict[str, any]]:
-    """
-    Bugünün tüm etkinliklerini priority sırasına göre döndürür.
-    
-    Returns:
-        List[Dict]: [
-            {
-                "type": "bayram" | "news",
-                "message": "...",
-                "priority": 10 | 75,
-                "valid_until": "15:00" | "23:59",
-                "date": "2026-01-30"
-            }
-        ]
-    """
     today_str = date.today().strftime("%Y-%m-%d")
     current_time = datetime.now()
     events = []
@@ -92,15 +78,6 @@ def get_todays_events() -> List[Dict[str, any]]:
 
 
 def get_todays_banner() -> Optional[str]:
-    """
-    App'te gösterilecek banner'ı döndürür (priority sırasına göre).
-    
-    V7.1: LOG SPAM FIX - Sadece banner değiştiğinde log yazar
-    
-    Returns:
-        str: Banner mesajı
-        None: Banner yok
-    """
     global _last_logged_banner
     
     today = date.today()
@@ -144,22 +121,6 @@ def get_todays_banner() -> Optional[str]:
 
 
 def get_daily_notification_content() -> Optional[Dict[str, str]]:
-    """
-    14:00'da gönderilecek Firebase push bildiriminin içeriğini hazırlar.
-    
-    ÖNCELİK SIRASI:
-    1. Bayram varsa → Bayram mesajı gönder
-    2. Bayram yoksa → Günün haberi gönder
-    3. İkisi de yoksa → None döndür (bildirim gönderilmez)
-    
-    Returns:
-        Dict: {
-            "title": "📅 Bugün Özel Gün!" | "📰 Günün Haberi",
-            "body": "Mesaj içeriği",
-            "type": "bayram" | "news"
-        }
-        None: Gönderilecek bildirim yok
-    """
     today_str = date.today().strftime("%d.%m.%Y")
     
     try:
@@ -169,9 +130,9 @@ def get_daily_notification_content() -> Optional[Dict[str, str]]:
         if bayram_msg:
             logger.info(f"🔔 [PUSH NOTIFICATION] Bayram mesajı hazırlandı: {bayram_msg[:50]}...")
             return {
-                "title": "📅 Bugün Özel Gün!",
-                "body": bayram_msg,
-                "type": "bayram"
+                "title": "Bugün Özel Gün!",  # ✅ emoji kaldırıldı
+                "body":  bayram_msg,
+                "type":  "bayram"
             }
     except Exception as e:
         logger.warning(f"⚠️ [PUSH NOTIFICATION] Bayram kontrolü hatası: {e}")
@@ -184,9 +145,9 @@ def get_daily_notification_content() -> Optional[Dict[str, str]]:
         if news_banner:
             logger.info(f"🔔 [PUSH NOTIFICATION] Haber mesajı hazırlandı: {news_banner[:50]}...")
             return {
-                "title": "📰 Günün Haberi",
-                "body": news_banner,
-                "type": "news"
+                "title": "Günün Haberi",  # ✅ emoji kaldırıldı
+                "body":  news_banner,     # tam haber gelecek, kısaltma news_manager'da
+                "type":  "news"
             }
         else:
             logger.warning("⚠️ [PUSH NOTIFICATION] Haber banner'ı bulunamadı")
