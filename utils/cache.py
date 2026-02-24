@@ -22,6 +22,10 @@ Redis Cache Utility - PRODUCTION READY V5.6 🚀
 V5.6 Değişiklikler:
 - 🔥 SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL, renew_scheduler_lock() eklendi
 - app.py ve maintenance_service.py artık buradan import eder
+
+V5.7 Değişiklikler:
+- 🔥 CRITICAL_KEYS temizlendi: currencies:all, golds:all, silvers:all, summary kaldırıldı
+  (Bu key'ler artık kullanılmıyor, sadece raw ve jeweler profilleri aktif)
 """
 
 import os
@@ -424,14 +428,14 @@ class RAMCache:
 ram_cache = RAMCache()
 
 # ======================================
-# 🔥 V5.5: KRİTİK VERİ LİSTESİ (SNAPSHOT KEYS GÜNCELLENDI!)
+# 🔥 V5.7: KRİTİK VERİ LİSTESİ (TEMİZLENDİ!)
+# ======================================
+# NOT: currencies:all, golds:all, silvers:all, summary kaldırıldı.
+# Bu key'ler artık hiçbir yerde yazılmıyor veya okunmuyor.
+# Aktif profiller: raw ve jeweler
 # ======================================
 
 CRITICAL_KEYS = [
-    'kurabak:currencies:all',
-    'kurabak:golds:all',
-    'kurabak:silvers:all',
-    'kurabak:summary',
     'kurabak:raw_snapshot',      # 🔥 V5.5: Ham fiyat snapshot'ı (disk backup!)
     'kurabak:jeweler_snapshot',  # 🔥 V5.5: Kuyumcu fiyat snapshot'ı (disk backup!)
     'kurabak:backup:all'
