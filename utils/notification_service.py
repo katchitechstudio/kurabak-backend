@@ -1,5 +1,5 @@
 """
-Firebase Push Notification Service V5.6 🔥 - FIREBASE INIT GUARD
+Firebase Push Notification Service V5.7 🔥 - TOKEN CHECK
 =====================================
 ✅ HTTP v1 API Migration (send_each yerine send_all kullanımı)
 ✅ Token Yönetimi (Kayıt/Silme)
@@ -16,6 +16,7 @@ Firebase Push Notification Service V5.6 🔥 - FIREBASE INIT GUARD
 ✅ 🔥 V5.4: PERCENT ALARM DESTEĞİ EKLENDİ
 ✅ 🔥 V5.5: BATCH RATE LIMIT EKLENDİ (Firebase spam koruması)
 ✅ 🔥 V5.6: FIREBASE INIT GUARD - Firebase başlatılmamışsa token SİLİNMEZ
+✅ 🔥 V5.7: TOKEN CHECK - is_token_registered() eklendi
 """
 import logging
 import time
@@ -83,6 +84,26 @@ def unregister_fcm_token(token: str) -> bool:
         
     except Exception as e:
         logger.error(f"❌ [FCM] Token silme hatası: {e}")
+        return False
+
+
+def is_token_registered(token: str) -> bool:
+    """
+    🔥 V5.7: Token sunucuda kayıtlı mı kontrol et.
+    Android açılışta bunu sorgular, kayıtlı değilse yeniden register eder.
+    """
+    try:
+        redis_client = get_redis_client()
+        if not redis_client:
+            logger.error("❌ [FCM] Token kontrol hatası: Redis bağlantısı yok")
+            return False
+        
+        result = redis_client.sismember(Config.CACHE_KEYS['fcm_tokens'], token)
+        logger.info(f"🔍 [FCM] Token kontrol: {token[:20]}... → {'Kayıtlı ✅' if result else 'Kayıtlı değil ❌'}")
+        return bool(result)
+        
+    except Exception as e:
+        logger.error(f"❌ [FCM] Token kontrol hatası: {e}")
         return False
 
 
