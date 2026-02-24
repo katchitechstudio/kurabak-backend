@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.7 🚀
+KuraBak Backend - ENTRY POINT V5.8 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -20,6 +20,8 @@ KuraBak Backend - ENTRY POINT V5.7 🚀
 ✅ FIREBASE BEFORE LOCK FIX V5.7: Firebase lock kontrolünden ÖNCE başlatılıyor.
    Lock'tan erken return olsa bile Firebase her zaman başlatılmış olur.
    14:00 push notification artık çalışıyor.
+✅ ADMIN TRIGGER PUSH V5.8: Manuel push notification tetikleme endpoint'i eklendi.
+   X-Admin-Token ile korumalı.
 """
 import os
 import logging
@@ -420,6 +422,33 @@ def trigger_test_push():
         return jsonify(result), 200
     except Exception as e:
         logger.error(f"❌ [Push Test] Hata: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/admin/trigger-push', methods=['POST'])
+def trigger_daily_push():
+    """
+    🔥 V5.8: Manuel push notification tetikleme.
+    X-Admin-Token header'ı ile korumalı.
+    """
+    try:
+        admin_token    = request.headers.get('X-Admin-Token') or (request.json.get('admin_token') if request.json else None)
+        expected_token = os.environ.get('ADMIN_SECRET_TOKEN')
+
+        if not expected_token:
+            logger.warning("⚠️ [TRIGGER PUSH] ADMIN_SECRET_TOKEN env değişkeni tanımlı değil!")
+            return jsonify({"success": False, "error": "Sunucu yapılandırma hatası"}), 500
+
+        if not admin_token or admin_token != expected_token:
+            logger.warning(f"🚨 [TRIGGER PUSH] Yetkisiz erişim denemesi! IP: {request.remote_addr}")
+            return jsonify({"success": False, "error": "Yetkisiz erişim"}), 403
+
+        from utils.notification_service import send_daily_summary
+        result = send_daily_summary()
+        logger.info(f"✅ [TRIGGER PUSH] Manuel push gönderildi: {result}")
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"❌ [TRIGGER PUSH] Hata: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/admin/cleanup', methods=['POST'])
