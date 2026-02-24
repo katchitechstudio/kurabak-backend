@@ -1,5 +1,5 @@
 """
-Maintenance Service - PRODUCTION READY V5.7 🚧
+Maintenance Service - PRODUCTION READY V6.0 🚧
 ===============================================
 ✅ SCHEDULER OPTIMIZATION: CPU spike önleme (prepare/publish ayrımı)
 ✅ SMOOTH MARGIN TRANSITION: Kademeli marj geçişi
@@ -10,12 +10,13 @@ Maintenance Service - PRODUCTION READY V5.7 🚧
 ✅ 🔥 KOMBO TAKTİK: Async margin bootstrap + 6 saatlik sağlık kontrolü
 ✅ 🎉 MİLLİ & DİNİ BAYRAM BİLDİRİMLERİ: Sabit takvim, Gemini'ye bağımlı değil
 ✅ 🔒 REDIS LOCK YENİLEME V5.5: worker_job her çalışmada lock'u yeniler
+✅ 🧠 SANİTY CHECK V6.0: Şef bozuk veri tespiti yapıyor, backup'tan kurtarıyor
 
-V5.7 Değişiklikler (BAYRAM BİLDİRİMLERİ):
-- 🎉 Dini bayramlar (Ramazan, Kurban) → 09:00'da bildirim, sadece ilk gün
-- 🏛️ Milli bayramlar (23 Nisan, 19 Mayıs, 15 Temmuz, 30 Ağustos, 29 Ekim) → 09:00'da bildirim
-- 🕯️ 10 Kasım → 09:05'te özel saygı bildirimi
-- 📅 Sabit takvim: 2025, 2026, 2027 tarihleri hardcode
+V6.0 Değişiklikler (SANİTY CHECK):
+- 🧠 supervisor_check içinde USD/EUR/GRA fiyat doğrulaması
+- 🔒 Fiyat 0, negatif veya aşırı anormal ise → backup yükle
+- 📢 Bozuk veri tespitinde Telegram bildirimi
+- Eşikler: USD 20-200 TL | EUR 20-220 TL | GRA 500-30000 TL
 
 Timeline:
 23:55 → Sabah haberlerini HAZIRLA (Gemini)
@@ -52,19 +53,15 @@ _scheduler_lock = threading.Lock()
 # 🎉 V5.7 - BAYRAM TAKVİMİ
 # ======================================
 
-# Sadece ilk günler — bildirim bir kez gönderilir
 DINI_BAYRAMLAR = {
-    # Ramazan Bayramı
     "2025-03-30": ("Ramazan Bayramı Mübarek Olsun", "Ramazan Bayramınızı en içten dileklerimizle kutlarız."),
     "2026-03-20": ("Ramazan Bayramı Mübarek Olsun", "Ramazan Bayramınızı en içten dileklerimizle kutlarız."),
     "2027-03-09": ("Ramazan Bayramı Mübarek Olsun", "Ramazan Bayramınızı en içten dileklerimizle kutlarız."),
-    # Kurban Bayramı
     "2025-06-06": ("Kurban Bayramı Mübarek Olsun", "Kurban Bayramınızı en içten dileklerimizle kutlarız."),
     "2026-05-27": ("Kurban Bayramı Mübarek Olsun", "Kurban Bayramınızı en içten dileklerimizle kutlarız."),
     "2027-05-16": ("Kurban Bayramı Mübarek Olsun", "Kurban Bayramınızı en içten dileklerimizle kutlarız."),
 }
 
-# Sabit tarihler — her yıl tekrar eder
 MILLI_BAYRAMLAR = {
     "04-23": ("23 Nisan Ulusal Egemenlik ve Çocuk Bayramı", "Nice senelere, nice bayramlara."),
     "05-19": ("19 Mayıs Gençlik ve Spor Bayramı", "Nice senelere, nice bayramlara."),
@@ -72,6 +69,156 @@ MILLI_BAYRAMLAR = {
     "08-30": ("30 Ağustos Zafer Bayramı", "Nice senelere, nice bayramlara."),
     "10-29": ("29 Ekim Cumhuriyet Bayramı", "Nice senelere, nice bayramlara."),
 }
+
+
+# ======================================
+# 🧠 V6.0 - SANİTY CHECK KURALLARI
+# ======================================
+
+SANITY_RULES = {
+    # kod: (min_fiyat, max_fiyat)
+    "USD": (20.0,    200.0),
+    "EUR": (20.0,    220.0),
+    "GBP": (25.0,    260.0),
+    "CHF": (20.0,    220.0),
+    "GRA": (500.0,  30000.0),   # Gram Altın
+    "C22": (100.0,   8000.0),   # Çeyrek Altın
+    "AG":  (0.5,      500.0),   # Gümüş
+}
+
+
+def run_sanity_check() -> bool:
+    """
+    🧠 V6.0: Fiyat doğrulama — bozuk veri tespiti.
+
+    Redis'teki raw cache'den SANITY_RULES içindeki kodları kontrol eder.
+    Herhangi biri 0, negatif veya belirlenen aralık dışındaysa:
+      1. Telegram'a kritik uyarı gönderir
+      2. Worker'ı yeniden tetikler (taze veri çek)
+      3. Worker da başarısız olursa backup'tan yükler
+
+    Returns:
+        True  → Veri sağlıklı
+        False → Bozuk veri tespit edildi, kurtarma denendi
+    """
+    try:
+        currencies_raw = get_cache(Config.CACHE_KEYS['currencies_all'])
+        golds_raw      = get_cache(Config.CACHE_KEYS['golds_all'])
+        silvers_raw    = get_cache(Config.CACHE_KEYS['silvers_all'])
+
+        # Tüm item'ları tek listede topla
+        all_items = []
+        for cache_data in [currencies_raw, golds_raw, silvers_raw]:
+            if cache_data and isinstance(cache_data, dict):
+                all_items.extend(cache_data.get("data", []))
+
+        if not all_items:
+            logger.warning("⚠️ [SANİTY] Cache boş, kontrol atlanıyor")
+            return True
+
+        bad_items = []
+
+        for item in all_items:
+            code    = item.get("code")
+            selling = item.get("selling", 0)
+
+            if code not in SANITY_RULES:
+                continue
+
+            min_val, max_val = SANITY_RULES[code]
+
+            if selling <= 0:
+                bad_items.append(f"{code}: {selling} ₺ (SIFIR/NEGATİF)")
+            elif selling < min_val:
+                bad_items.append(f"{code}: {selling} ₺ (çok düşük, min {min_val})")
+            elif selling > max_val:
+                bad_items.append(f"{code}: {selling} ₺ (çok yüksek, max {max_val})")
+
+        if not bad_items:
+            logger.debug("✅ [SANİTY] Tüm fiyatlar sağlıklı")
+            return True
+
+        # ── Bozuk veri tespit edildi ──────────────────────────────
+        bad_list_str = "\n".join(f"  ❌ {b}" for b in bad_items)
+        logger.critical(
+            f"🚨 [SANİTY] BOZUK VERİ TESPİT EDİLDİ!\n{bad_list_str}"
+        )
+
+        # Telegram bildirimi
+        try:
+            from utils.telegram_monitor import get_telegram_monitor
+            telegram = get_telegram_monitor()
+            if telegram:
+                telegram._send_raw(
+                    f"🚨 *SANİTY CHECK ALARMI!*\n\n"
+                    f"Bozuk fiyat tespit edildi:\n"
+                    f"```\n{chr(10).join(bad_items)}\n```\n\n"
+                    f"🔄 Worker yeniden tetikleniyor..."
+                )
+        except Exception as tg_err:
+            logger.warning(f"⚠️ [SANİTY] Telegram hatası: {tg_err}")
+
+        # Önce worker'ı yeniden tetikle — taze veri gelsin
+        logger.warning("🔄 [SANİTY] Worker tetikleniyor (taze veri çek)...")
+        try:
+            from services.financial_service import update_financial_data
+            worker_ok = update_financial_data()
+        except Exception as we:
+            logger.error(f"❌ [SANİTY] Worker hatası: {we}")
+            worker_ok = False
+
+        if worker_ok:
+            logger.info("✅ [SANİTY] Worker başarılı, taze veri yüklendi")
+            return False  # False döndür → şef logunda görünsün
+
+        # Worker da başarısız → backup'tan yükle
+        logger.error("❌ [SANİTY] Worker başarısız, backup yükleniyor...")
+        backup_data = get_cache("kurabak:backup:all")
+
+        if backup_data:
+            for asset_type in ['currencies', 'golds', 'silvers']:
+                raw_key = Config.CACHE_KEYS.get(f'{asset_type}_all')
+                if raw_key and asset_type in backup_data:
+                    set_cache(raw_key, backup_data[asset_type], ttl=0)
+
+                jeweler_key = Config.CACHE_KEYS.get(f'{asset_type}_jeweler')
+                jeweler_data_key = f"{asset_type}_jeweler"
+                if jeweler_key and jeweler_data_key in backup_data:
+                    set_cache(jeweler_key, backup_data[jeweler_data_key], ttl=0)
+
+            logger.info("✅ [SANİTY] Backup başarıyla yüklendi")
+
+            try:
+                from utils.telegram_monitor import get_telegram_monitor
+                telegram = get_telegram_monitor()
+                if telegram:
+                    telegram._send_raw(
+                        "⚠️ *SANİTY: BACKUP YÜKLENDİ*\n\n"
+                        "Worker başarısız oldu.\n"
+                        "Sistem yedeği kullanıyor.\n"
+                        "Bir sonraki worker çalışmasında güncellenecek."
+                    )
+            except Exception:
+                pass
+        else:
+            logger.critical("❌ [SANİTY] BACKUP DA YOK! Veri bozuk kalıyor.")
+            try:
+                from utils.telegram_monitor import get_telegram_monitor
+                telegram = get_telegram_monitor()
+                if telegram:
+                    telegram._send_raw(
+                        "🚨 *KRİTİK: SANİTY + BACKUP BAŞARISIZ!*\n\n"
+                        "Bozuk veri düzeltilemedi.\n"
+                        "Manuel müdahale gerekiyor!"
+                    )
+            except Exception:
+                pass
+
+        return False
+
+    except Exception as e:
+        logger.error(f"❌ [SANİTY] Beklenmeyen hata: {e}")
+        return True  # Hata durumunda sistemi bloke etme
 
 
 # ======================================
@@ -221,14 +368,11 @@ def job_error_listener(event):
 def worker_job():
     """👷 Worker - Her dakika veri güncelle"""
     try:
-        # 🔥 V5.5: Lock yenile — scheduler yaşıyor sinyali
-        # app.py'deki renew_scheduler_lock() çağrılır.
-        # Sunucu çökerse 120s sonra lock kalkar, yeni worker devralır.
         try:
             from utils.cache import renew_scheduler_lock
             renew_scheduler_lock()
         except Exception:
-            pass  # Lock yenileme kritik değil, veri güncelleme devam etsin
+            pass
 
         logger.info("👷 [WORKER] Veri güncelleme başlıyor...")
         
@@ -247,27 +391,50 @@ def worker_job():
 
 
 def supervisor_check():
-    """👮 Şef - Sistem kontrolü"""
+    """
+    👮 Şef - Sistem kontrolü V6.0
+
+    Kontroller (sırasıyla):
+    1. Raw snapshot varlığı
+    2. Worker son çalışma zamanı
+    3. 🧠 SANİTY CHECK — fiyat doğrulaması (V6.0)
+    """
     try:
         logger.info("👮 [ŞEF] Sistem kontrolü başlıyor...")
-        
-        # raw_snapshot kontrolü
+
+        # 1. Raw snapshot kontrolü
         snapshot_exists = bool(get_cache(Config.CACHE_KEYS['raw_snapshot']))
         if not snapshot_exists:
             logger.warning("⚠️ [ŞEF] Snapshot kayıp! Acil snapshot alınıyor...")
             from services.financial_service import save_daily_snapshot
             save_daily_snapshot()
-        
-        # Worker kontrol
+
+        # 2. Worker son çalışma zamanı kontrolü
         last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
         if last_worker_run:
             time_diff = time.time() - float(last_worker_run)
             if time_diff > Config.SUPERVISOR_WORKER_TIMEOUT:
                 logger.warning(f"⚠️ [ŞEF] Worker {int(time_diff/60)} dakikadır uyuyor! Uyandırılıyor...")
                 worker_job()
-        
+
+        # 3. 🧠 SANİTY CHECK — fiyat doğrulaması (V6.0)
+        # Hafta sonu ve bakım modunda piyasa kapalı olabilir,
+        # bu durumlarda sanity check atla (fiyatlar güncellenmez zaten)
+        is_market_closed = bool(get_cache("market_closed_logged"))
+        is_maintenance   = check_maintenance_status()['is_active']
+
+        if not is_market_closed and not is_maintenance:
+            data_healthy = run_sanity_check()
+            if not data_healthy:
+                logger.warning("⚠️ [ŞEF] Sanity check başarısız, kurtarma denendi")
+            else:
+                logger.info("✅ [ŞEF] Sanity check geçti")
+        else:
+            reason = "hafta sonu/bakım modu" if is_market_closed else "bakım modu"
+            logger.info(f"ℹ️ [ŞEF] Sanity check atlandı ({reason})")
+
         logger.info("✅ [ŞEF] Kontrol tamamlandı")
-        
+
     except Exception as e:
         logger.error(f"❌ [ŞEF] Hata: {e}")
         raise
@@ -378,7 +545,6 @@ def snapshot_and_publish_morning_job():
     try:
         logger.info("📸 [SABAH YAYINI] Snapshot + sabah yayını başlıyor...")
         
-        # 1. Snapshot al (raw + jeweler)
         from services.financial_service import save_daily_snapshot
         snapshot_success = save_daily_snapshot()
         
@@ -387,7 +553,6 @@ def snapshot_and_publish_morning_job():
         else:
             logger.warning("⚠️ [SABAH YAYINI] Snapshot alınamadı")
         
-        # 2. Sabah haberlerini yayınla (hafif işlem)
         from utils.news_manager import publish_morning_news
         publish_success = publish_morning_news()
         
@@ -408,14 +573,12 @@ def update_margins_and_rebuild_job():
     try:
         logger.info("💰 [MARJ + REBUILD] Marj güncelleme ve rebuild başlıyor...")
         
-        # 1. Dinamik marjları güncelle (Gemini + Smooth)
         from utils.news_manager import update_dynamic_margins
         margin_success = update_dynamic_margins()
         
         if margin_success:
             logger.info("✅ [MARJ + REBUILD] Dinamik marjlar güncellendi")
             
-            # 2. Jeweler cache'i yeniden oluştur
             from services.financial_service import rebuild_jeweler_cache
             rebuild_success = rebuild_jeweler_cache()
             
@@ -424,7 +587,6 @@ def update_margins_and_rebuild_job():
             else:
                 logger.warning("⚠️ [MARJ + REBUILD] Jeweler cache rebuild başarısız")
             
-            # 3. Jeweler snapshot'ı güncelle
             from services.financial_service import update_jeweler_snapshot
             update_success = update_jeweler_snapshot()
             
@@ -502,31 +664,21 @@ def push_notification_daily():
 # ======================================
 
 def bayram_notification_job():
-    """
-    🎉 09:00 - Dini ve Milli Bayram Bildirimi
-
-    Dini bayramlar → Sadece ilk gün (DINI_BAYRAMLAR dict)
-    Milli bayramlar → Her yıl aynı tarih (MILLI_BAYRAMLAR dict)
-    10 Kasım → Ayrı job, 09:05'te
-    """
+    """🎉 09:00 - Dini ve Milli Bayram Bildirimi"""
     try:
         today = date.today()
-        today_full = today.strftime("%Y-%m-%d")   # 2026-03-20
-        today_md   = today.strftime("%m-%d")       # 03-20
+        today_full = today.strftime("%Y-%m-%d")
+        today_md   = today.strftime("%m-%d")
 
         title = None
         body  = None
 
-        # 1. Dini bayram kontrolü (ilk gün)
         if today_full in DINI_BAYRAMLAR:
             title, body = DINI_BAYRAMLAR[today_full]
             logger.info(f"🎉 [BAYRAM] Dini bayram tespit edildi: {title}")
-
-        # 2. Milli bayram kontrolü
         elif today_md in MILLI_BAYRAMLAR:
             title, body = MILLI_BAYRAMLAR[today_md]
             logger.info(f"🏛️ [BAYRAM] Milli bayram tespit edildi: {title}")
-
         else:
             logger.info("ℹ️ [BAYRAM] Bugün bayram yok, bildirim gönderilmeyecek")
             return
@@ -541,12 +693,7 @@ def bayram_notification_job():
 
 
 def kasim_notification_job():
-    """
-    🕯️ 09:05 - 10 Kasım Atatürk'ü Anma Bildirimi
-
-    Sadece 10 Kasım'da çalışır.
-    Saat 09:05 — Atatürk'ün vefat ettiği saat.
-    """
+    """🕯️ 09:05 - 10 Kasım Atatürk'ü Anma Bildirimi"""
     try:
         today_md = date.today().strftime("%m-%d")
 
@@ -572,14 +719,7 @@ def kasim_notification_job():
 # ======================================
 
 def check_and_refresh_margins():
-    """
-    🔥 KOMBO TAKTİK: MARJ SAĞLIK KONTROLÜ
-
-    Her 6 saatte bir çalışır:
-    1. En son marj güncellemesini kontrol eder
-    2. 24 saatten eskiyse → Güncelle!
-    3. Gemini başarısız olsa bile 6 saat sonra tekrar dener
-    """
+    """🔥 KOMBO TAKTİK: MARJ SAĞLIK KONTROLÜ — Her 6 saatte bir"""
     try:
         logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor...")
         
@@ -594,7 +734,6 @@ def check_and_refresh_margins():
         if not last_successful:
             logger.warning("⚠️ [MARJ SAĞLIK] Hiç marj yok! Güncelleniyor...")
             success = update_dynamic_margins()
-            
             if success:
                 logger.info("✅ [MARJ SAĞLIK] İlk marjlar başarıyla oluşturuldu!")
             else:
@@ -610,9 +749,7 @@ def check_and_refresh_margins():
                 f"⚠️ [MARJ SAĞLIK] Marjlar çok eski ({days_ago:.1f} gün önce)! "
                 f"Güncelleniyor..."
             )
-            
             success = update_dynamic_margins()
-            
             if success:
                 logger.info("✅ [MARJ SAĞLIK] Marjlar başarıyla güncellendi!")
             else:
@@ -630,7 +767,7 @@ def check_and_refresh_margins():
 # ======================================
 
 def start_scheduler():
-    """🚀 Scheduler başlat - V5.7 BAYRAM BİLDİRİMLERİ"""
+    """🚀 Scheduler başlat - V6.0 SANİTY CHECK"""
     global scheduler
     
     with _scheduler_lock:
@@ -645,10 +782,6 @@ def start_scheduler():
         
         worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)
         alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)
-        
-        # ======================================
-        # CORE JOBS
-        # ======================================
         
         # Worker - Her dakika
         scheduler.add_job(
@@ -694,7 +827,7 @@ def start_scheduler():
             coalesce=True
         )
         
-        # Alarm Check - Her 10-15 dakika
+        # Alarm Check
         scheduler.add_job(
             alarm_check_job,
             trigger=IntervalTrigger(minutes=alarm_interval_minutes),
@@ -704,10 +837,6 @@ def start_scheduler():
             max_instances=1,
             coalesce=True
         )
-        
-        # ======================================
-        # 🔥 V5.5 OPTIMIZED JOBS
-        # ======================================
         
         # 23:55 - Sabah haberlerini HAZIRLA
         scheduler.add_job(
@@ -775,11 +904,7 @@ def start_scheduler():
             coalesce=True
         )
         
-        # ======================================
-        # 🔥 V5.6 KOMBO TAKTİK - MARJ SAĞLIK
-        # ======================================
-        
-        # Marj Sağlık Kontrolü - Her 6 saatte (ilk çalışma 5 dakika sonra)
+        # Marj Sağlık Kontrolü - Her 6 saatte
         scheduler.add_job(
             check_and_refresh_margins,
             trigger=IntervalTrigger(hours=6),
@@ -791,10 +916,6 @@ def start_scheduler():
             next_run_time=datetime.now() + timedelta(minutes=5)
         )
         
-        # ======================================
-        # 🎉 V5.7 - BAYRAM BİLDİRİM JOB'LARI
-        # ======================================
-
         # 09:00 - Dini & Milli Bayram Bildirimi
         scheduler.add_job(
             bayram_notification_job,
@@ -818,14 +939,14 @@ def start_scheduler():
         )
         
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V5.7 - BAYRAM BİLDİRİMLERİ)")
+        logger.info("✅ Scheduler başlatıldı! (V6.0 - SANİTY CHECK)")
         logger.info(f"   👷 Worker: Her {worker_interval} saniyede")
-        logger.info("   👮 Şef: Her 10 dakikada")
+        logger.info("   👮 Şef: Her 10 dakikada (+ Sanity Check)")
         logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
         logger.info("   📊 Rapor: Her gün 09:00")
         logger.info("   🧹 Cleanup: Her gün 03:00")
         logger.info("")
-        logger.info("   🔥 V5.7 OPTIMIZED TIMELINE:")
+        logger.info("   🔥 V6.0 OPTIMIZED TIMELINE:")
         logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
         logger.info("   📸 00:00 → Snapshot AL + Sabah YAYINLA (hafif)")
         logger.info("   💰 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update")
@@ -845,6 +966,7 @@ def start_scheduler():
         logger.info("   ✅ Dini & Milli bayram bildirimleri: AKTİF")
         logger.info("   ✅ 10 Kasım anma bildirimi: AKTİF (09:05)")
         logger.info("   ✅ Redis lock yenileme: AKTİF (Her worker çalışmasında)")
+        logger.info("   ✅ Sanity check: AKTİF (Her şef kontrolünde)")
 
 
 def stop_scheduler():
@@ -873,7 +995,7 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'next_run': str(job.next_run_time) if job.next_run_time else None
             })
         
-        last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
+        last_worker_run  = get_cache(Config.CACHE_KEYS['last_worker_run'])
         last_cleanup_run = get_cache(Config.CACHE_KEYS['cleanup_last_run'])
         last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
         
@@ -889,17 +1011,18 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V5.7',
+            'version': 'V6.0',
             'optimizations': {
-                'cpu_spike_prevention': True,
-                'smooth_margin': True,
-                'jeweler_auto_rebuild': True,
-                'snapshot_auto_update': True,
+                'cpu_spike_prevention':  True,
+                'smooth_margin':         True,
+                'jeweler_auto_rebuild':  True,
+                'snapshot_auto_update':  True,
                 'async_margin_bootstrap': True,
-                'margin_health_check': True,
-                'bayram_notifications': True,
-                'kasim_anma': True,
-                'redis_lock_renewal': True,
+                'margin_health_check':   True,
+                'bayram_notifications':  True,
+                'kasim_anma':            True,
+                'redis_lock_renewal':    True,
+                'sanity_check':          True,   # 🆕 V6.0
             }
         }
         
