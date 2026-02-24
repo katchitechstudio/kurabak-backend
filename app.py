@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.9 🚀
+KuraBak Backend - ENTRY POINT V6.0 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -24,6 +24,9 @@ KuraBak Backend - ENTRY POINT V5.9 🚀
    X-Admin-Token ile korumalı.
 ✅ TOKEN CHECK V5.9: /api/device/check-token endpoint'i eklendi.
    Android açılışta token sunucuda kayıtlı mı kontrol eder, değilse yeniden kaydeder.
+✅ DEPLOY RACE CONDITION FIX V6.0: SET NX kullanımı + watch_scheduler_health eklendi.
+   Deploy sonrası eski lock kalıntısı varsa yeni instance scheduler'ı devralır.
+   Lock sahibi çökerse 150s içinde izleyen instance devralır.
 """
 import os
 import logging
@@ -198,19 +201,87 @@ def post_fork(server, worker):
     except Exception as e:
         logger.error(f"❌ [Worker {worker.pid}] Firebase başlatma hatası: {e}")
 
+
+# ======================================
+# 🔥 V6.0: SCHEDULER SAĞLIK İZLEYİCİ
+# ======================================
+
+def _watch_scheduler_health(current_pid: int):
+    """
+    🔥 V6.0: Lock sahibi çökerse scheduler'ı devral.
+
+    Lock alan PID çöküp lock TTL dolunca bu fonksiyon
+    yeni lock alır ve scheduler'ı başlatır.
+
+    Kontrol aralığı: 30s
+    Devralma eşiği: Lock yoksa → hemen devral
+    """
+    logger.info(f"👁️ [Watch] PID {current_pid} izleme modunda başladı")
+
+    while True:
+        try:
+            time.sleep(30)
+
+            from utils.cache import get_redis_client
+            redis_client = get_redis_client()
+
+            if not redis_client:
+                continue
+
+            existing = redis_client.get(SCHEDULER_LOCK_KEY)
+
+            if existing:
+                # Lock hâlâ var, başkası çalışıyor
+                continue
+
+            # Lock yok → devral!
+            acquired = redis_client.set(
+                SCHEDULER_LOCK_KEY, current_pid,
+                ex=SCHEDULER_LOCK_TTL,
+                nx=True
+            )
+
+            if acquired:
+                logger.warning(
+                    f"🚨 [Watch] Lock kayboldu! PID {current_pid} scheduler'ı devralıyor..."
+                )
+                telegram = get_telegram_instance()
+                if telegram:
+                    try:
+                        telegram._send_raw(
+                            f"⚠️ *SCHEDULER DEVİR TESLİM*\n\n"
+                            f"Lock sahibi çöktü.\n"
+                            f"PID {current_pid} scheduler'ı devraldı."
+                        )
+                    except Exception:
+                        pass
+
+                start_scheduler()
+                renew_scheduler_lock()
+                logger.info(f"✅ [Watch] Scheduler devralındı! PID {current_pid} aktif.")
+                return  # İzleme bitti, scheduler bu PID'de çalışıyor
+
+        except Exception as e:
+            logger.error(f"❌ [Watch] İzleme hatası: {e}")
+            time.sleep(30)
+
+
 # ======================================
 # ASENKRON BAŞLATICI
 # ======================================
 
 def background_initialization():
     """
-    🔥 V5.7: Firebase LOCK'TAN ÖNCE başlatılıyor.
+    🔥 V6.0: SET NX ile race condition fix + watch_scheduler_health eklendi.
 
-    Önceki bug: Lock kontrolünde existing_pid bulunursa return ediliyordu,
-    Firebase hiç başlatılmıyordu. Bu worker'da 14:00 push job çalışıyorsa
-    Firebase bulunamıyor ve bildirim gitmiyordu.
+    Önceki bug: Birden fazla Gunicorn worker aynı anda başlayınca
+    hepsi lock'u GET ile kontrol ediyordu. Aralarında race condition
+    oluşuyor, bazen hiçbiri scheduler'ı başlatmıyordu.
 
-    Düzeltme: Firebase her zaman başlatılıyor, lock sadece scheduler'ı kontrol ediyor.
+    Yeni çözüm:
+    - SET NX (atomic) → sadece gerçekten yoksa yaz
+    - Lock alamayan worker → _watch_scheduler_health() ile izlemeye geçer
+    - Lock sahibi çökerse izleyen worker 30s içinde devralır
     """
     from utils.cache import get_redis_client
 
@@ -224,22 +295,37 @@ def background_initialization():
     else:
         logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
 
-    # Redis Lock kontrolü — sadece scheduler için
+    # 🔥 V6.0: SET NX ile atomik lock alma
     try:
         redis_client = get_redis_client()
 
         if not redis_client:
-            logger.warning("⚠️ [Redis Lock] Redis bağlantısı yok, fallback mode")
+            logger.warning("⚠️ [Redis Lock] Redis bağlantısı yok, fallback mode — scheduler başlatılıyor")
         else:
-            existing_pid = redis_client.get(SCHEDULER_LOCK_KEY)
+            # SET NX: sadece key yoksa yaz (atomik)
+            acquired = redis_client.set(
+                SCHEDULER_LOCK_KEY, current_pid,
+                ex=SCHEDULER_LOCK_TTL,
+                nx=True
+            )
 
-            if existing_pid:
-                existing_pid_str = existing_pid if isinstance(existing_pid, str) else str(existing_pid)
-                logger.info(f"⏭️ [Redis Lock] Scheduler zaten PID {existing_pid_str} tarafından başlatıldı")
-                logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (Firebase ✅ başlatıldı)")
-                return  # Firebase başlatıldı ama scheduler başlatılmadı — DOĞRU
+            if not acquired:
+                # Başka bir PID lock aldı
+                existing_pid = redis_client.get(SCHEDULER_LOCK_KEY)
+                logger.info(
+                    f"⏭️ [Redis Lock] Lock PID {existing_pid} tarafından alındı. "
+                    f"PID {current_pid} izleme moduna geçiyor..."
+                )
+                # Arka planda izle — lock sahibi çökerse devral
+                watch_thread = threading.Thread(
+                    target=_watch_scheduler_health,
+                    args=(current_pid,),
+                    daemon=True,
+                    name=f"SchedulerWatch-{current_pid}"
+                )
+                watch_thread.start()
+                return  # Bu PID scheduler başlatmayacak
 
-            redis_client.set(SCHEDULER_LOCK_KEY, current_pid, ex=SCHEDULER_LOCK_TTL)
             logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid} ({SCHEDULER_LOCK_TTL}s TTL)")
 
     except Exception as e:
@@ -277,7 +363,7 @@ def background_initialization():
     if telegram:
         try:
             telegram.send_startup_message()
-        except:
+        except Exception:
             pass
 
 # ======================================
@@ -569,14 +655,14 @@ def on_exit():
             firebase_admin.delete_app(firebase_admin.get_app())
             _firebase_initialized = False
             logger.info("🔥 [Firebase] Temiz kapanış tamamlandı.")
-    except:
+    except Exception:
         pass
     
     try:
         if _telegram_instance:
             _telegram_instance = None
             logger.info("📱 [Telegram] Temiz kapanış tamamlandı.")
-    except:
+    except Exception:
         pass
     
     logger.info("✅ Temiz kapanış tamamlandı.")
