@@ -27,11 +27,25 @@ limiter = Limiter(
 def _token_hash(fcm_token: str) -> str:
     return hashlib.sha256(fcm_token.encode()).hexdigest()[:16]
 
-def create_alarm_key(fcm_token: str, currency_code: str, alarm_type: str, profile: str) -> str:
-    return f"alarm:{_token_hash(fcm_token)}:{currency_code}:{alarm_type}:{profile}"
+def _device_hash(device_id: str) -> str:
+    return hashlib.sha256(device_id.encode()).hexdigest()[:16]
 
-def get_user_alarm_pattern(fcm_token: str) -> str:
-    return f"alarm:{_token_hash(fcm_token)}:*"
+def _resolve_user_key(data: dict) -> str:
+    """
+    device_id varsa onu kullan (ANDROID_ID bazlı — kalıcı).
+    Yoksa eski davranışa fallback: fcm_token hash.
+    Bu sayede mağazaya çıkmadan önce geçiş kesintisiz olur.
+    """
+    device_id = data.get('device_id', '').strip()
+    if device_id:
+        return _device_hash(device_id)
+    return _token_hash(data['fcm_token'].strip())
+
+def create_alarm_key(user_key: str, currency_code: str, alarm_type: str, profile: str) -> str:
+    return f"alarm:{user_key}:{currency_code}:{alarm_type}:{profile}"
+
+def get_user_alarm_pattern(user_key: str) -> str:
+    return f"alarm:{user_key}:*"
 
 def scan_keys(redis_client, pattern: str) -> list:
     """redis.keys() yerine SCAN kullan — production'da güvenli."""
@@ -76,8 +90,6 @@ def validate_alarm_data(data: dict) -> tuple:
         return False, "profile sadece raw veya jeweler olabilir"
 
     # ─── start_price kontrolü ────────────────────────────────────────────────
-    # PERCENT modunda start_price ZORUNLU — olmadan alarm hiç tetiklenemez.
-    # PRICE modunda isteğe bağlı, gönderilmişse geçerli olmalı.
     if alarm_mode == 'PERCENT':
         if 'start_price' not in data:
             return False, "PERCENT modunda start_price zorunludur"
@@ -87,7 +99,6 @@ def validate_alarm_data(data: dict) -> tuple:
         except (ValueError, TypeError):
             return False, "Geçersiz start_price formatı"
     else:
-        # PRICE modu — start_price opsiyonel ama gönderildiyse geçerli olmalı
         if 'start_price' in data:
             try:
                 if float(data['start_price']) <= 0:
@@ -124,7 +135,7 @@ def parse_alarm_data(data: dict) -> dict:
         'profile':           data.get('profile', 'jeweler').strip().lower(),
         'created_at':        int(time.time()),
         'is_active':         True,
-        'percent_value':     float(data['percent_value'])             if alarm_mode == 'PERCENT' else None,
+        'percent_value':     float(data['percent_value'])              if alarm_mode == 'PERCENT' else None,
         'percent_direction': data['percent_direction'].strip().upper() if alarm_mode == 'PERCENT' else None,
     }
     return obj
@@ -152,20 +163,21 @@ def create_alarm():
         currency_code = data['currency_code'].strip().upper()
         alarm_type    = data['alarm_type'].strip().upper()
         profile       = data.get('profile', 'jeweler').strip().lower()
+        user_key      = _resolve_user_key(data)
 
         redis_client = get_redis_client()
         if not redis_client:
             return _no_redis()
 
-        user_alarms = scan_keys(redis_client, get_user_alarm_pattern(fcm_token))
+        user_alarms = scan_keys(redis_client, get_user_alarm_pattern(user_key))
         if len(user_alarms) >= Config.MAX_ALARMS_PER_USER:
             return jsonify({
                 "success": False,
                 "message": f"Maksimum {Config.MAX_ALARMS_PER_USER} alarm kurabilirsiniz"
             }), 400
 
-        alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type, profile)
-        save_fcm_token_mapping(fcm_token, _token_hash(fcm_token))
+        alarm_key = create_alarm_key(user_key, currency_code, alarm_type, profile)
+        save_fcm_token_mapping(fcm_token, user_key)
 
         if redis_client.exists(alarm_key):
             alarm_type_tr = "yükseliş" if alarm_type == "HIGH" else "düşüş"
@@ -218,8 +230,9 @@ def list_alarms():
         if not redis_client:
             return _no_redis()
 
-        alarm_keys = scan_keys(redis_client, get_user_alarm_pattern(data['fcm_token'].strip()))
-        alarms = []
+        user_key   = _resolve_user_key(data)
+        alarm_keys = scan_keys(redis_client, get_user_alarm_pattern(user_key))
+        alarms     = []
 
         for key in alarm_keys:
             try:
@@ -259,16 +272,16 @@ def delete_alarm():
             if field not in data:
                 return jsonify({"success": False, "message": f"{field} gerekli"}), 400
 
-        fcm_token     = data['fcm_token'].strip()
         currency_code = data['currency_code'].strip().upper()
         alarm_type    = data['alarm_type'].strip().upper()
         profile       = data.get('profile', 'jeweler').strip().lower()
+        user_key      = _resolve_user_key(data)
 
         redis_client = get_redis_client()
         if not redis_client:
             return _no_redis()
 
-        alarm_key = create_alarm_key(fcm_token, currency_code, alarm_type, profile)
+        alarm_key = create_alarm_key(user_key, currency_code, alarm_type, profile)
         if not redis_client.exists(alarm_key):
             return jsonify({"success": False, "message": "Alarm bulunamadı"}), 404
 
@@ -296,6 +309,7 @@ def sync_alarms():
 
         fcm_token = data['fcm_token'].strip()
         alarms    = data['alarms']
+        user_key  = _resolve_user_key(data)
 
         if not isinstance(alarms, list):
             return jsonify({"success": False, "message": "alarms bir liste olmalı"}), 400
@@ -306,9 +320,9 @@ def sync_alarms():
         if not redis_client:
             return _no_redis()
 
-        save_fcm_token_mapping(fcm_token, _token_hash(fcm_token))
+        save_fcm_token_mapping(fcm_token, user_key)
 
-        old_keys = scan_keys(redis_client, get_user_alarm_pattern(fcm_token))
+        old_keys = scan_keys(redis_client, get_user_alarm_pattern(user_key))
         if old_keys:
             redis_client.delete(*old_keys)
             logger.info(f"🧹 [ALARM] {len(old_keys)} eski alarm temizlendi")
@@ -327,7 +341,7 @@ def sync_alarms():
 
                 alarm_obj = parse_alarm_data(alarm)
                 alarm_key = create_alarm_key(
-                    fcm_token,
+                    user_key,
                     alarm_obj['currency_code'],
                     alarm_obj['alarm_type'],
                     alarm_obj['profile']
@@ -364,7 +378,8 @@ def delete_all_alarms():
         if not redis_client:
             return _no_redis()
 
-        keys = scan_keys(redis_client, get_user_alarm_pattern(data['fcm_token'].strip()))
+        user_key      = _resolve_user_key(data)
+        keys          = scan_keys(redis_client, get_user_alarm_pattern(user_key))
         deleted_count = 0
 
         if keys:
@@ -386,10 +401,6 @@ def delete_all_alarms():
 @alarm_bp.route('/stats', methods=['GET'])
 @limiter.limit("10 per minute")
 def alarm_stats():
-    """
-    🔥 DÜZELTİLDİ: Ham scan_keys yerine get_all_alarm_keys_safe kullanılıyor.
-    fcm_token_map ve price:last_check keyleri istatistiğe dahil edilmiyor.
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
