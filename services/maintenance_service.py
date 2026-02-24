@@ -75,16 +75,25 @@ MILLI_BAYRAMLAR = {
 # 🧠 V6.0 - SANİTY CHECK KURALLARI
 # ======================================
 
+# Eşikler gerçekçi piyasa aralıklarına göre belirlenmiştir.
+# Güncelleme gerekirse burayı düzenle.
 SANITY_RULES = {
     # kod: (min_fiyat, max_fiyat)
-    "USD": (20.0,    200.0),
-    "EUR": (20.0,    220.0),
-    "GBP": (25.0,    260.0),
-    "CHF": (20.0,    220.0),
-    "GRA": (500.0,  30000.0),   # Gram Altın
-    "C22": (100.0,   8000.0),   # Çeyrek Altın
-    "AG":  (0.5,      500.0),   # Gümüş
+    "USD": (20.0,    300.0),
+    "EUR": (20.0,    350.0),
+    "GBP": (25.0,    400.0),
+    "CHF": (20.0,    350.0),
+    "GRA": (500.0,  50000.0),   # Gram Altın
+    "C22": (500.0,  50000.0),   # Çeyrek Altın (~gram fiyatının 2.5 katı)
+    "YAR": (500.0, 100000.0),   # Yarım Altın
+    "TAM": (500.0, 200000.0),   # Tam Altın
+    "CUM": (500.0, 200000.0),   # Cumhuriyet Altını
+    "AG":  (0.5,     2000.0),   # Gümüş
 }
+
+# Aynı hata için Telegram bildirimi cooldown süresi (saniye)
+# Bu süre dolmadan aynı kod için tekrar bildirim gönderilmez
+SANITY_NOTIFY_COOLDOWN = 3600  # 1 saat
 
 
 def run_sanity_check() -> bool:
@@ -144,19 +153,40 @@ def run_sanity_check() -> bool:
             f"🚨 [SANİTY] BOZUK VERİ TESPİT EDİLDİ!\n{bad_list_str}"
         )
 
-        # Telegram bildirimi
-        try:
-            from utils.telegram_monitor import get_telegram_monitor
-            telegram = get_telegram_monitor()
-            if telegram:
-                telegram._send_raw(
-                    f"🚨 *SANİTY CHECK ALARMI!*\n\n"
-                    f"Bozuk fiyat tespit edildi:\n"
-                    f"```\n{chr(10).join(bad_items)}\n```\n\n"
-                    f"🔄 Worker yeniden tetikleniyor..."
-                )
-        except Exception as tg_err:
-            logger.warning(f"⚠️ [SANİTY] Telegram hatası: {tg_err}")
+        # 🔕 Cooldown kontrolü — aynı hata için 1 saat içinde tekrar bildirim gönderme
+        cooldown_key = "sanity:last_notify"
+        last_notify  = get_cache(cooldown_key)
+        now          = time.time()
+        should_notify = True
+
+        if last_notify:
+            try:
+                elapsed = now - float(last_notify)
+                if elapsed < SANITY_NOTIFY_COOLDOWN:
+                    remaining = int((SANITY_NOTIFY_COOLDOWN - elapsed) / 60)
+                    logger.warning(
+                        f"🔕 [SANİTY] Bildirim cooldown'da, {remaining} dk sonra tekrar gönderilecek"
+                    )
+                    should_notify = False
+            except Exception:
+                pass
+
+        # Telegram bildirimi (cooldown geçtiyse)
+        if should_notify:
+            set_cache(cooldown_key, str(now), ttl=SANITY_NOTIFY_COOLDOWN)
+            try:
+                from utils.telegram_monitor import get_telegram_monitor
+                telegram = get_telegram_monitor()
+                if telegram:
+                    telegram._send_raw(
+                        f"🚨 *SANİTY CHECK ALARMI!*\n\n"
+                        f"Bozuk fiyat tespit edildi:\n"
+                        f"```\n{chr(10).join(bad_items)}\n```\n\n"
+                        f"🔄 Worker yeniden tetikleniyor...\n"
+                        f"_(Bir sonraki bildirim 1 saat sonra)_"
+                    )
+            except Exception as tg_err:
+                logger.warning(f"⚠️ [SANİTY] Telegram hatası: {tg_err}")
 
         # Önce worker'ı yeniden tetikle — taze veri gelsin
         logger.warning("🔄 [SANİTY] Worker tetikleniyor (taze veri çek)...")
