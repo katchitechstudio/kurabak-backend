@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.6 🚀
+KuraBak Backend - ENTRY POINT V5.7 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -17,6 +17,9 @@ KuraBak Backend - ENTRY POINT V5.6 🚀
    Sunucu çökerse 120s içinde lock kalkar, yeni worker devralır.
 ✅ CIRCULAR IMPORT FIX V5.6: renew_scheduler_lock utils/cache.py'e taşındı.
    app.py → maintenance_service.py → app.py döngüsü kırıldı.
+✅ FIREBASE BEFORE LOCK FIX V5.7: Firebase lock kontrolünden ÖNCE başlatılıyor.
+   Lock'tan erken return olsa bile Firebase her zaman başlatılmış olur.
+   14:00 push notification artık çalışıyor.
 """
 import os
 import logging
@@ -34,7 +37,6 @@ from routes.alarm_routes import alarm_bp
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
 from utils.notification_service import register_fcm_token, send_test_notification
 
-# 🔥 V5.6: renew_scheduler_lock artık utils/cache.py'den geliyor (circular import yok)
 from utils.cache import renew_scheduler_lock, SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL
 
 # ======================================
@@ -198,20 +200,27 @@ def post_fork(server, worker):
 
 def background_initialization():
     """
-    🔥 V5.5: Redis Lock Zombie Fix
-    🔥 V5.6: Circular import fix — renew_scheduler_lock utils/cache.py'den import edildi
+    🔥 V5.7: Firebase LOCK'TAN ÖNCE başlatılıyor.
 
-    V5.5 davranışı:
-      1. SCHEDULER_LOCK_TTL (120s) ile lock yaz (tek adım)
-      2. Firebase + Telegram + Scheduler başlat
-      3. Lock'u hemen yenile (scheduler başladı sinyali)
-      4. worker_job her 60s'de renew_scheduler_lock() çağırır → lock sürekli yenilenir
-      → Sunucu çökerse 120s içinde lock kalkar, yeni worker devralır.
+    Önceki bug: Lock kontrolünde existing_pid bulunursa return ediliyordu,
+    Firebase hiç başlatılmıyordu. Bu worker'da 14:00 push job çalışıyorsa
+    Firebase bulunamıyor ve bildirim gitmiyordu.
+
+    Düzeltme: Firebase her zaman başlatılıyor, lock sadece scheduler'ı kontrol ediyor.
     """
     from utils.cache import get_redis_client
 
     current_pid = os.getpid()
 
+    # 🔥 V5.7: Firebase ÖNCE başlat — lock kontrolünden BAĞIMSIZ
+    logger.info(f"🔥 [Firebase] Lock kontrolünden önce başlatılıyor (PID: {current_pid})...")
+    firebase_status = init_firebase()
+    if firebase_status:
+        logger.info("🔥 [Firebase] Push notification sistemi aktif!")
+    else:
+        logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
+
+    # Redis Lock kontrolü — sadece scheduler için
     try:
         redis_client = get_redis_client()
 
@@ -223,8 +232,8 @@ def background_initialization():
             if existing_pid:
                 existing_pid_str = existing_pid if isinstance(existing_pid, str) else str(existing_pid)
                 logger.info(f"⏭️ [Redis Lock] Scheduler zaten PID {existing_pid_str} tarafından başlatıldı")
-                logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak")
-                return
+                logger.info(f"   Bu PID ({current_pid}) scheduler başlatmayacak (Firebase ✅ başlatıldı)")
+                return  # Firebase başlatıldı ama scheduler başlatılmadı — DOĞRU
 
             redis_client.set(SCHEDULER_LOCK_KEY, current_pid, ex=SCHEDULER_LOCK_TTL)
             logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid} ({SCHEDULER_LOCK_TTL}s TTL)")
@@ -236,28 +245,21 @@ def background_initialization():
     logger.info(f"⏳ [Arka Plan] Sistem servisleri başlatılıyor (PID: {current_pid})...")
     time.sleep(1)
 
-    # 1. Firebase
-    firebase_status = init_firebase()
-    if firebase_status:
-        logger.info("🔥 [Firebase] Push notification sistemi aktif!")
-    else:
-        logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
-
-    # 2. Telegram
+    # 1. Telegram
     telegram = get_telegram_instance()
     if telegram:
         logger.info("📱 [Telegram] Komut sistemi aktif!")
     else:
         logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
 
-    # 3. Scheduler
+    # 2. Scheduler
     start_scheduler()
 
     # Lock'u yenile — worker_job devam ettirir
     renew_scheduler_lock()
     logger.info(f"🔒 [Redis Lock] Scheduler başladı, ilk yenileme yapıldı (PID: {current_pid})")
 
-    # 4. İlk Şef Kontrolü
+    # 3. İlk Şef Kontrolü
     logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
 
     try:
