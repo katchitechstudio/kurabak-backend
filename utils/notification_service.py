@@ -1,5 +1,5 @@
 """
-Firebase Push Notification Service V5.4 🔥 - ALARM NOTIFICATION ULTIMATE
+Firebase Push Notification Service V5.6 🔥 - FIREBASE INIT GUARD
 =====================================
 ✅ HTTP v1 API Migration (send_each yerine send_all kullanımı)
 ✅ Token Yönetimi (Kayıt/Silme)
@@ -15,6 +15,7 @@ Firebase Push Notification Service V5.4 🔥 - ALARM NOTIFICATION ULTIMATE
 ✅ 🔥 V5.3: ALARM BİLDİRİMİ YENİDEN TASARLANDI
 ✅ 🔥 V5.4: PERCENT ALARM DESTEĞİ EKLENDİ
 ✅ 🔥 V5.5: BATCH RATE LIMIT EKLENDİ (Firebase spam koruması)
+✅ 🔥 V5.6: FIREBASE INIT GUARD - Firebase başlatılmamışsa token SİLİNMEZ
 """
 import logging
 import time
@@ -29,6 +30,29 @@ from utils.cache import get_cache, set_cache, get_redis_client
 logger = logging.getLogger("KuraBak.Notification")
 
 FCM_BATCH_SIZE = 500
+
+# Firebase başlatılmamış hatası için kontrol stringi
+_FIREBASE_NOT_INIT_ERRORS = [
+    "the default firebase app does not exist",
+    "initialize_app",
+    "firebase app",
+]
+
+def _is_firebase_init_error(error: Exception) -> bool:
+    """Firebase başlatılmamış hatası mı kontrol et"""
+    error_str = str(error).lower()
+    return any(msg in error_str for msg in _FIREBASE_NOT_INIT_ERRORS)
+
+def _is_invalid_token_error(error: Exception) -> bool:
+    """Geçersiz/süresi dolmuş token hatası mı kontrol et"""
+    error_str = str(error).lower()
+    invalid_indicators = [
+        "registration-token-not-registered",
+        "invalid-registration-token", 
+        "invalid argument",
+        "not registered",
+    ]
+    return any(msg in error_str for msg in invalid_indicators)
 
 
 def register_fcm_token(token: str) -> bool:
@@ -144,12 +168,18 @@ def send_notification(
     sound: str = "default"
 ) -> Dict:
     """
-    🔥 V5.2 FIX: FCM bildirimi gönder (Singleton pattern uyumlu)
+    🔥 V5.6 FIX: Firebase başlatılmamışsa token SİLİNMEZ
+    Sadece Firebase'den "invalid token" yanıtı gelince token silinir.
     """
     try:
         if not tokens:
             logger.warning("⚠️ [FCM] Token bulunamadı!")
             return {"success": False, "error": "No tokens"}
+
+        # 🔥 V5.6: Firebase başlatılmış mı kontrol et
+        if not firebase_admin._apps:
+            logger.error("❌ [FCM] Firebase başlatılmamış! Token gönderimi atlanıyor, tokenlar KORUNUYOR.")
+            return {"success": False, "error": "Firebase not initialized", "tokens_preserved": True}
         
         total_success      = 0
         total_failure      = 0
@@ -185,21 +215,36 @@ def send_notification(
                 total_success += response.success_count
                 total_failure += response.failure_count
                 
+                # Sadece gerçekten geçersiz tokenları işaretle
                 if response.failure_count > 0:
                     for idx, send_response in enumerate(response.responses):
                         if not send_response.success:
-                            failed_tokens_all.append(batch_tokens[idx])
-                            logger.debug(f"   ❌ Token {idx+1}: {send_response.exception}")
+                            err = send_response.exception
+                            if err and _is_invalid_token_error(err):
+                                # Gerçekten geçersiz token → sil
+                                failed_tokens_all.append(batch_tokens[idx])
+                                logger.debug(f"   ❌ Geçersiz token {idx+1}: {err}")
+                            else:
+                                # Geçici hata (network, quota vb.) → SILME
+                                logger.debug(f"   ⚠️ Geçici hata token {idx+1}: {err} (token korunuyor)")
                 
                 logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
                 
             except Exception as batch_error:
-                logger.error(f"❌ [FCM] Batch {batch_num} kritik hata: {batch_error}")
-                total_failure     += len(batch_tokens)
-                failed_tokens_all.extend(batch_tokens)
+                # 🔥 V5.6 KRİTİK FIX: Firebase init hatası → tokenları SILME
+                if _is_firebase_init_error(batch_error):
+                    logger.error(f"❌ [FCM] Batch {batch_num} Firebase init hatası: {batch_error}")
+                    logger.error("   ⚠️ Tokenlar KORUNUYOR — Firebase yeniden başlatılana kadar bekleniyor")
+                    total_failure += len(batch_tokens)
+                    # failed_tokens_all'a EKLEME — silme
+                else:
+                    logger.error(f"❌ [FCM] Batch {batch_num} kritik hata: {batch_error}")
+                    total_failure += len(batch_tokens)
+                    # Bilinmeyen hata → tokenları da silme, güvenli taraf
+                    logger.warning(f"   ⚠️ Bilinmeyen hata, tokenlar KORUNUYOR: {batch_error}")
         
         if failed_tokens_all:
-            logger.warning(f"🗑️ [FCM] {len(failed_tokens_all)} başarısız token temizleniyor...")
+            logger.warning(f"🗑️ [FCM] {len(failed_tokens_all)} geçersiz token temizleniyor...")
             for token in failed_tokens_all:
                 unregister_fcm_token(token)
         
@@ -238,8 +283,14 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
     🔥 V5.1: HTTP v1 API uyumlu send_notification() kullanır
     🔥 V5.2: Singleton pattern uyumlu
     🔥 V5.5: Batch arası rate limit eklendi
+    🔥 V5.6: Firebase init hatası → tokenlar korunur
     """
     try:
+        # 🔥 V5.6: Firebase başlatılmış mı erken kontrol
+        if not firebase_admin._apps:
+            logger.error("❌ [FCM] Firebase başlatılmamış! send_to_all atlanıyor, tokenlar KORUNUYOR.")
+            return {"success": False, "error": "Firebase not initialized", "tokens_preserved": True}
+
         logger.info("📢 [FCM] Toplu bildirim gönderiliyor (Generator modu)...")
         
         total_success = 0
@@ -273,8 +324,6 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
                 total_failure += len(batch_tokens)
                 total_tokens  += len(batch_tokens)
             
-            # 🔥 DÜZELTİLDİ (V5.5): Firebase rate limit koruması
-            # Birden fazla batch varsa araya kısa bekleme ekle
             if batch_num > 1:
                 time.sleep(0.1)
         
@@ -321,23 +370,6 @@ def send_alarm_notification(
 ) -> bool:
     """
     🔥 V5.4: Fiyat alarmı bildirimi gönder (PERCENT DESTEĞI EKLENDİ!)
-
-    Args:
-        fcm_token: FCM token
-        currency_code: Döviz kodu (USD, EUR, XAU, vb.)
-        currency_name: Döviz adı (Dolar, Euro, Gram Altın)
-        current_price: Mevcut fiyat
-        alarm_mode: "PRICE" veya "PERCENT" (varsayılan: PRICE)
-
-        PRICE MODE için:
-        target_price: Hedef fiyat
-        start_price: Alarm kurulduğu andaki fiyat
-        alarm_type: HIGH veya LOW
-
-        PERCENT MODE için:
-        start_price: Başlangıç fiyatı
-        percent_value: Yüzde değeri (örn: 3.0)
-        percent_direction: UP veya DOWN
     """
     try:
         alarm_mode = alarm_mode.upper()
