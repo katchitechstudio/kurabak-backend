@@ -1,5 +1,5 @@
 """
-KuraBak Backend - ENTRY POINT V5.8 🚀
+KuraBak Backend - ENTRY POINT V5.9 🚀
 =====================================================
 ✅ V5 API: Tek ve güvenilir kaynak
 ✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
@@ -9,7 +9,7 @@ KuraBak Backend - ENTRY POINT V5.8 🚀
 ✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
 ✅ ALARM SİSTEMİ: Redis tabanlı fiyat alarmları
 ✅ SILENT START: Arka plan işlemleri sessizce başlar
-✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol eder
+✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol ediyor
 ✅ FIREBASE PATH FIX V5.2: Render Secret Files path düzeltmesi
 ✅ GUNICORN WORKER FIX V5.3: Her worker'da Firebase başlatılır
 ✅ ADMIN CLEANUP GÜVENLİĞİ V5.4: Token auth + güvenli temizlik
@@ -22,6 +22,8 @@ KuraBak Backend - ENTRY POINT V5.8 🚀
    14:00 push notification artık çalışıyor.
 ✅ ADMIN TRIGGER PUSH V5.8: Manuel push notification tetikleme endpoint'i eklendi.
    X-Admin-Token ile korumalı.
+✅ TOKEN CHECK V5.9: /api/device/check-token endpoint'i eklendi.
+   Android açılışta token sunucuda kayıtlı mı kontrol eder, değilse yeniden kaydeder.
 """
 import os
 import logging
@@ -37,7 +39,7 @@ from routes.general_routes import api_bp
 from routes.alarm_routes import alarm_bp
 
 from services.maintenance_service import start_scheduler, stop_scheduler, supervisor_check
-from utils.notification_service import register_fcm_token, send_test_notification
+from utils.notification_service import register_fcm_token, send_test_notification, is_token_registered
 
 from utils.cache import renew_scheduler_lock, SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL
 
@@ -413,6 +415,26 @@ def register_device():
 
     except Exception as e:
         logger.error(f"❌ [FCM] Token kayıt hatası: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/device/check-token', methods=['POST'])
+def check_token():
+    """
+    🔥 V5.9: Token sunucuda kayıtlı mı kontrol et.
+    Android açılışta bunu sorgular — kayıtlı değilse /api/device/register'a gider.
+    """
+    try:
+        data  = request.json
+        token = data.get('token') if data else None
+
+        if not token:
+            return jsonify({"success": False, "error": "Token eksik"}), 400
+
+        registered = is_token_registered(token)
+        return jsonify({"success": True, "registered": registered}), 200
+
+    except Exception as e:
+        logger.error(f"❌ [FCM] Token kontrol hatası: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/device/test-push', methods=['GET'])
