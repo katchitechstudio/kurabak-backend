@@ -73,15 +73,63 @@ def register_fcm_token(token: str) -> bool:
 
 
 def unregister_fcm_token(token: str) -> bool:
+    """
+    🔥 V5.7: Token silinirken fcm_token_map ve alarmlar da temizlenir.
+    Uygulama silinince FCM token geçersiz olur → bu fonksiyon çağrılır
+    → o cihaza ait tüm veriler Redis'ten temizlenir.
+    """
     try:
+        import hashlib
         redis_client = get_redis_client()
         if not redis_client:
             return False
-        
+
+        # 1. FCM token set'inden sil
         redis_client.srem(Config.CACHE_KEYS['fcm_tokens'], token)
         logger.info(f"🗑️ [FCM] Token silindi: {token[:20]}...")
+
+        # 2. fcm_token_map üzerinden device_hash bul
+        # fcm_token_map key'leri tara, değeri bu token olanı bul
+        cursor = 0
+        device_hash = None
+        while True:
+            cursor, keys = redis_client.scan(cursor, match="fcm_token_map:*", count=100)
+            for key in keys:
+                val = redis_client.get(key)
+                if val:
+                    val_str = val.decode('utf-8') if isinstance(val, bytes) else val
+                    if val_str == token:
+                        key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+                        device_hash = key_str.replace("fcm_token_map:", "")
+                        break
+            if device_hash or cursor == 0:
+                break
+
+        if device_hash:
+            # 3. fcm_token_map key'ini sil
+            redis_client.delete(f"fcm_token_map:{device_hash}")
+            logger.info(f"🗑️ [FCM] Token map silindi: {device_hash}")
+
+            # 4. O cihaza ait tüm alarmları sil
+            alarm_cursor = 0
+            deleted_alarms = 0
+            while True:
+                alarm_cursor, alarm_keys = redis_client.scan(
+                    alarm_cursor, match=f"alarm:{device_hash}:*", count=100
+                )
+                if alarm_keys:
+                    redis_client.delete(*alarm_keys)
+                    deleted_alarms += len(alarm_keys)
+                if alarm_cursor == 0:
+                    break
+
+            if deleted_alarms > 0:
+                logger.info(f"🗑️ [FCM] {deleted_alarms} alarm silindi (cihaz: {device_hash})")
+        else:
+            logger.debug(f"🔍 [FCM] Token map bulunamadı, alarm temizleme atlandı")
+
         return True
-        
+
     except Exception as e:
         logger.error(f"❌ [FCM] Token silme hatası: {e}")
         return False
