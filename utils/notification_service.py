@@ -1,5 +1,5 @@
 """
-Firebase Push Notification Service V5.7 🔥 - TOKEN CHECK
+Firebase Push Notification Service V5.8 🔥 - DATA ONLY ALARM
 =====================================
 ✅ HTTP v1 API Migration (send_each yerine send_all kullanımı)
 ✅ Token Yönetimi (Kayıt/Silme)
@@ -17,6 +17,7 @@ Firebase Push Notification Service V5.7 🔥 - TOKEN CHECK
 ✅ 🔥 V5.5: BATCH RATE LIMIT EKLENDİ (Firebase spam koruması)
 ✅ 🔥 V5.6: FIREBASE INIT GUARD - Firebase başlatılmamışsa token SİLİNMEZ
 ✅ 🔥 V5.7: TOKEN CHECK - is_token_registered() eklendi
+✅ 🔥 V5.8: ALARM DATA-ONLY - BigTextStyle için notification bloğu kaldırıldı
 """
 import logging
 import time
@@ -32,7 +33,6 @@ logger = logging.getLogger("KuraBak.Notification")
 
 FCM_BATCH_SIZE = 500
 
-# Firebase başlatılmamış hatası için kontrol stringi
 _FIREBASE_NOT_INIT_ERRORS = [
     "the default firebase app does not exist",
     "initialize_app",
@@ -40,12 +40,10 @@ _FIREBASE_NOT_INIT_ERRORS = [
 ]
 
 def _is_firebase_init_error(error: Exception) -> bool:
-    """Firebase başlatılmamış hatası mı kontrol et"""
     error_str = str(error).lower()
     return any(msg in error_str for msg in _FIREBASE_NOT_INIT_ERRORS)
 
 def _is_invalid_token_error(error: Exception) -> bool:
-    """Geçersiz/süresi dolmuş token hatası mı kontrol et"""
     error_str = str(error).lower()
     invalid_indicators = [
         "registration-token-not-registered",
@@ -73,23 +71,15 @@ def register_fcm_token(token: str) -> bool:
 
 
 def unregister_fcm_token(token: str) -> bool:
-    """
-    🔥 V5.7: Token silinirken fcm_token_map ve alarmlar da temizlenir.
-    Uygulama silinince FCM token geçersiz olur → bu fonksiyon çağrılır
-    → o cihaza ait tüm veriler Redis'ten temizlenir.
-    """
     try:
         import hashlib
         redis_client = get_redis_client()
         if not redis_client:
             return False
 
-        # 1. FCM token set'inden sil
         redis_client.srem(Config.CACHE_KEYS['fcm_tokens'], token)
         logger.info(f"🗑️ [FCM] Token silindi: {token[:20]}...")
 
-        # 2. fcm_token_map üzerinden device_hash bul
-        # fcm_token_map key'leri tara, değeri bu token olanı bul
         cursor = 0
         device_hash = None
         while True:
@@ -106,11 +96,9 @@ def unregister_fcm_token(token: str) -> bool:
                 break
 
         if device_hash:
-            # 3. fcm_token_map key'ini sil
             redis_client.delete(f"fcm_token_map:{device_hash}")
             logger.info(f"🗑️ [FCM] Token map silindi: {device_hash}")
 
-            # 4. O cihaza ait tüm alarmları sil
             alarm_cursor = 0
             deleted_alarms = 0
             while True:
@@ -136,10 +124,6 @@ def unregister_fcm_token(token: str) -> bool:
 
 
 def is_token_registered(token: str) -> bool:
-    """
-    🔥 V5.7: Token sunucuda kayıtlı mı kontrol et.
-    Android açılışta bunu sorgular, kayıtlı değilse yeniden register eder.
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
@@ -156,12 +140,6 @@ def is_token_registered(token: str) -> bool:
 
 
 def get_tokens_generator(batch_size: int = 500) -> Generator[List[str], None, None]:
-    """
-    🔥 Tokenları Redis'ten parça parça okuyan Generator
-
-    SMEMBERS sorunu: 100,000 token'ı RAM'e yükler (200-300 MB) → OOM Kill
-    SSCAN çözümü: Parça parça okur, RAM kullanımı sabit kalır
-    """
     redis_client = get_redis_client()
     if not redis_client:
         return
@@ -196,12 +174,6 @@ def get_tokens_generator(batch_size: int = 500) -> Generator[List[str], None, No
 
 
 def get_all_tokens() -> List[str]:
-    """
-    Tüm kayıtlı FCM tokenlarını getir (DEPRECATED - Geriye uyumluluk için)
-
-    ⚠️ UYARI: Bu fonksiyon RAM dostu değildir!
-    Yeni kod için get_tokens_generator() kullanın.
-    """
     try:
         redis_client = get_redis_client()
         if not redis_client:
@@ -236,16 +208,11 @@ def send_notification(
     priority: str = "high",
     sound: str = "default"
 ) -> Dict:
-    """
-    🔥 V5.6 FIX: Firebase başlatılmamışsa token SİLİNMEZ
-    Sadece Firebase'den "invalid token" yanıtı gelince token silinir.
-    """
     try:
         if not tokens:
             logger.warning("⚠️ [FCM] Token bulunamadı!")
             return {"success": False, "error": "No tokens"}
 
-        # 🔥 V5.6: Firebase başlatılmış mı kontrol et
         if not firebase_admin._apps:
             logger.error("❌ [FCM] Firebase başlatılmamış! Token gönderimi atlanıyor, tokenlar KORUNUYOR.")
             return {"success": False, "error": "Firebase not initialized", "tokens_preserved": True}
@@ -284,32 +251,26 @@ def send_notification(
                 total_success += response.success_count
                 total_failure += response.failure_count
                 
-                # Sadece gerçekten geçersiz tokenları işaretle
                 if response.failure_count > 0:
                     for idx, send_response in enumerate(response.responses):
                         if not send_response.success:
                             err = send_response.exception
                             if err and _is_invalid_token_error(err):
-                                # Gerçekten geçersiz token → sil
                                 failed_tokens_all.append(batch_tokens[idx])
                                 logger.debug(f"   ❌ Geçersiz token {idx+1}: {err}")
                             else:
-                                # Geçici hata (network, quota vb.) → SILME
                                 logger.debug(f"   ⚠️ Geçici hata token {idx+1}: {err} (token korunuyor)")
                 
                 logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
                 
             except Exception as batch_error:
-                # 🔥 V5.6 KRİTİK FIX: Firebase init hatası → tokenları SILME
                 if _is_firebase_init_error(batch_error):
                     logger.error(f"❌ [FCM] Batch {batch_num} Firebase init hatası: {batch_error}")
                     logger.error("   ⚠️ Tokenlar KORUNUYOR — Firebase yeniden başlatılana kadar bekleniyor")
                     total_failure += len(batch_tokens)
-                    # failed_tokens_all'a EKLEME — silme
                 else:
                     logger.error(f"❌ [FCM] Batch {batch_num} kritik hata: {batch_error}")
                     total_failure += len(batch_tokens)
-                    # Bilinmeyen hata → tokenları da silme, güvenli taraf
                     logger.warning(f"   ⚠️ Bilinmeyen hata, tokenlar KORUNUYOR: {batch_error}")
         
         if failed_tokens_all:
@@ -345,17 +306,7 @@ def send_notification(
 
 
 def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
-    """
-    TÜM kayıtlı cihazlara bildirim gönder (RAM dostu - Generator ile)
-
-    🔥 V4.5: Generator pattern kullanır, RAM şişmesi olmaz
-    🔥 V5.1: HTTP v1 API uyumlu send_notification() kullanır
-    🔥 V5.2: Singleton pattern uyumlu
-    🔥 V5.5: Batch arası rate limit eklendi
-    🔥 V5.6: Firebase init hatası → tokenlar korunur
-    """
     try:
-        # 🔥 V5.6: Firebase başlatılmış mı erken kontrol
         if not firebase_admin._apps:
             logger.error("❌ [FCM] Firebase başlatılmamış! send_to_all atlanıyor, tokenlar KORUNUYOR.")
             return {"success": False, "error": "Firebase not initialized", "tokens_preserved": True}
@@ -437,9 +388,6 @@ def send_alarm_notification(
     percent_value: Optional[float] = None,
     percent_direction: Optional[str] = None
 ) -> bool:
-    """
-    🔥 V5.4: Fiyat alarmı bildirimi gönder (PERCENT DESTEĞI EKLENDİ!)
-    """
     try:
         alarm_mode = alarm_mode.upper()
         
@@ -458,15 +406,6 @@ def send_alarm_notification(
             emoji        = "📈" if alarm_type == "HIGH" else "📉"
             alarm_status = "Hedef ÜZERİNE çıktı" if alarm_type == "HIGH" else "Hedef ALTINA düştü"
             change_symbol = "+" if change_from_start >= 0 else ""
-            
-            title = f"{emoji} Fiyat Alarmı!"
-            body  = (
-                f"{currency_name} / {currency_code}\n\n"
-                f"Hedef: ₺{target_price:,.2f}\n"
-                f"Anlık: ₺{current_price:,.2f}\n\n"
-                f"{alarm_status}\n\n"
-                f"{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{change_percent:.2f}%)"
-            )
             
             data = {
                 "type":              "alarm_triggered",
@@ -495,15 +434,6 @@ def send_alarm_notification(
             alarm_status = f"%{percent_value:.1f} YÜKSELDİ" if percent_direction == "UP" else f"%{percent_value:.1f} DÜŞTÜ"
             change_symbol = "+" if change_from_start >= 0 else ""
             
-            title = f"{emoji} Fiyat Alarmı!"
-            body  = (
-                f"{currency_name} / {currency_code}\n\n"
-                f"Başlangıç: ₺{start_price:,.2f}\n"
-                f"Anlık: ₺{current_price:,.2f}\n\n"
-                f"{alarm_status}\n\n"
-                f"{change_symbol}{change_from_start:,.2f} TL ({change_symbol}{actual_percent:.2f}%)"
-            )
-            
             data = {
                 "type":              "alarm_triggered",
                 "alarm_mode":        "PERCENT",
@@ -524,16 +454,10 @@ def send_alarm_notification(
         
         messaging.send(
             messaging.Message(
-                notification=messaging.Notification(title=title, body=body),
                 data=data,
                 token=fcm_token,
                 android=messaging.AndroidConfig(
-                    priority='high',
-                    notification=messaging.AndroidNotification(
-                        sound='default',
-                        channel_id='kurabak_alarm',
-                        color='#10B981'
-                    )
+                    priority='high'
                 )
             )
         )
@@ -572,14 +496,6 @@ def send_price_alert(currency_code: str, price: float, change_percent: float) ->
 
 
 def send_daily_summary() -> Dict:
-    """
-    🔔 GÜNLÜK BİLDİRİM (14:00)
-
-    ÖNCELİK SIRASI:
-    1. Bayram varsa → Bayram mesajı
-    2. Bayram yoksa → Günün haberi
-    3. İkisi de yoksa → Bildirim gönderilmez
-    """
     try:
         logger.info("🔔 [DAILY SUMMARY] Günlük bildirim hazırlanıyor...")
         
