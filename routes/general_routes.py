@@ -647,9 +647,9 @@ def send_feedback():
         ip_address = request.remote_addr or request.headers.get('X-Forwarded-For', 'Bilinmiyor')
         user_agent = request.headers.get('User-Agent', 'Bilinmiyor')
         
-        from utils.telegram_monitor import get_telegram_monitor
+        from utils.telegram_monitor import init_telegram_monitor
         
-        telegram_bot = get_telegram_monitor()
+        telegram_bot = init_telegram_monitor()
         
         if telegram_bot:
             feedback_text = (
