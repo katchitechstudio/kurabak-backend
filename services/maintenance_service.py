@@ -578,6 +578,16 @@ def kasim_notification_job():
         raise
 
 
+def _do_jeweler_rebuild():
+    try:
+        from services.financial_service import rebuild_jeweler_cache, update_jeweler_snapshot
+        rebuild_jeweler_cache()
+        update_jeweler_snapshot()
+        logger.info("✅ [MARJ SAĞLIK] Jeweler cache rebuild tamamlandı")
+    except Exception as rb_err:
+        logger.error(f"❌ [MARJ SAĞLIK] Jeweler rebuild hatası: {rb_err}")
+
+
 def _retry_gold_margins_async(harem_html: str, gold_api_prices: dict):
     try:
         time.sleep(300)
@@ -590,9 +600,11 @@ def _retry_gold_margins_async(harem_html: str, gold_api_prices: dict):
             existing.update(result)
             set_cache(margin_key, existing, ttl=86400)
             logger.info(f"✅ [MARJ SAĞLIK] Altın retry başarılı! {len(result)} marj güncellendi.")
+            _do_jeweler_rebuild()
             _send_telegram(
                 f"✅ *MARJ SAĞLIK: Altın Retry Başarılı*\n\n"
-                f"{len(result)} altın/gümüş marjı güncellendi."
+                f"{len(result)} altın/gümüş marjı güncellendi.\n"
+                f"Jeweler cache yeniden oluşturuldu."
             )
         else:
             logger.warning("⚠️ [MARJ SAĞLIK] Altın retry de başarısız, mevcut marj kalıyor.")
@@ -652,9 +664,11 @@ def check_and_refresh_margins():
                     current_margins.update(gold_result)
                     set_cache(margin_key, current_margins, ttl=86400)
                     logger.info(f"✅ [MARJ SAĞLIK] Altın marjları güncellendi: {list(gold_result.keys())}")
+                    _do_jeweler_rebuild()
                     _send_telegram(
                         f"✅ *MARJ SAĞLIK: Altın Marjları Düzeltildi*\n\n"
-                        f"Güncellenen: `{', '.join(gold_result.keys())}`"
+                        f"Güncellenen: `{', '.join(gold_result.keys())}`\n"
+                        f"Jeweler cache yeniden oluşturuldu."
                     )
                     return
                 else:
@@ -667,19 +681,23 @@ def check_and_refresh_margins():
                         current_margins.update(old_gold)
                         set_cache(margin_key, current_margins, ttl=86400)
                         logger.warning("⚠️ [MARJ SAĞLIK] Gemini başarısız, son bilinen altın marjları kullanıldı.")
+                        _do_jeweler_rebuild()
                         _send_telegram(
                             "⚠️ *MARJ SAĞLIK: Gemini Başarısız*\n\n"
                             "Son bilinen altın marjları kullanılıyor.\n"
+                            "Jeweler cache yeniden oluşturuldu.\n"
                             "5 dakika sonra tekrar denenecek..."
                         )
                     else:
                         current_margins.update(_FALLBACK_GOLD_MARGINS)
                         set_cache(margin_key, current_margins, ttl=86400)
                         logger.warning("⚠️ [MARJ SAĞLIK] Geçmiş marj da yok, fallback değerler kullanıldı.")
+                        _do_jeweler_rebuild()
                         _send_telegram(
                             "🚨 *MARJ SAĞLIK: Fallback Devreye Girdi*\n\n"
                             "Gemini ve geçmiş marj başarısız.\n"
                             "Sabit fallback altın marjları kullanılıyor.\n"
+                            "Jeweler cache yeniden oluşturuldu.\n"
                             "5 dakika sonra tekrar denenecek..."
                         )
 
@@ -692,10 +710,12 @@ def check_and_refresh_margins():
                 logger.error("❌ [MARJ SAĞLIK] Harem HTML veya API verisi alınamadı!")
                 current_margins.update(_FALLBACK_GOLD_MARGINS)
                 set_cache(margin_key, current_margins, ttl=86400)
+                _do_jeweler_rebuild()
                 _send_telegram(
                     "🚨 *MARJ SAĞLIK: Kaynak Erişim Hatası*\n\n"
                     "Harem HTML veya API verisi alınamadı.\n"
-                    "Fallback marjlar kullanılıyor."
+                    "Fallback marjlar kullanılıyor.\n"
+                    "Jeweler cache yeniden oluşturuldu."
                 )
             return
 
