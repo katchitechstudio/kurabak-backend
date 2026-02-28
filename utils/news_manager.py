@@ -116,7 +116,7 @@ def _call_gemini_with_retry(model, prompt: str, label: str = "GEMİNİ") -> Opti
     delays = [300, 900]  # 5dk, 15dk
     for attempt in range(3):
         try:
-            response = model.generate_content(prompt, request_options={"timeout": 60})
+            response = model.generate_content(prompt, request_options={"timeout": 120})
             result = response.text.strip()
             if result and len(result) > 10:
                 return result
@@ -502,7 +502,7 @@ SEN BİR FİNANS ANALİSTİSİN. Ziraat Bankası BANKA SATIŞ fiyatlarıyla döv
 {api_str}
 
 🌐 ZİRAAT HTML:
-{html_data[:5000]}
+{html_data[:3000]}
 
 🎯 GÖREV: HTML'den "Banka Satış" (ikinci sütun) al → MARJ = ((Satış-API)/API)×100
 
