@@ -37,12 +37,12 @@ _last_logged_banner = None
 
 # ─── Sabit fallback marjlar — Gemini tamamen çökerse kuyumcu fiyatı ham olmaz ─
 _FALLBACK_GOLD_MARGINS = {
-    'GRA': 0.045,   # %4.5
-    'C22': 0.015,
-    'YAR': 0.018,
-    'TAM': 0.010,
-    'CUM': 0.010,
-    'ATA': 0.010,
+    'GRA': 0.016,   # %1.6 - Harem gerçeği
+    'C22': 0.012,   # %1.2
+    'YAR': 0.019,   # %1.9
+    'TAM': 0.010,   # %1.0
+    'CUM': 0.015,   # %1.5 - Config ile uyumlu
+    'ATA': 0.017,   # %1.7
     'HAS': 0.010,
     'AG':  0.160,   # %16
     'GUMUS': 0.160,
@@ -66,6 +66,33 @@ def _get_config_fallback_margins() -> Dict[str, float]:
     currency = getattr(Config, 'DEFAULT_CURRENCY_MARGINS', _FALLBACK_CURRENCY_MARGINS)
     exotic = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
     return {**_FALLBACK_GOLD_MARGINS, **_FALLBACK_CURRENCY_MARGINS, **gold, **currency, **exotic}
+
+
+def _call_gemini_with_retry(model, prompt: str, label: str = "GEMİNİ") -> Optional[str]:
+    """
+    Gemini'yi çağır, hata alırsa:
+    - 1. retry: 5 dakika bekle
+    - 2. retry: 15 dakika bekle
+    Hepsi başarısız olursa None döner.
+    """
+    delays = [300, 900]  # 5dk, 15dk
+    for attempt in range(3):
+        try:
+            response = model.generate_content(prompt, request_options={"timeout": 60})
+            result = response.text.strip()
+            if result and len(result) > 10:
+                return result
+            logger.warning(f"⚠️ [{label} RETRY] Boş yanıt, deneme {attempt+1}/3")
+        except Exception as e:
+            logger.warning(f"⚠️ [{label} RETRY] Hata: {e} (deneme {attempt+1}/3)")
+
+        if attempt < 2:
+            wait = delays[attempt]
+            logger.info(f"⏳ [{label} RETRY] {wait}s ({wait//60}dk) bekleniyor...")
+            time.sleep(wait)
+
+    logger.error(f"❌ [{label} RETRY] Tüm denemeler başarısız!")
+    return None
 
 
 def is_similar(text1: str, text2: str, threshold: float = 0.7) -> bool:
@@ -251,15 +278,9 @@ BAYRAM: [VAR/YOK veya isim]
 
         logger.info(f"🤖 [GEMİNİ] {len(news_list)} haber filtreleniyor...")
 
-        try:
-            # timeout=25 — 30sn'de session drop oluyordu
-            response = model.generate_content(prompt, request_options={"timeout": 60})
-            result = response.text.strip()
-            if not result or len(result) < 10:
-                logger.error("❌ [GEMİNİ] Boş yanıt!")
-                return [], None
-        except Exception as gemini_error:
-            logger.error(f"❌ [GEMİNİ] API hatası: {gemini_error}")
+        result = _call_gemini_with_retry(model, prompt, label="GEMİNİ HABER")
+        if not result:
+            logger.error("❌ [GEMİNİ HABER] Tüm denemeler başarısız!")
             return [], None
 
         lines = result.split('\n')
@@ -380,15 +401,12 @@ MARJ_TAM: -0.87
 MARJ_ATA: 0.52
 MARJ_AG: 16.00
 
-H�ÇBİR AÇIKLAMA YAPMA!
+HİÇBİR AÇIKLAMA YAPMA!
 """
 
-        # timeout=25 — Gemini 30sn'de drop ediyor
-        response = model.generate_content(prompt, request_options={"timeout": 60})
-        result = response.text.strip()
-
-        if not result or len(result) < 10:
-            logger.error("❌ [GEMİNİ MARJ] Boş yanıt!")
+        result = _call_gemini_with_retry(model, prompt, label="GEMİNİ ALTIN MARJ")
+        if not result:
+            logger.error("❌ [GEMİNİ MARJ] Tüm denemeler başarısız!")
             return None
 
         margins = {}
@@ -453,15 +471,12 @@ MARJ_SAR: 1.26
 MARJ_DKK: 1.08
 MARJ_JPY: 1.31
 
-H�ÇBİR AÇIKLAMA YAPMA!
+HİÇBİR AÇIKLAMA YAPMA!
 """
 
-        # timeout=25
-        response = model.generate_content(prompt, request_options={"timeout": 60})
-        result = response.text.strip()
-
-        if not result or len(result) < 10:
-            logger.error("❌ [GEMİNİ DÖVİZ] Boş yanıt!")
+        result = _call_gemini_with_retry(model, prompt, label="GEMİNİ DÖVİZ MARJ")
+        if not result:
+            logger.error("❌ [GEMİNİ DÖVİZ] Tüm denemeler başarısız!")
             return None
 
         margins = {}
@@ -540,9 +555,10 @@ def update_dynamic_margins() -> bool:
             f"EXOTIC:{len(exotic_margins)} + GOLD:{len(gold_static_margins)})"
         )
 
+        # Mevcut marjları koru — sadece başarılı gelen marjları güncelle
         old_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')) or {}
 
-        smooth_margins = {}
+        smooth_margins = dict(old_margins)  # Önce mevcut marjları kopyala
         threshold = Config.MARGIN_SMOOTH_THRESHOLD
 
         for key, new_val in all_new_margins.items():
