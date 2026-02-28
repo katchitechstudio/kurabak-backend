@@ -40,12 +40,12 @@ _FALLBACK_GOLD_MARGINS = {
     'GRA': 0.016,   # %1.6 - Harem gerçeği
     'C22': 0.012,   # %1.2
     'YAR': 0.019,   # %1.9
-    'TAM': 0.010,   # %1.0
+    'TAM': 0.012,   # %1.2
     'CUM': 0.015,   # %1.5 - Config ile uyumlu
     'ATA': 0.017,   # %1.7
-    'HAS': 0.010,
-    'AG':  0.160,   # %16
-    'GUMUS': 0.160,
+    'HAS': 0.010,   # %1.0
+    'AG':  0.045,   # %4.5
+    'GUMUS': 0.045, # %4.5
 }
 
 _FALLBACK_CURRENCY_MARGINS = {
@@ -59,6 +59,44 @@ _FALLBACK_CURRENCY_MARGINS = {
     'CZK': 0.015, 'EGP': 0.018, 'RSD': 0.018,
     'HUF': 0.015, 'BAM': 0.015,
 }
+
+# ─── Validasyon aralıkları — Gemini saçma değer üretirse reddedilir ─────────
+_MARGIN_VALID_RANGES = {
+    'GRA':   (0.008, 0.025),
+    'C22':   (0.006, 0.020),
+    'YAR':   (0.008, 0.025),
+    'TAM':   (0.004, 0.020),
+    'CUM':   (0.008, 0.025),
+    'ATA':   (0.008, 0.025),
+    'HAS':   (0.004, 0.020),
+    'AG':    (0.020, 0.080),
+    'GUMUS': (0.020, 0.080),
+    'USD':   (0.005, 0.025),
+    'EUR':   (0.005, 0.025),
+    'GBP':   (0.005, 0.025),
+    'CHF':   (0.005, 0.025),
+    'CAD':   (0.005, 0.025),
+    'AUD':   (0.005, 0.025),
+    'SEK':   (0.005, 0.030),
+    'NOK':   (0.005, 0.030),
+    'SAR':   (0.005, 0.025),
+    'DKK':   (0.005, 0.025),
+    'JPY':   (0.005, 0.025),
+}
+
+def _validate_margin(key: str, value: float) -> bool:
+    """Marj değerinin mantıklı aralıkta olup olmadığını kontrol et."""
+    if key not in _MARGIN_VALID_RANGES:
+        return True  # Bilmediğimiz anahtarları geç
+    min_val, max_val = _MARGIN_VALID_RANGES[key]
+    valid = min_val <= value <= max_val
+    if not valid:
+        logger.warning(
+            f"⚠️ [VALİDASYON] {key} marjı geçersiz: {value:.4f} "
+            f"(beklenen: {min_val:.4f}-{max_val:.4f}) → REDDEDILDI"
+        )
+    return valid
+
 
 def _get_config_fallback_margins() -> Dict[str, float]:
     """Config'de varsa oradan al, yoksa sabit değerlere dön."""
@@ -380,28 +418,31 @@ SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatların
 {html_data[:3000]}
 
 🎯 GÖREV:
-1. HTML tablosundan Harem'in SATIŞ fiyatlarını çıkar
-2. Her ürün için TAM MARJ hesapla: ((Harem Satış - API Satış) / API Satış) × 100
+1. HTML tablosundan Harem'in SATIŞ fiyatlarını çıkar (tabloda İKİNCİ sütun = SATIŞ)
+2. Her ürün için TAM MARJ hesapla: ((Harem Satış - API) / API) × 100
 3. ONDALIK NOKTA KULLAN (virgül değil!)
 4. NEGATİF marjları da hesapla
 
-📐 ÖRNEK: Gram Altın
-- Harem: 7407.92, API: 7073.56 → (334.36/7073.56)×100 = 4.73
+⚠️ SÜTUN SIRASI ÇOK ÖNEMLİ:
+- BİRİNCİ sütun = ALIŞ (düşük değer) → KULLANMA
+- İKİNCİ sütun = SATIŞ (yüksek değer) → BUNU KULLAN
+
+📐 GERÇEK ÖRNEK: Gram Altın
+- Harem Satış: 7598.23, API: 7466.45 → (131.78/7466.45)×100 = 1.77
+- Beklenen aralıklar: Gram Altın %1.0-2.5, Gümüş %2.0-8.0
 
 🎯 ÜRÜN EŞLEMELERİ:
 GRA=Gram Altın, C22=Çeyrek, YAR=Yarım, TAM=Tam, ATA=Ata Altın, AG=Gram Gümüş
 
-🔥 GÜMÜŞ: SADECE SATIŞ SÜTUNU (130-150 TL), marj %15-20 olmalı
+🔥 GÜMÜŞ: SADECE SATIŞ SÜTUNU kullan, beklenen marj %2-8 arası
 
-📤 ÇIKTI (SADECE BU FORMAT):
-MARJ_GRA: 4.73
-MARJ_C22: 1.58
+📤 ÇIKTI (SADECE BU FORMAT, HİÇBİR AÇIKLAMA YAPMA):
+MARJ_GRA: 1.77
+MARJ_C22: 1.20
 MARJ_YAR: 1.90
-MARJ_TAM: -0.87
-MARJ_ATA: 0.52
-MARJ_AG: 16.00
-
-HİÇBİR AÇIKLAMA YAPMA!
+MARJ_TAM: 1.20
+MARJ_ATA: 1.70
+MARJ_AG: 4.50
 """
 
         result = _call_gemini_with_retry(model, prompt, label="GEMİNİ ALTIN MARJ")
@@ -410,18 +451,27 @@ HİÇBİR AÇIKLAMA YAPMA!
             return None
 
         margins = {}
+        rejected = []
         for line in result.split('\n'):
             if 'MARJ_' in line:
                 parts = line.split(':')
                 if len(parts) == 2:
                     key = parts[0].replace('MARJ_', '').strip()
                     try:
-                        margins[key] = float(parts[1].strip()) / 100
+                        value = float(parts[1].strip()) / 100
+                        # Validasyon — aralık dışıysa reddet, fallback kullanılacak
+                        if _validate_margin(key, value):
+                            margins[key] = value
+                        else:
+                            rejected.append(key)
                     except ValueError:
                         continue
 
+        if rejected:
+            logger.warning(f"⚠️ [GEMİNİ MARJ] Reddedilen marjlar: {rejected} → fallback devreye girecek")
+
         if not margins:
-            logger.error("❌ [GEMİNİ MARJ] Parse edilemedi!")
+            logger.error("❌ [GEMİNİ MARJ] Parse edilemedi veya tümü reddedildi!")
             return None
 
         logger.info(f"✅ [GEMİNİ] {len(margins)} ALTIN+GÜMÜŞ marjı hesaplandı")
@@ -480,18 +530,27 @@ HİÇBİR AÇIKLAMA YAPMA!
             return None
 
         margins = {}
+        rejected = []
         for line in result.split('\n'):
             if 'MARJ_' in line:
                 parts = line.split(':')
                 if len(parts) == 2:
                     key = parts[0].replace('MARJ_', '').strip()
                     try:
-                        margins[key] = float(parts[1].strip()) / 100
+                        value = float(parts[1].strip()) / 100
+                        # Validasyon
+                        if _validate_margin(key, value):
+                            margins[key] = value
+                        else:
+                            rejected.append(key)
                     except ValueError:
                         continue
 
+        if rejected:
+            logger.warning(f"⚠️ [GEMİNİ DÖVİZ] Reddedilen marjlar: {rejected} → fallback devreye girecek")
+
         if not margins:
-            logger.error("❌ [GEMİNİ DÖVİZ] Parse edilemedi!")
+            logger.error("❌ [GEMİNİ DÖVİZ] Parse edilemedi veya tümü reddedildi!")
             return None
 
         logger.info(f"✅ [GEMİNİ] {len(margins)} MAJÖR DÖVİZ marjı hesaplandı")
@@ -571,6 +630,20 @@ def update_dynamic_margins() -> bool:
                 smooth_margins[key] = round((old_val + new_val) / 2, 4)
             else:
                 smooth_margins[key] = new_val
+
+        # ─── FALLBACK KONTROLÜ ─────────────────────────────────────────────────
+        # Gemini'den gelmeyen veya 0 olan altın/gümüş marjlarını fallback ile doldur
+        fallback_applied = []
+        for key, fallback_val in _FALLBACK_GOLD_MARGINS.items():
+            if key not in smooth_margins or smooth_margins.get(key, 0) == 0:
+                smooth_margins[key] = fallback_val
+                fallback_applied.append(key)
+
+        if fallback_applied:
+            logger.warning(f"⚠️ [FALLBACK] Eksik marjlar fallback ile dolduruldu: {fallback_applied}")
+        else:
+            logger.info("✅ [FALLBACK] Tüm altın/gümüş marjları mevcut, fallback gerekmedi")
+        # ───────────────────────────────────────────────────────────────────────
 
         margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         set_cache(margin_key, smooth_margins, ttl=86400)
