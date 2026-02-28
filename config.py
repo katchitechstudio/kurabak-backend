@@ -149,7 +149,8 @@ class Config:
     - Çözüm: Statik %1.5 marj (Gram Altın ile aynı seviyede)
     """
     STATIC_GOLD_MARGINS = {
-        "CUM": 0.015,  # %1.5 - Cumhuriyet Altını (Harem'de yok)
+        "CUM": 0.015, 
+        "ATA": 0.017,  
     }
     
     # ======================================
