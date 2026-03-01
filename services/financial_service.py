@@ -618,16 +618,19 @@ def check_maintenance_mode() -> Tuple[bool, str, Optional[str]]:
 
 def is_weekend_closed(now) -> bool:
     """
-    Hafta sonu kapalı mı kontrolü.
+    Hafta sonu kapalı mı kontrolü. (Worker/veri çekme için kullanılır)
 
     Kapalı saatler:
     - Cuma 18:00'dan itibaren
     - Cumartesi tüm gün
-    - Pazar 00:00 - 23:57 arası (API Pazar 23:58'de yeni veri göndermeye başlıyor)
+    - Pazar tüm gün
 
     Açık:
-    - Pazar 23:58'den itibaren (API başlıyor)
-    - Pazartesi ve sonrası normal
+    - Pazartesi 00:00'dan itibaren normal
+
+    NOT: Alarm kontrolü için is_weekend_alarm_closed() kullanılır.
+         Worker Pazar 23:58'de API'den veri çekmeye başlar, bu fonksiyon
+         bunu engellemez — alarm koruması ayrı fonksiyonla yönetilir.
     """
     weekday = now.weekday()  # 0=Pazartesi, 4=Cuma, 5=Cumartesi, 6=Pazar
     hour = now.hour
@@ -639,10 +642,41 @@ def is_weekend_closed(now) -> bool:
     # Cumartesi tüm gün kapalı
     is_saturday_closed = (weekday == 5)
 
-    # Pazar: 23:58'e kadar kapalı, 23:58'den sonra açık (API başlıyor)
+    # Pazar: 23:58'e kadar kapalı, 23:58'den sonra açık (API başlıyor, worker devreye giriyor)
     is_sunday_closed = (weekday == 6 and not (hour == 23 and minute >= 58))
 
     return is_friday_closed or is_saturday_closed or is_sunday_closed
+
+
+def is_weekend_alarm_closed(now) -> bool:
+    """
+    Alarm kontrolü için hafta sonu kapalı mı kontrolü.
+
+    Worker'dan farklı olarak Pazar tüm gün kapalıdır.
+    Pazartesi 00:10'a kadar da kapalı kalır — bu pencerede
+    marj güncellemesi (00:05) henüz tamamlanmamış olabilir.
+
+    Kapalı pencere: Cuma 18:00 → Pazartesi 00:10
+    Açık: Pazartesi 00:10'dan itibaren
+    """
+    weekday = now.weekday()  # 0=Pazartesi, 4=Cuma, 5=Cumartesi, 6=Pazar
+    hour = now.hour
+    minute = now.minute
+
+    # Cuma 18:00'dan sonra kapalı
+    is_friday_closed = (weekday == 4 and hour >= Config.MARKET_CLOSE_FRIDAY_HOUR)
+
+    # Cumartesi tüm gün kapalı
+    is_saturday_closed = (weekday == 5)
+
+    # Pazar tüm gün kapalı
+    is_sunday_closed = (weekday == 6)
+
+    # Pazartesi 00:10'a kadar kapalı (marj güncellemesi için güvenli bekleme)
+    is_monday_early = (weekday == 0 and (hour == 0 and minute < 10))
+
+    return is_friday_closed or is_saturday_closed or is_sunday_closed or is_monday_early
+
 
 def update_financial_data():
     tz = pytz.timezone('Europe/Istanbul')
@@ -681,7 +715,6 @@ def update_financial_data():
         
         return True
 
-    # ✅ Hafta sonu kapalı kontrolü (Cuma 18:00 → Pazar 23:58)
     if is_weekend_closed(now):
         if not get_cache("market_closed_logged"):
             logger.info(f"🔒 [WORKER] Piyasa Kapalı - Hafta sonu modu başladı")
