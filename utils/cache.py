@@ -1,5 +1,5 @@
 """
-Redis Cache Utility - PRODUCTION READY V5.6 🚀
+Redis Cache Utility - PRODUCTION READY V5.8 🚀
 =========================================================
 ✅ CONNECTION POOL FIX: Global client kullanımı (V4.8)
 ✅ RAM CACHE CLEANUP: Otomatik çöp toplama (V4.8)
@@ -18,6 +18,9 @@ Redis Cache Utility - PRODUCTION READY V5.6 🚀
 ✅ 🔥 V5.5 SNAPSHOT KEYS: raw_snapshot + jeweler_snapshot (Disk backup desteği)
 ✅ 🔥 V5.6 SCHEDULER LOCK: renew_scheduler_lock buraya taşındı (circular import fix)
    app.py → maintenance_service.py → app.py döngüsü kırıldı.
+✅ 🔥 V5.8 S11 FIX: Zombie worker tespiti için HEARTBEAT eklendi.
+   renew_scheduler_lock() artık hem lock hem heartbeat timestamp yazıyor.
+   app.py _watch_scheduler_health 5 dakika heartbeat görmezse lock'u zorla alır.
 
 V5.6 Değişiklikler:
 - 🔥 SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL, renew_scheduler_lock() eklendi
@@ -26,6 +29,12 @@ V5.6 Değişiklikler:
 V5.7 Değişiklikler:
 - 🔥 CRITICAL_KEYS temizlendi: currencies:all, golds:all, silvers:all, summary kaldırıldı
   (Bu key'ler artık kullanılmıyor, sadece raw ve jeweler profilleri aktif)
+
+V5.8 Değişiklikler (S11 FIX):
+- 🔥 SCHEDULER_HEARTBEAT_KEY, SCHEDULER_HEARTBEAT_TTL sabitleri eklendi
+- 🔥 DiskBackup.load() → max_age_hours parametresi eklendi (varsayılan 48h, snapshot için 72h)
+- 🔥 renew_scheduler_lock() → pipeline ile hem lock hem heartbeat atomik yazıyor
+- 🔥 recover_from_disk() → max_age_hours=72 ile çağrılıyor
 """
 
 import os
@@ -74,8 +83,14 @@ class DiskBackup:
             logger.error(f"❌ Disk kayıt hatası [{key}]: {e}")
             return False
     
-    def load(self, key: str) -> Optional[Any]:
-        """Disk'ten veriyi yükle"""
+    def load(self, key: str, max_age_hours: int = 48) -> Optional[Any]:
+        """
+        Disk'ten veriyi yükle.
+
+        🔥 V5.8: max_age_hours parametresi eklendi (varsayılan 48 saat).
+        Önceki sabit 24 saat, Render restart + uzun bakım senaryolarında
+        veriyi kaybediyordu. Çağıran kod ihtiyaca göre süreyi belirler.
+        """
         try:
             with self._lock:
                 safe_key = key.replace(":", "_").replace("/", "_")
@@ -88,8 +103,13 @@ class DiskBackup:
                     backup = json.load(f)
                     
                     age = time.time() - backup.get('timestamp', 0)
-                    if age > 86400:
-                        logger.warning(f"⚠️ [{key}] Disk backup'ı çok eski ({age/3600:.1f} saat)")
+                    max_age_seconds = max_age_hours * 3600
+
+                    if age > max_age_seconds:
+                        logger.warning(
+                            f"⚠️ [{key}] Disk backup'ı çok eski "
+                            f"({age/3600:.1f} saat > limit {max_age_hours} saat)"
+                        )
                         return None
                     
                     return backup.get('data')
@@ -467,10 +487,10 @@ def get_cache(key: str) -> Optional[Any]:
     if ram_data:
         return ram_data
     
-    # 3. Disk Denemesi
+    # 3. Disk Denemesi (snapshot key'ler için 72 saat tolerans)
     if key in CRITICAL_KEYS:
         logger.warning(f"🔥 [{key}] Redis ve RAM'de yok, DISK'ten yükleniyor...")
-        disk_data = disk_backup.load(key)
+        disk_data = disk_backup.load(key, max_age_hours=72)
         if disk_data:
             logger.info(f"✅ [{key}] Disk'ten başarıyla kurtarıldı!")
             ram_cache.set(key, disk_data, ttl=0)
@@ -662,7 +682,8 @@ def recover_from_disk():
     
     for key in CRITICAL_KEYS:
         if not get_cache(key):
-            disk_data = disk_backup.load(key)
+            # 🔥 V5.8: 72 saat tolerans (Render restart + uzun bakım senaryoları)
+            disk_data = disk_backup.load(key, max_age_hours=72)
             if disk_data:
                 logger.info(f"💾 [{key}] Disk'ten kurtarıldı ve RAM'e yüklendi")
                 ram_cache.set(key, disk_data, ttl=0)
@@ -678,12 +699,18 @@ recover_from_disk()
 
 # ======================================
 # 🔥 V5.6: SCHEDULER LOCK (circular import fix)
-# Buraya taşındı: app.py → maintenance_service.py → app.py döngüsü kırıldı.
-# app.py ve maintenance_service.py her ikisi de buradan import eder.
+# 🔥 V5.8: HEARTBEAT (S11 Zombie Worker Fix)
 # ======================================
 
 SCHEDULER_LOCK_KEY = "kurabak:scheduler:lock"
-SCHEDULER_LOCK_TTL = 120  # 2 dakika — worker her 60s'de yeniler, çökerse 120s'de kalkar
+SCHEDULER_LOCK_TTL = 120   # 2 dakika — worker her 60s'de yeniler, çökerse 120s'de kalkar
+
+# 🔥 YENİ V5.8: Zombie worker tespiti
+# worker_job her başarılı çalışmada bu key'i günceller.
+# _watch_scheduler_health ZOMBIE_THRESHOLD (300s) boyunca
+# bu key güncellenmezse lock'u zorla alır.
+SCHEDULER_HEARTBEAT_KEY = "kurabak:scheduler:heartbeat"
+SCHEDULER_HEARTBEAT_TTL = 180   # 3 dakika TTL — 3 missed beat = zombie şüphesi
 
 
 def renew_scheduler_lock():
@@ -692,10 +719,16 @@ def renew_scheduler_lock():
     maintenance_service.py içindeki worker_job her çalışmasında (60s) bunu çağırır.
     Sunucu çökerse SCHEDULER_LOCK_TTL sonunda lock otomatik kalkar,
     yeni Render worker'ı devralır.
+
+    🔥 V5.8: Artık pipeline ile hem lock hem heartbeat atomik yazıyor.
+    Heartbeat, zombie worker tespiti için app.py tarafından okunur.
     """
     try:
         client = get_redis_client()
         if client:
-            client.set(SCHEDULER_LOCK_KEY, os.getpid(), ex=SCHEDULER_LOCK_TTL)
+            pipe = client.pipeline()
+            pipe.set(SCHEDULER_LOCK_KEY,      os.getpid(),      ex=SCHEDULER_LOCK_TTL)
+            pipe.set(SCHEDULER_HEARTBEAT_KEY, str(time.time()), ex=SCHEDULER_HEARTBEAT_TTL)
+            pipe.execute()
     except Exception:
         pass  # Lock yenileme kritik değil, sessizce geç
