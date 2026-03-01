@@ -264,7 +264,7 @@ def force_worker_update():
 
 def job_error_listener(event):
     if event.exception:
-        job_id = event.job_id
+        job_id    = event.job_id
         exception = event.exception
         logger.critical(f"💣 SCHEDULER JOB HATASI!")
         logger.critical(f"   Job ID: {job_id}")
@@ -357,9 +357,9 @@ def cleanup_old_backups():
         logger.info("🧹 [CLEANUP] Eski backup temizliği başlıyor...")
         from utils.cache import cleanup_old_disk_backups, get_disk_backup_stats
         before_stats = get_disk_backup_stats()
-        result = cleanup_old_disk_backups(max_age_days=Config.CLEANUP_BACKUP_AGE_DAYS)
+        result       = cleanup_old_disk_backups(max_age_days=Config.CLEANUP_BACKUP_AGE_DAYS)
         deleted_count = result.get('deleted_count', 0)
-        after_stats = result.get('after_stats', {})
+        after_stats   = result.get('after_stats', {})
         if deleted_count > 0:
             logger.info(f"✅ [CLEANUP] {deleted_count} adet eski backup silindi")
             logger.info(f"   📊 Önce: {before_stats.get('total_files', 0)} dosya, {before_stats.get('total_size_mb', 0)} MB")
@@ -373,15 +373,34 @@ def cleanup_old_backups():
 
 
 def alarm_check_job():
+    """
+    🔔 Periyodik fiyat alarm kontrolü.
+
+    🔒 Hafta sonu koruması:
+    Pazar 23:58'de API yeni veriyi getirmeye başlar ancak snapshot
+    hâlâ cuma kapanışına aittir. Marj güncellemesi ise pazartesi
+    00:05'te yapılır. Bu pencerede alarm tetiklenirse kullanıcı
+    yanıltıcı/gereksiz bildirim alır.
+
+    Bu nedenle alarm kontrolü hafta sonu boyunca (Cuma 18:00 →
+    Pazartesi 00:10) duraklatılır. Pazartesi 00:10 sonrasında
+    hem snapshot hem marj güncel olacağından kontrol güvenle devam eder.
+    """
     try:
+        if _is_weekend_now():
+            logger.info("🔒 [ALARM] Hafta sonu - alarm kontrolü atlandı (fiyat/marj henüz stabil değil)")
+            return
+
         logger.info("🔔 [ALARM] Periyodik alarm kontrolü başlıyor...")
         from services.alarm_service import check_all_alarms
         result = check_all_alarms()
-        total = result.get('total_alarms', 0)
-        checked = result.get('checked', 0)
-        triggered = result.get('triggered', 0)
-        failed = result.get('failed', 0)
+
+        total      = result.get('total_alarms', 0)
+        checked    = result.get('checked', 0)
+        triggered  = result.get('triggered', 0)
+        failed     = result.get('failed', 0)
         duration_ms = result.get('duration_ms', 0)
+
         if total == 0:
             logger.info("ℹ️ [ALARM] Kontrol edilecek alarm yok")
         else:
@@ -391,7 +410,9 @@ def alarm_check_job():
                 f"{triggered} tetiklendi, "
                 f"{failed} hata ({duration_ms:.2f}ms)"
             )
+
         set_cache(Config.CACHE_KEYS['alarm_last_check'], str(time.time()), ttl=0)
+
     except Exception as e:
         logger.error(f"❌ [ALARM] Kontrol hatası: {e}")
         raise
@@ -493,7 +514,7 @@ def publish_evening_news_job():
 
 def retry_morning_news_job():
     try:
-        shift_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
+        shift_key  = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
         shift_data = get_cache(shift_key)
         if shift_data and len(shift_data) > 0:
             logger.info("ℹ️ [SABAH RETRY] Sabah haberleri zaten mevcut, atlanıyor")
@@ -513,7 +534,7 @@ def retry_morning_news_job():
 
 def retry_evening_news_job():
     try:
-        shift_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
+        shift_key  = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
         shift_data = get_cache(shift_key)
         if shift_data and len(shift_data) > 0:
             logger.info("ℹ️ [AKŞAM RETRY] Akşam haberleri zaten mevcut, atlanıyor")
@@ -547,7 +568,7 @@ def push_notification_daily():
 
 def bayram_notification_job():
     try:
-        today = date.today()
+        today      = date.today()
         today_full = today.strftime("%Y-%m-%d")
         today_md   = today.strftime("%m-%d")
         title = None
@@ -603,7 +624,7 @@ def _retry_gold_margins_async(harem_html: str, gold_api_prices: dict):
         result = calculate_full_margins_with_gemini(harem_html, gold_api_prices)
         if result:
             margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
-            existing = get_cache(margin_key) or {}
+            existing   = get_cache(margin_key) or {}
             existing.update(result)
             set_cache(margin_key, existing, ttl=86400)
             logger.info(f"✅ [MARJ SAĞLIK] Altın retry başarılı! {len(result)} marj güncellendi.")
@@ -640,7 +661,7 @@ def check_and_refresh_margins():
         )
         from services.financial_service import fetch_from_v5
 
-        margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
+        margin_key      = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         current_margins = get_cache(margin_key) or {}
 
         missing_gold = [k for k in GOLD_MARGIN_KEYS if k not in current_margins]
@@ -653,18 +674,18 @@ def check_and_refresh_margins():
                 f"Gemini'den çekiliyor..."
             )
 
-            harem_html = fetch_harem_html()
+            harem_html      = fetch_harem_html()
             gold_api_prices = {}
 
             try:
                 api_data = fetch_from_v5()
                 if api_data and 'Rates' in api_data:
                     gold_api_prices = {
-                        'GRA': api_data['Rates'].get('GRA', {}).get('Selling', 0),
+                        'GRA':        api_data['Rates'].get('GRA', {}).get('Selling', 0),
                         'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Selling', 0),
                         'YARIMALTIN': api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
-                        'TAMALTIN': api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
-                        'GUMUS': api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
+                        'TAMALTIN':   api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
+                        'GUMUS':      api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
                     }
             except Exception as api_err:
                 logger.warning(f"⚠️ [MARJ SAĞLIK] API verisi alınamadı: {api_err}")
@@ -683,10 +704,10 @@ def check_and_refresh_margins():
                     )
                     return
                 else:
-                    last_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
-                    last_data = get_cache(last_key) or {}
+                    last_key   = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
+                    last_data  = get_cache(last_key) or {}
                     last_margins = last_data.get('margins', {})
-                    old_gold = {k: v for k, v in last_margins.items() if k in GOLD_MARGIN_KEYS}
+                    old_gold   = {k: v for k, v in last_margins.items() if k in GOLD_MARGIN_KEYS}
 
                     if old_gold:
                         current_margins.update(old_gold)
@@ -731,7 +752,7 @@ def check_and_refresh_margins():
             return
 
         last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
-        last_successful = get_cache(last_successful_key)
+        last_successful     = get_cache(last_successful_key)
 
         if not last_successful:
             logger.warning("⚠️ [MARJ SAĞLIK] Marj geçmişi yok, güncelleniyor...")
@@ -768,8 +789,8 @@ def start_scheduler():
         scheduler.add_listener(job_error_listener, EVENT_JOB_ERROR)
         logger.info("✅ Job Error Listener eklendi")
 
-        worker_interval = getattr(Config, 'UPDATE_INTERVAL', 60)
-        alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 10)
+        worker_interval        = getattr(Config, 'UPDATE_INTERVAL', 60)
+        alarm_interval_minutes = getattr(Config, 'ALARM_CHECK_INTERVAL', 15)
 
         scheduler.add_job(
             worker_job,
@@ -946,19 +967,25 @@ def start_scheduler():
             kasim_notification_job,
             trigger=CronTrigger(hour=9, minute=5),
             id='kasim_notification',
-            name='10 Kasım Atatürk\'ü Anma',
+            name="10 Kasım Atatürk'ü Anma",
             replace_existing=True,
             max_instances=1,
             coalesce=True
         )
 
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.0 - SANİTY CHECK)")
-        logger.info(f"   👷 Worker: Her {worker_interval} saniyede")
-        logger.info("   👮 Şef: Her 10 dakikada (+ Sanity Check)")
-        logger.info(f"   🔔 Alarm: Her {alarm_interval_minutes} dakikada")
-        logger.info("   📊 Rapor: Her gün 09:00")
-        logger.info("   🧹 Cleanup: Her gün 03:00")
+        logger.info("✅ Scheduler başlatıldı! (V6.1 - HAFTA SONU ALARM KORUMASI)")
+        logger.info(f"   👷 Worker:       Her {worker_interval} saniyede")
+        logger.info("   👮 Şef:          Her 10 dakikada (+ Sanity Check)")
+        logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (hafta sonu duraklatılır)")
+        logger.info("   📊 Rapor:        Her gün 09:00")
+        logger.info("   🧹 Cleanup:      Her gün 03:00")
+        logger.info("")
+        logger.info("   🔥 V6.1 HAFTA SONU ALARM KORUMASI:")
+        logger.info("   🔒 Alarm kontrolü Cuma 18:00 → Pazartesi 00:10 arası duraklatılır")
+        logger.info("   📸 Snapshot: Pazar 23:58 API başladığında snapshot henüz cuma kapanışı")
+        logger.info("   💰 Marj: Pazartesi 00:05'e kadar geçen haftanın marjı kullanılır")
+        logger.info("   ✅ Bu pencerede alarm tetiklenmez → kullanıcı yanıltıcı bildirim almaz")
         logger.info("")
         logger.info("   🔥 V6.0 OPTIMIZED TIMELINE:")
         logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
@@ -975,17 +1002,18 @@ def start_scheduler():
         logger.info("   🔄 15:00 → Akşam Haber Retry 2")
         logger.info("   🏥 Başlangıçtan 2dk sonra + Her 6 saatte → Marj Sağlık Kontrolü")
         logger.info("")
-        logger.info("   ✅ Altın marj eksik tespiti: AKTİF")
-        logger.info("   ✅ Otomatik Gemini retry (5dk): AKTİF")
-        logger.info("   ✅ Son bilinen marj fallback: AKTİF")
-        logger.info("   ✅ Sabit fallback marj: AKTİF")
-        logger.info("   ✅ Telegram bildirimleri: AKTİF")
-        logger.info("   ✅ CPU spike önleme: AKTİF")
-        logger.info("   ✅ Smooth margin: AKTİF")
-        logger.info("   ✅ Jeweler rebuild: OTOMATİK")
-        logger.info("   ✅ Sanity check: AKTİF")
-        logger.info("   ✅ Haber retry: AKTİF")
-        logger.info("   ✅ Hafta sonu marj koruması: AKTİF")
+        logger.info("   ✅ Hafta sonu alarm koruması:    AKTİF  ← YENİ V6.1")
+        logger.info("   ✅ Altın marj eksik tespiti:     AKTİF")
+        logger.info("   ✅ Otomatik Gemini retry (5dk):  AKTİF")
+        logger.info("   ✅ Son bilinen marj fallback:    AKTİF")
+        logger.info("   ✅ Sabit fallback marj:          AKTİF")
+        logger.info("   ✅ Telegram bildirimleri:        AKTİF")
+        logger.info("   ✅ CPU spike önleme:             AKTİF")
+        logger.info("   ✅ Smooth margin:                AKTİF")
+        logger.info("   ✅ Jeweler rebuild:              OTOMATİK")
+        logger.info("   ✅ Sanity check:                 AKTİF")
+        logger.info("   ✅ Haber retry:                  AKTİF")
+        logger.info("   ✅ Hafta sonu marj koruması:     AKTİF")
 
 
 def stop_scheduler():
@@ -1006,8 +1034,8 @@ def get_scheduler_status() -> Dict[str, Any]:
         jobs = []
         for job in scheduler.get_jobs():
             jobs.append({
-                'id': job.id,
-                'name': job.name,
+                'id':       job.id,
+                'name':     job.name,
                 'next_run': str(job.next_run_time) if job.next_run_time else None
             })
 
@@ -1017,30 +1045,31 @@ def get_scheduler_status() -> Dict[str, Any]:
         worker_interval  = getattr(Config, 'UPDATE_INTERVAL', 60)
 
         return {
-            'running': scheduler.running,
-            'jobs': jobs,
-            'last_worker_run': last_worker_run,
+            'running':          scheduler.running,
+            'jobs':             jobs,
+            'last_worker_run':  last_worker_run,
             'last_cleanup_run': last_cleanup_run,
             'last_alarm_check': last_alarm_check,
-            'worker_interval': worker_interval,
-            'alarm_interval': getattr(Config, 'ALARM_CHECK_INTERVAL', 10),
+            'worker_interval':  worker_interval,
+            'alarm_interval':   getattr(Config, 'ALARM_CHECK_INTERVAL', 15),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V6.0',
+            'version': 'V6.1',
             'optimizations': {
-                'cpu_spike_prevention':   True,
-                'smooth_margin':          True,
-                'jeweler_auto_rebuild':   True,
-                'snapshot_auto_update':   True,
-                'async_margin_bootstrap': True,
-                'margin_health_check':    True,
-                'gold_margin_auto_fix':   True,
-                'bayram_notifications':   True,
-                'kasim_anma':             True,
-                'redis_lock_renewal':     True,
-                'sanity_check':           True,
-                'news_retry':             True,
-                'weekend_margin_guard':   True,
+                'cpu_spike_prevention':    True,
+                'smooth_margin':           True,
+                'jeweler_auto_rebuild':    True,
+                'snapshot_auto_update':    True,
+                'async_margin_bootstrap':  True,
+                'margin_health_check':     True,
+                'gold_margin_auto_fix':    True,
+                'bayram_notifications':    True,
+                'kasim_anma':              True,
+                'redis_lock_renewal':      True,
+                'sanity_check':            True,
+                'news_retry':              True,
+                'weekend_margin_guard':    True,
+                'weekend_alarm_guard':     True,  # ← YENİ V6.1
             }
         }
 
