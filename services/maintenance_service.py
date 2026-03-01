@@ -59,6 +59,18 @@ def _is_weekend_now() -> bool:
     return is_weekend_closed(datetime.now(tz))
 
 
+def _is_weekend_alarm_now() -> bool:
+    """
+    Alarm kontrolü için hafta sonu penceresi.
+    Cuma 18:00 → Pazartesi 00:10 arası True döner.
+    financial_service.is_weekend_alarm_closed() kullanır.
+    """
+    import pytz
+    from services.financial_service import is_weekend_alarm_closed
+    tz = pytz.timezone('Europe/Istanbul')
+    return is_weekend_alarm_closed(datetime.now(tz))
+
+
 def _send_telegram(message: str, level: str = 'warning'):
     try:
         from utils.telegram_monitor import get_telegram_monitor
@@ -376,29 +388,31 @@ def alarm_check_job():
     """
     🔔 Periyodik fiyat alarm kontrolü.
 
-    🔒 Hafta sonu koruması:
-    Pazar 23:58'de API yeni veriyi getirmeye başlar ancak snapshot
-    hâlâ cuma kapanışına aittir. Marj güncellemesi ise pazartesi
-    00:05'te yapılır. Bu pencerede alarm tetiklenirse kullanıcı
-    yanıltıcı/gereksiz bildirim alır.
+    🔒 Hafta sonu koruması (V6.2):
+    Alarm kontrolü Cuma 18:00 → Pazartesi 00:10 arası tamamen duraklatılır.
 
-    Bu nedenle alarm kontrolü hafta sonu boyunca (Cuma 18:00 →
-    Pazartesi 00:10) duraklatılır. Pazartesi 00:10 sonrasında
-    hem snapshot hem marj güncel olacağından kontrol güvenle devam eder.
+    Neden Pazartesi 00:10?
+    - Pazar 23:58 → Worker başlar, API'den yeni fiyat gelir
+    - Pazartesi 00:00 → Snapshot alınır (cuma kapanışı baz alınır)
+    - Pazartesi 00:05 → Marj güncellenir, jeweler cache rebuild edilir
+    - Pazartesi 00:10 → Her şey stabil, alarm güvenle çalışabilir
+
+    Bu pencerede alarm tetiklenirse kullanıcı yanıltıcı/gereksiz
+    bildirim alır. is_weekend_alarm_closed() bu pencereyi yönetir.
     """
     try:
-        if _is_weekend_now():
-            logger.info("🔒 [ALARM] Hafta sonu - alarm kontrolü atlandı (fiyat/marj henüz stabil değil)")
+        if _is_weekend_alarm_now():
+            logger.info("🔒 [ALARM] Hafta sonu penceresi - alarm kontrolü atlandı (Cuma 18:00 → Pazartesi 00:10)")
             return
 
         logger.info("🔔 [ALARM] Periyodik alarm kontrolü başlıyor...")
         from services.alarm_service import check_all_alarms
         result = check_all_alarms()
 
-        total      = result.get('total_alarms', 0)
-        checked    = result.get('checked', 0)
-        triggered  = result.get('triggered', 0)
-        failed     = result.get('failed', 0)
+        total       = result.get('total_alarms', 0)
+        checked     = result.get('checked', 0)
+        triggered   = result.get('triggered', 0)
+        failed      = result.get('failed', 0)
         duration_ms = result.get('duration_ms', 0)
 
         if total == 0:
@@ -974,18 +988,19 @@ def start_scheduler():
         )
 
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.1 - HAFTA SONU ALARM KORUMASI)")
+        logger.info("✅ Scheduler başlatıldı! (V6.2 - GELİŞMİŞ HAFTA SONU ALARM KORUMASI)")
         logger.info(f"   👷 Worker:       Her {worker_interval} saniyede")
         logger.info("   👮 Şef:          Her 10 dakikada (+ Sanity Check)")
-        logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (hafta sonu duraklatılır)")
+        logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (Cuma 18:00 → Pazartesi 00:10 duraklatılır)")
         logger.info("   📊 Rapor:        Her gün 09:00")
         logger.info("   🧹 Cleanup:      Her gün 03:00")
         logger.info("")
-        logger.info("   🔥 V6.1 HAFTA SONU ALARM KORUMASI:")
+        logger.info("   🔥 V6.2 GELİŞMİŞ HAFTA SONU ALARM KORUMASI:")
         logger.info("   🔒 Alarm kontrolü Cuma 18:00 → Pazartesi 00:10 arası duraklatılır")
-        logger.info("   📸 Snapshot: Pazar 23:58 API başladığında snapshot henüz cuma kapanışı")
-        logger.info("   💰 Marj: Pazartesi 00:05'e kadar geçen haftanın marjı kullanılır")
-        logger.info("   ✅ Bu pencerede alarm tetiklenmez → kullanıcı yanıltıcı bildirim almaz")
+        logger.info("   📸 Pazar 23:58 → Worker başlar, API verisi gelir (alarm hâlâ kapalı)")
+        logger.info("   📸 Pazartesi 00:00 → Snapshot alınır")
+        logger.info("   💰 Pazartesi 00:05 → Marj güncellenir, jeweler rebuild yapılır")
+        logger.info("   ✅ Pazartesi 00:10 → Alarm kontrolü başlar (fiyat + marj stabil)")
         logger.info("")
         logger.info("   🔥 V6.0 OPTIMIZED TIMELINE:")
         logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
@@ -1002,18 +1017,18 @@ def start_scheduler():
         logger.info("   🔄 15:00 → Akşam Haber Retry 2")
         logger.info("   🏥 Başlangıçtan 2dk sonra + Her 6 saatte → Marj Sağlık Kontrolü")
         logger.info("")
-        logger.info("   ✅ Hafta sonu alarm koruması:    AKTİF  ← YENİ V6.1")
-        logger.info("   ✅ Altın marj eksik tespiti:     AKTİF")
-        logger.info("   ✅ Otomatik Gemini retry (5dk):  AKTİF")
-        logger.info("   ✅ Son bilinen marj fallback:    AKTİF")
-        logger.info("   ✅ Sabit fallback marj:          AKTİF")
-        logger.info("   ✅ Telegram bildirimleri:        AKTİF")
-        logger.info("   ✅ CPU spike önleme:             AKTİF")
-        logger.info("   ✅ Smooth margin:                AKTİF")
-        logger.info("   ✅ Jeweler rebuild:              OTOMATİK")
-        logger.info("   ✅ Sanity check:                 AKTİF")
-        logger.info("   ✅ Haber retry:                  AKTİF")
-        logger.info("   ✅ Hafta sonu marj koruması:     AKTİF")
+        logger.info("   ✅ Gelişmiş hafta sonu alarm koruması: AKTİF  ← YENİ V6.2")
+        logger.info("   ✅ Altın marj eksik tespiti:           AKTİF")
+        logger.info("   ✅ Otomatik Gemini retry (5dk):        AKTİF")
+        logger.info("   ✅ Son bilinen marj fallback:          AKTİF")
+        logger.info("   ✅ Sabit fallback marj:                AKTİF")
+        logger.info("   ✅ Telegram bildirimleri:              AKTİF")
+        logger.info("   ✅ CPU spike önleme:                   AKTİF")
+        logger.info("   ✅ Smooth margin:                      AKTİF")
+        logger.info("   ✅ Jeweler rebuild:                    OTOMATİK")
+        logger.info("   ✅ Sanity check:                       AKTİF")
+        logger.info("   ✅ Haber retry:                        AKTİF")
+        logger.info("   ✅ Hafta sonu marj koruması:           AKTİF")
 
 
 def stop_scheduler():
@@ -1054,7 +1069,7 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval':   getattr(Config, 'ALARM_CHECK_INTERVAL', 15),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V6.1',
+            'version': 'V6.2',
             'optimizations': {
                 'cpu_spike_prevention':    True,
                 'smooth_margin':           True,
@@ -1069,7 +1084,8 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'sanity_check':            True,
                 'news_retry':              True,
                 'weekend_margin_guard':    True,
-                'weekend_alarm_guard':     True,  # ← YENİ V6.1
+                'weekend_alarm_guard':     True,
+                'weekend_alarm_safe_window': 'Cuma 18:00 → Pazartesi 00:10',
             }
         }
 
