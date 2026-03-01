@@ -1,5 +1,4 @@
 from flask import Blueprint, jsonify, request
-from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import logging
 import time
@@ -14,12 +13,13 @@ logger = logging.getLogger(__name__)
 
 alarm_bp = Blueprint('alarm', __name__, url_prefix='/api/alarm')
 
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["100 per hour"],
-    storage_uri=Config.REDIS_URL or "memory://",
-    strategy="fixed-window"
-)
+# ======================================
+# 🔥 S15 FIX: Limiter general_routes'tan import edildi
+# Önceki sorun: Her Blueprint kendi Limiter instance'ını oluşturuyordu.
+# Gunicorn multi-worker'da memory:// storage worker başına izole sayıyor,
+# Redis-backed tek instance tüm worker'lar arasında paylaşılır.
+# ======================================
+from routes.general_routes import limiter
 
 
 # ─── Yardımcı fonksiyonlar ────────────────────────────────────────────────────
