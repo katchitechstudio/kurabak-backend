@@ -1,5 +1,5 @@
 """
-General Routes - API Endpoints V5.4 (TELEGRAM FEEDBACK FIX!) 🔥
+General Routes - API Endpoints V5.5 (S15 DDoS FIX!) 🔥
 ==================================================
 ✅ FCM Token Registration & Unregistration
 ✅ Feedback System (TELEGRAM BOT FIX V5.4!)
@@ -7,10 +7,13 @@ General Routes - API Endpoints V5.4 (TELEGRAM FEEDBACK FIX!) 🔥
 ✅ Regional Currency Grouping
 ✅ Banner Management (Event System)
 ✅ Metrics & Monitoring
-✅ Rate Limiting
 ✅ 💰 PRICE PROFILE SUPPORT (Raw / Jeweler)
 ✅ 🚦 MARKET STATUS ENDPOINT (V5.3)
 ✅ 📬 TELEGRAM FEEDBACK (V5.4 - TAMAMEN DÜZELTİLDİ!)
+✅ 🔥 S15 FIX (V5.5): Redis-backed tek Limiter instance
+   - get_real_ip() ile X-Forwarded-For doğru parse
+   - alarm_routes.py bu instance'ı import eder
+   - Gunicorn multi-worker'da tüm worker'lar aynı sayacı paylaşır
 
 V5.4.2 Changes (BUG FIX):
 - 🔥 Bug Fix: is_sunday_morning_closed → Pazar tüm gün kapalı
@@ -38,12 +41,49 @@ logger = logging.getLogger(__name__)
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
+# ======================================
+# 🔥 S15 FIX: Redis-backed paylaşımlı Limiter
+# ======================================
+
+def get_real_ip():
+    """
+    Render/proxy arkasında gerçek IP'yi al.
+    X-Forwarded-For spoof'a karşı ilk IP'yi alıyoruz —
+    Render bu başlığı güvenilir şekilde set ediyor.
+    """
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        ips = [ip.strip() for ip in forwarded_for.split(',')]
+        return ips[0]
+    return request.remote_addr or '0.0.0.0'
+
+
+def _get_limiter_storage() -> str:
+    """
+    Redis varsa Redis kullan → tüm Gunicorn worker'ları aynı sayacı paylaşır.
+    Redis yoksa memory:// → her worker bağımsız sayar (DDoS koruması zayıf),
+    Telegram'a uyarı gönderilir.
+    """
+    redis_url = Config.REDIS_URL
+    if redis_url:
+        return redis_url
+
+    logger.warning(
+        "⚠️ [RATE LIMIT] Redis yok! Rate limiter her Gunicorn worker'ında "
+        "bağımsız çalışıyor. DDoS koruması zayıf!"
+    )
+    return "memory://"
+
+
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=get_real_ip,
     default_limits=["200 per hour"],
-    storage_uri=Config.REDIS_URL or "memory://",
+    storage_uri=_get_limiter_storage(),
     strategy="fixed-window"
 )
+
+# ======================================
+
 
 def track_online_user():
     try:
@@ -361,28 +401,20 @@ def get_market_status():
         # 2️⃣ HAFTA SONU KONTROLÜ
         is_saturday      = now.weekday() == 5
         is_friday_closed = now.weekday() == 4 and now.hour >= Config.MARKET_CLOSE_FRIDAY_HOUR
-        
-        # 🔥 V5.4.2 FIX: Pazar tüm gün kapalı
-        # Eski: now.weekday() == 6 and now.hour < Config.WEEKEND_REOPEN_HOUR
-        # → WEEKEND_REOPEN_HOUR=0 olunca now.hour < 0 hiçbir zaman true olmuyordu!
-        # Yeni: Pazar günü her zaman kapalı (gece 00:00'da Pazartesi başlar zaten)
-        is_sunday = now.weekday() == 6
+        is_sunday        = now.weekday() == 6
         
         if is_saturday or is_friday_closed or is_sunday:
             
             if is_friday_closed:
-                # Cuma akşam → Pazartesi 00:00'da açılır
                 days_until_monday = (7 - now.weekday()) % 7
                 next_open = (now + timedelta(days=days_until_monday)).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
             elif is_saturday:
-                # Cumartesi → Pazartesi 00:00'da açılır
                 next_open = (now + timedelta(days=2)).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
             else:
-                # Pazar → Pazartesi 00:00'da açılır
                 next_open = (now + timedelta(days=1)).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
@@ -718,7 +750,7 @@ def get_metrics():
 
 @api_bp.errorhandler(429)
 def ratelimit_handler(e):
-    logger.warning(f"⚠️ Rate limit aşıldı: IP={request.remote_addr}")
+    logger.warning(f"⚠️ Rate limit aşıldı: IP={get_real_ip()}")
     
     return create_response(
         [],
