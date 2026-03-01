@@ -1,7 +1,3 @@
-"""
-Maintenance Service - PRODUCTION READY V6.0
-"""
-
 import logging
 import time
 import threading
@@ -54,6 +50,13 @@ SANITY_RULES = {
 SANITY_NOTIFY_COOLDOWN = 3600
 
 GOLD_MARGIN_KEYS = ['GRA', 'C22', 'YAR', 'TAM', 'ATA', 'AG', 'HAS', 'GUMUS']
+
+
+def _is_weekend_now() -> bool:
+    import pytz
+    from services.financial_service import is_weekend_closed
+    tz = pytz.timezone('Europe/Istanbul')
+    return is_weekend_closed(datetime.now(tz))
 
 
 def _send_telegram(message: str, level: str = 'warning'):
@@ -431,6 +434,10 @@ def snapshot_and_publish_morning_job():
 
 def update_margins_and_rebuild_job():
     try:
+        if _is_weekend_now():
+            logger.info("🔒 [MARJ + REBUILD] Hafta sonu - marj güncellemesi atlandı")
+            return
+
         logger.info("💰 [MARJ + REBUILD] Marj güncelleme ve rebuild başlıyor...")
         from utils.news_manager import update_dynamic_margins
         margin_success = update_dynamic_margins()
@@ -619,6 +626,10 @@ def _retry_gold_margins_async(harem_html: str, gold_api_prices: dict):
 
 def check_and_refresh_margins():
     try:
+        if _is_weekend_now():
+            logger.info("🔒 [MARJ SAĞLIK] Hafta sonu - kontrol atlandı")
+            return
+
         logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor...")
 
         from utils.news_manager import (
@@ -974,6 +985,7 @@ def start_scheduler():
         logger.info("   ✅ Jeweler rebuild: OTOMATİK")
         logger.info("   ✅ Sanity check: AKTİF")
         logger.info("   ✅ Haber retry: AKTİF")
+        logger.info("   ✅ Hafta sonu marj koruması: AKTİF")
 
 
 def stop_scheduler():
@@ -1028,6 +1040,7 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'redis_lock_renewal':     True,
                 'sanity_check':           True,
                 'news_retry':             True,
+                'weekend_margin_guard':   True,
             }
         }
 
