@@ -404,7 +404,7 @@ def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict, old_mar
         prompt = f"""
 SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatlarını kullanarak kuyumcu marjlarını hesapla.
 
-📊 API'DEN GELEN HAM FİYATLAR (Borsa/Toptan):
+📊 API'DEN GELEN HAM FİYATLAR (Borsa/Toptan ALIŞ fiyatı):
 {api_str}
 
 🌐 HAREM WEB SİTESİ HTML VERİSİ:
@@ -412,7 +412,7 @@ SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatların
 
 🎯 GÖREV:
 1. HTML tablosundan Harem'in SATIŞ fiyatlarını çıkar (tabloda İKİNCİ sütun = SATIŞ)
-2. Her ürün için TAM MARJ hesapla: ((Harem Satış - API) / API) × 100
+2. Her ürün için TAM MARJ hesapla: ((Harem Satış - API Alış) / API Alış) × 100
 3. ONDALIK NOKTA KULLAN (virgül değil!)
 4. NEGATİF marjları da hesapla
 
@@ -421,7 +421,7 @@ SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatların
 - İKİNCİ sütun = SATIŞ (yüksek değer) → BUNU KULLAN
 
 📐 GERÇEK ÖRNEK: Gram Altın
-- Harem Satış: 7598.23, API: 7466.45 → (131.78/7466.45)×100 = 1.77
+- Harem Satış: 7598.23, API Alış: 7466.45 → (131.78/7466.45)×100 = 1.77
 - Beklenen aralıklar: Gram Altın %1.0-8.0, Gümüş %2.0-12.0
 
 🎯 ÜRÜN EŞLEMELERİ:
@@ -589,12 +589,13 @@ def update_dynamic_margins() -> bool:
                 logger.error("❌ [HİBRİT MARJ] API verisi alınamadı!")
                 return False
 
+            # Buying kullanıyoruz: kuyumcu marjı = (Harem Satış - Borsa Alış) / Borsa Alış
             gold_api_prices = {
-                'GRA': api_data['Rates'].get('GRA', {}).get('Selling', 0),
-                'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Selling', 0),
-                'YARIMALTIN': api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
-                'TAMALTIN': api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
-                'GUMUS': api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
+                'GRA':         api_data['Rates'].get('GRA', {}).get('Buying', 0),
+                'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Buying', 0),
+                'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Buying', 0),
+                'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Buying', 0),
+                'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Buying', 0),
             }
 
             major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
