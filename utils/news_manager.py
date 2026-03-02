@@ -468,6 +468,10 @@ MARJ_AG: 4.50
                         value = float(parts[1].strip()) / 100
                         if _validate_margin(key, value):
                             margins[key] = value
+                            # AG ve GUMUS aynı varlık, ikisini birlikte güncelle
+                            if key == 'AG':
+                                margins['GUMUS'] = value
+                                logger.debug(f"🔄 [GEMİNİ MARJ] GUMUS = AG: {value:.4f}")
                         else:
                             # DEĞİŞİKLİK: Validation başarısız → sabit fallback değil,
                             # en son bilinen geçerli marjı koru.
