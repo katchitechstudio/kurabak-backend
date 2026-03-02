@@ -736,7 +736,7 @@ def check_and_refresh_margins():
         # Bunun altındaysa Gemini çalışmamış veya fallback'e düşmüş demek.
         _MIN_ACCEPTABLE = {
             'GRA':   0.015,  # %1.5 — normalde %2-5 arası
-            'C22':   0.008,  # %0.8
+            'C22':   0.010,  # %1.0
             'YAR':   0.008,  # %0.8
             'TAM':   0.005,  # %0.5
             'CUM':   0.008,  # %0.8
