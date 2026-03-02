@@ -720,7 +720,18 @@ def check_and_refresh_margins():
         margin_key      = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         current_margins = get_cache(margin_key) or {}
 
-        missing_gold = [k for k in GOLD_MARGIN_KEYS if k not in current_margins]
+        # DEĞİŞİKLİK: Sadece eksik değil, çok düşük (fallback'e düşmüş) marjları da yakala.
+        # GRA için %0.5 altı, GUMUS için %2 altı → Gemini çalışmamış demek.
+        _MIN_ACCEPTABLE = {
+            'GRA': 0.010, 'C22': 0.008, 'YAR': 0.008,
+            'TAM': 0.005, 'CUM': 0.008, 'ATA': 0.008,
+            'HAS': 0.004, 'AG':  0.020, 'GUMUS': 0.020,
+        }
+        missing_gold = [
+            k for k in GOLD_MARGIN_KEYS
+            if k not in current_margins
+            or current_margins.get(k, 0) < _MIN_ACCEPTABLE.get(k, 0.005)
+        ]
 
         if missing_gold:
             logger.warning(f"⚠️ [MARJ SAĞLIK] Eksik altın marjları: {missing_gold}!")
