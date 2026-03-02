@@ -702,12 +702,24 @@ def _retry_gold_margins_async(harem_html: str, gold_api_prices: dict):
 
 
 def check_and_refresh_margins():
+    """
+    🏥 Her marjı tek tek didik didik kontrol et.
+
+    Mantık:
+    1. Her altın/gümüş marjını MIN_ACCEPTABLE ile karşılaştır
+    2. Eksik VEYA düşük olanları tespit et
+    3. Sorunlu varsa Gemini'yi tetikle, rebuild yap
+    4. Sorunlu yoksa ama marjlar 24 saatten eskiyse toplu güncelle
+    5. Her şey tamam → sadece log at
+
+    Hafta sonu çalışmaz (piyasa kapalı).
+    """
     try:
         if _is_weekend_now():
             logger.info("🔒 [MARJ SAĞLIK] Hafta sonu - kontrol atlandı")
             return
 
-        logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor...")
+        logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor — her marj tek tek inceleniyor...")
 
         from utils.news_manager import (
             update_dynamic_margins,
@@ -720,24 +732,40 @@ def check_and_refresh_margins():
         margin_key      = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         current_margins = get_cache(margin_key) or {}
 
-        # DEĞİŞİKLİK: Sadece eksik değil, çok düşük (fallback'e düşmüş) marjları da yakala.
-        # GRA için %0.5 altı, GUMUS için %2 altı → Gemini çalışmamış demek.
+        # Her altın/gümüş marjı için minimum kabul edilebilir değer.
+        # Bunun altındaysa Gemini çalışmamış veya fallback'e düşmüş demek.
         _MIN_ACCEPTABLE = {
-            'GRA': 0.010, 'C22': 0.008, 'YAR': 0.008,
-            'TAM': 0.005, 'CUM': 0.008, 'ATA': 0.008,
-            'HAS': 0.004, 'AG':  0.020, 'GUMUS': 0.020,
+            'GRA':   0.015,  # %1.5 — normalde %2-5 arası
+            'C22':   0.008,  # %0.8
+            'YAR':   0.008,  # %0.8
+            'TAM':   0.005,  # %0.5
+            'CUM':   0.008,  # %0.8
+            'ATA':   0.008,  # %0.8
+            'HAS':   0.004,  # %0.4
+            'AG':    0.050,  # %5.0 — Harem gümüş spread geniş
+            'GUMUS': 0.050,  # %5.0
         }
-        missing_gold = [
-            k for k in GOLD_MARGIN_KEYS
-            if k not in current_margins
-            or current_margins.get(k, 0) < _MIN_ACCEPTABLE.get(k, 0.005)
-        ]
 
-        if missing_gold:
-            logger.warning(f"⚠️ [MARJ SAĞLIK] Eksik altın marjları: {missing_gold}!")
+        # Her marjı tek tek logla
+        sorunlu = []
+        for key in GOLD_MARGIN_KEYS:
+            deger = current_margins.get(key, None)
+            min_deger = _MIN_ACCEPTABLE.get(key, 0.005)
+
+            if deger is None:
+                logger.warning(f"  ❌ {key}: YOK (eksik)")
+                sorunlu.append(key)
+            elif deger < min_deger:
+                logger.warning(f"  ❌ {key}: {deger:.4f} (%{deger*100:.2f}) → çok düşük (min %{min_deger*100:.1f})")
+                sorunlu.append(key)
+            else:
+                logger.info(f"  ✅ {key}: {deger:.4f} (%{deger*100:.2f}) → OK")
+
+        if sorunlu:
+            logger.warning(f"⚠️ [MARJ SAĞLIK] {len(sorunlu)} sorunlu marj: {sorunlu} → Gemini tetikleniyor!")
             _send_telegram(
-                f"⚠️ *MARJ SAĞLIK: Altın Marjları Eksik!*\n\n"
-                f"Eksik: `{', '.join(missing_gold)}`\n\n"
+                f"⚠️ *MARJ SAĞLIK: Sorunlu Marjlar Tespit Edildi!*\n\n"
+                f"Sorunlu: `{', '.join(sorunlu)}`\n\n"
                 f"Gemini'den çekiliyor..."
             )
 
@@ -748,63 +776,71 @@ def check_and_refresh_margins():
                 api_data = fetch_from_v5()
                 if api_data and 'Rates' in api_data:
                     gold_api_prices = {
-                        'GRA':        api_data['Rates'].get('GRA', {}).get('Selling', 0),
+                        'GRA':         api_data['Rates'].get('GRA', {}).get('Selling', 0),
                         'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Selling', 0),
-                        'YARIMALTIN': api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
-                        'TAMALTIN':   api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
-                        'GUMUS':      api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
+                        'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
+                        'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
+                        'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
                     }
             except Exception as api_err:
                 logger.warning(f"⚠️ [MARJ SAĞLIK] API verisi alınamadı: {api_err}")
 
             if harem_html and gold_api_prices:
-                gold_result = calculate_full_margins_with_gemini(harem_html, gold_api_prices)
+                gold_result = calculate_full_margins_with_gemini(
+                    harem_html, gold_api_prices, old_margins=current_margins
+                )
                 if gold_result:
+                    # Sadece sorunlu olanları değil tüm Gemini sonuçlarını güncelle
                     current_margins.update(gold_result)
                     set_cache(margin_key, current_margins, ttl=86400)
-                    logger.info(f"✅ [MARJ SAĞLIK] Altın marjları güncellendi: {list(gold_result.keys())}")
+                    logger.info(f"✅ [MARJ SAĞLIK] Gemini başarılı! Güncellenen: {list(gold_result.keys())}")
                     _do_jeweler_rebuild()
                     _send_telegram(
-                        f"✅ *MARJ SAĞLIK: Altın Marjları Düzeltildi*\n\n"
+                        f"✅ *MARJ SAĞLIK: Marjlar Düzeltildi*\n\n"
                         f"Güncellenen: `{', '.join(gold_result.keys())}`\n"
                         f"Jeweler cache yeniden oluşturuldu."
                     )
                     return
+
+                # Gemini başarısız → son bilinen marjları dene
+                logger.warning("⚠️ [MARJ SAĞLIK] Gemini başarısız, son bilinen marjlar deneniyor...")
+                last_key     = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
+                last_data    = get_cache(last_key) or {}
+                last_margins = last_data.get('margins', {})
+                old_gold     = {
+                    k: v for k, v in last_margins.items()
+                    if k in GOLD_MARGIN_KEYS and v >= _MIN_ACCEPTABLE.get(k, 0.005)
+                }
+
+                if old_gold:
+                    current_margins.update(old_gold)
+                    set_cache(margin_key, current_margins, ttl=86400)
+                    logger.warning(f"⚠️ [MARJ SAĞLIK] Son bilinen marjlar kullanıldı: {list(old_gold.keys())}")
+                    _do_jeweler_rebuild()
+                    _send_telegram(
+                        "⚠️ *MARJ SAĞLIK: Gemini Başarısız*\n\n"
+                        "Son bilinen geçerli marjlar kullanılıyor.\n"
+                        "Jeweler cache yeniden oluşturuldu.\n"
+                        "5 dakika sonra tekrar denenecek..."
+                    )
                 else:
-                    last_key   = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
-                    last_data  = get_cache(last_key) or {}
-                    last_margins = last_data.get('margins', {})
-                    old_gold   = {k: v for k, v in last_margins.items() if k in GOLD_MARGIN_KEYS}
+                    current_margins.update(_FALLBACK_GOLD_MARGINS)
+                    set_cache(margin_key, current_margins, ttl=86400)
+                    logger.warning("⚠️ [MARJ SAĞLIK] Geçmiş marj da yok, fallback devreye girdi.")
+                    _do_jeweler_rebuild()
+                    _send_telegram(
+                        "🚨 *MARJ SAĞLIK: Fallback Devreye Girdi*\n\n"
+                        "Gemini ve geçmiş marj başarısız.\n"
+                        "Sabit fallback değerler kullanılıyor.\n"
+                        "5 dakika sonra tekrar denenecek..."
+                    )
 
-                    if old_gold:
-                        current_margins.update(old_gold)
-                        set_cache(margin_key, current_margins, ttl=86400)
-                        logger.warning("⚠️ [MARJ SAĞLIK] Gemini başarısız, son bilinen altın marjları kullanıldı.")
-                        _do_jeweler_rebuild()
-                        _send_telegram(
-                            "⚠️ *MARJ SAĞLIK: Gemini Başarısız*\n\n"
-                            "Son bilinen altın marjları kullanılıyor.\n"
-                            "Jeweler cache yeniden oluşturuldu.\n"
-                            "5 dakika sonra tekrar denenecek..."
-                        )
-                    else:
-                        current_margins.update(_FALLBACK_GOLD_MARGINS)
-                        set_cache(margin_key, current_margins, ttl=86400)
-                        logger.warning("⚠️ [MARJ SAĞLIK] Geçmiş marj da yok, fallback değerler kullanıldı.")
-                        _do_jeweler_rebuild()
-                        _send_telegram(
-                            "🚨 *MARJ SAĞLIK: Fallback Devreye Girdi*\n\n"
-                            "Gemini ve geçmiş marj başarısız.\n"
-                            "Sabit fallback altın marjları kullanılıyor.\n"
-                            "Jeweler cache yeniden oluşturuldu.\n"
-                            "5 dakika sonra tekrar denenecek..."
-                        )
+                threading.Thread(
+                    target=_retry_gold_margins_async,
+                    args=(harem_html, gold_api_prices),
+                    daemon=True
+                ).start()
 
-                    threading.Thread(
-                        target=_retry_gold_margins_async,
-                        args=(harem_html, gold_api_prices),
-                        daemon=True
-                    ).start()
             else:
                 logger.error("❌ [MARJ SAĞLIK] Harem HTML veya API verisi alınamadı!")
                 current_margins.update(_FALLBACK_GOLD_MARGINS)
@@ -818,11 +854,12 @@ def check_and_refresh_margins():
                 )
             return
 
+        # Tüm marjlar sağlıklı — ama 24 saatten eskiyse toplu güncelle
         last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
         last_successful     = get_cache(last_successful_key)
 
         if not last_successful:
-            logger.warning("⚠️ [MARJ SAĞLIK] Marj geçmişi yok, güncelleniyor...")
+            logger.warning("⚠️ [MARJ SAĞLIK] Marj geçmişi yok, toplu güncelleme yapılıyor...")
             update_dynamic_margins()
             return
 
@@ -830,14 +867,14 @@ def check_and_refresh_margins():
         hours_ago = (time.time() - timestamp) / 3600
 
         if hours_ago > 24:
-            logger.warning(f"⚠️ [MARJ SAĞLIK] Marjlar çok eski ({hours_ago:.1f} saat)! Güncelleniyor...")
+            logger.warning(f"⚠️ [MARJ SAĞLIK] Marjlar {hours_ago:.1f} saat önce güncellendi, yenileniyor...")
             success = update_dynamic_margins()
             if success:
-                logger.info("✅ [MARJ SAĞLIK] Marjlar başarıyla güncellendi!")
+                logger.info("✅ [MARJ SAĞLIK] Toplu güncelleme başarılı!")
             else:
-                logger.error("❌ [MARJ SAĞLIK] Güncelleme başarısız!")
+                logger.error("❌ [MARJ SAĞLIK] Toplu güncelleme başarısız!")
         else:
-            logger.info(f"✅ [MARJ SAĞLIK] Marjlar taze ({hours_ago:.1f} saat önce)")
+            logger.info(f"✅ [MARJ SAĞLIK] Tüm marjlar sağlıklı, {hours_ago:.1f} saat önce güncellendi.")
 
     except Exception as e:
         logger.error(f"❌ [MARJ SAĞLIK] Beklenmeyen hata: {e}")
