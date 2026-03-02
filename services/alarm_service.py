@@ -260,11 +260,40 @@ def get_all_alarm_keys_safe(redis_client) -> List[str]:
         return []
 
 
+def _is_monday_transition_window() -> bool:
+    """
+    DEĞİŞİKLİK: Pazartesi 00:00-00:15 geçiş penceresi kontrolü.
+
+    Bu pencerede piyasa Cuma'dan beri kapalıydı ve yeni fiyatlar
+    henüz oturdu. Snapshot 00:00'da alındı, marjlar 00:05'te
+    güncellendi. 00:15'e kadar PERCENT alarmlarını sustur.
+
+    PRICE alarmları (hedef fiyat) bu pencereden etkilenmez —
+    hedef fiyata gerçekten ulaşıldıysa bildirim gitmelidir.
+    """
+    now = datetime.now()
+    return (
+        now.weekday() == 0 and  # Pazartesi
+        now.hour == 0 and
+        now.minute < 15
+    )
+
+
 def check_all_alarms() -> Dict:
     start_time = time.time()
 
     try:
         logger.info("🔔 [ALARM] Periyodik kontrol başlatıldı...")
+
+        # DEĞİŞİKLİK: Pazartesi geçiş penceresi kontrolü.
+        # PRICE alarmları her zaman çalışır.
+        # PERCENT alarmları 00:00-00:15 arasında susturulur.
+        monday_transition = _is_monday_transition_window()
+        if monday_transition:
+            logger.info(
+                "⏸️ [ALARM] Pazartesi geçiş penceresi (00:00-00:15) — "
+                "PERCENT alarmları bu turda atlanacak, PRICE alarmları çalışacak"
+            )
 
         redis_client = get_redis_client()
         if not redis_client:
@@ -292,9 +321,10 @@ def check_all_alarms() -> Dict:
 
         logger.info(f"📊 [ALARM] {total_alarms} alarm kontrol ediliyor...")
 
-        checked_count  = 0
+        checked_count   = 0
         triggered_count = 0
-        failed_count   = 0
+        failed_count    = 0
+        skipped_count   = 0
 
         for key in alarm_keys:
             try:
@@ -310,6 +340,18 @@ def check_all_alarms() -> Dict:
                 alarm_obj = json.loads(alarm_data)
 
                 if not alarm_obj.get('is_active', True):
+                    continue
+
+                # DEĞİŞİKLİK: Pazartesi geçiş penceresinde PERCENT alarmlarını atla.
+                # PRICE alarmları (mutlak hedef fiyat) her zaman çalışır —
+                # kullanıcı o fiyata gerçekten ulaşıldığını bilmek ister.
+                alarm_mode = alarm_obj.get('alarm_mode', 'PRICE').upper()
+                if monday_transition and alarm_mode == 'PERCENT':
+                    skipped_count += 1
+                    logger.debug(
+                        f"⏸️ [ALARM] Pazartesi geçiş — PERCENT atlandı: "
+                        f"{alarm_obj.get('currency_code')} ({alarm_obj.get('currency_name')})"
+                    )
                     continue
 
                 checked_count += 1
@@ -375,6 +417,9 @@ def check_all_alarms() -> Dict:
             'failed': failed_count,
             'duration_ms': round(duration_ms, 2)
         }
+
+        if monday_transition and skipped_count > 0:
+            logger.info(f"⏸️ [ALARM] Pazartesi geçiş: {skipped_count} PERCENT alarm atlandı")
 
         if triggered_count > 0:
             logger.info(f"🔔 [ALARM] {triggered_count} alarm tetiklendi!")
