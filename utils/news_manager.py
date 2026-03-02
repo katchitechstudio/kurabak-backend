@@ -68,7 +68,7 @@ _FALLBACK_CURRENCY_MARGINS = {
 # Absürt değerlere (örn. %50+) karşı koruma hâlâ mevcut.
 _MARGIN_VALID_RANGES = {
     'GRA':   (0.008, 0.080),  # Gram Altın — Harem spread %8'e kadar çıkabiliyor
-    'C22':   (0.006, 0.060),  # Çeyrek Altın
+    'C22':   (0.010, 0.060),  # Çeyrek Altın
     'YAR':   (0.008, 0.060),  # Yarım Altın
     'TAM':   (0.004, 0.060),  # Tam Altın
     'CUM':   (0.008, 0.060),  # Cumhuriyet Altını
