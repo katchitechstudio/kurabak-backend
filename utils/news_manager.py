@@ -37,15 +37,18 @@ _last_logged_banner = None
 
 # ─── Sabit fallback marjlar — Gemini tamamen çökerse kuyumcu fiyatı ham olmaz ─
 _FALLBACK_GOLD_MARGINS = {
-    'GRA': 0.016,   # %1.6 - Harem gerçeği
-    'C22': 0.012,   # %1.2
-    'YAR': 0.019,   # %1.9
-    'TAM': 0.012,   # %1.2
-    'CUM': 0.015,   # %1.5 - Config ile uyumlu
-    'ATA': 0.017,   # %1.7
-    'HAS': 0.010,   # %1.0
-    'AG':  0.045,   # %4.5
-    'GUMUS': 0.045, # %4.5
+    # Harem gerçek spread ortalamaları — normal piyasa günleri baz alındı.
+    # Volatile günlerde (jeopolitik, hafta başı gap) Gemini daha yüksek marj
+    # hesaplar; bu değerler sadece Gemini tamamen çöktüğünde devreye girer.
+    'GRA':   0.030,  # %3.0 - Harem gram altın ortalama spread
+    'C22':   0.015,  # %1.5 - Çeyrek
+    'YAR':   0.015,  # %1.5 - Yarım
+    'TAM':   0.013,  # %1.3 - Tam
+    'CUM':   0.015,  # %1.5 - Cumhuriyet
+    'ATA':   0.017,  # %1.7 - Atatürk
+    'HAS':   0.010,  # %1.0 - Has altın (daha dar spread)
+    'AG':    0.080,  # %8.0 - Gümüş spread Harem'de geniş
+    'GUMUS': 0.080,  # %8.0
 }
 
 _FALLBACK_CURRENCY_MARGINS = {
