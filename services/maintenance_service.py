@@ -498,6 +498,48 @@ def update_margins_and_rebuild_job():
         raise
 
 
+# DEĞİŞİKLİK: Yeni job — Pazartesi 00:15 snapshot yenileme.
+#
+# Neden gerekli?
+# - 00:00'da alınan snapshot Cuma kapanış fiyatlarına dayanıyor.
+# - 00:05'te marjlar güncellendi, jeweler cache rebuild oldu.
+# - 00:10'da alarmlar açıldı (is_weekend_alarm_closed bitişi).
+# - 00:15'te snapshot'ı yeniliyoruz: artık hem ham fiyat hem marj
+#   Pazartesi açılışına göre. Bundan sonraki PERCENT alarm hesapları
+#   Cuma'ya değil, bu taze snapshot'a göre çalışır.
+#
+# PRICE alarmları (mutlak hedef fiyat) zaten doğru çalışıyor —
+# onlar için snapshot referansı değil hedef fiyat önemli.
+def monday_snapshot_refresh_job():
+    try:
+        now = datetime.now()
+        # Sadece Pazartesi çalış — CronTrigger zaten sağlıyor ama çift kontrol
+        if now.weekday() != 0:
+            return
+
+        logger.info("📸 [PAZARTESİ SNAPSHOT] Yeni hafta snapshot'ı yenileniyor...")
+        from services.financial_service import save_daily_snapshot
+        snapshot_success = save_daily_snapshot()
+
+        if snapshot_success:
+            logger.info(
+                "✅ [PAZARTESİ SNAPSHOT] Snapshot yenilendi. "
+                "PERCENT alarmlar artık Pazartesi açılış fiyatına göre çalışacak."
+            )
+            _send_telegram(
+                "📸 *PAZARTESİ SNAPSHOT YENİLENDİ*\n\n"
+                "00:15 yeni hafta snapshot'ı alındı.\n"
+                "Marj + ham fiyat artık stabil.\n"
+                "PERCENT alarmlar Pazartesi açılışına göre çalışıyor."
+            )
+        else:
+            logger.warning("⚠️ [PAZARTESİ SNAPSHOT] Snapshot alınamadı!")
+
+    except Exception as e:
+        logger.error(f"❌ [PAZARTESİ SNAPSHOT] Hata: {e}")
+        raise
+
+
 def prepare_evening_news_job():
     try:
         logger.info("🌆 [AKŞAM HAZIRLIK] Akşam haberlerini hazırlama başlıyor (Gemini)...")
@@ -886,6 +928,20 @@ def start_scheduler():
             coalesce=True
         )
 
+        # DEĞİŞİKLİK: Pazartesi 00:15 snapshot yenileme job'ı eklendi.
+        # Sadece Pazartesi çalışır (day_of_week='mon').
+        # 00:10'da alarmlar açıldı, 00:15'te snapshot taze fiyatla güncelleniyor.
+        # Böylece PERCENT alarmları Cuma'ya değil Pazartesi açılışına göre çalışır.
+        scheduler.add_job(
+            monday_snapshot_refresh_job,
+            trigger=CronTrigger(day_of_week='mon', hour=0, minute=15),
+            id='monday_snapshot_refresh',
+            name='Pazartesi Snapshot Yenile (Yeni Hafta Baseline)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+
         scheduler.add_job(
             retry_morning_news_job,
             trigger=CronTrigger(hour=1, minute=0),
@@ -988,24 +1044,26 @@ def start_scheduler():
         )
 
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.2 - GELİŞMİŞ HAFTA SONU ALARM KORUMASI)")
+        logger.info("✅ Scheduler başlatıldı! (V6.3 - PAZARTESİ SNAPSHOT YENİLEME)")
         logger.info(f"   👷 Worker:       Her {worker_interval} saniyede")
         logger.info("   👮 Şef:          Her 10 dakikada (+ Sanity Check)")
         logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (Cuma 18:00 → Pazartesi 00:10 duraklatılır)")
         logger.info("   📊 Rapor:        Her gün 09:00")
         logger.info("   🧹 Cleanup:      Her gün 03:00")
         logger.info("")
-        logger.info("   🔥 V6.2 GELİŞMİŞ HAFTA SONU ALARM KORUMASI:")
+        logger.info("   🔥 V6.3 PAZARTESİ GEÇİŞ YÖNETİMİ:")
         logger.info("   🔒 Alarm kontrolü Cuma 18:00 → Pazartesi 00:10 arası duraklatılır")
         logger.info("   📸 Pazar 23:58 → Worker başlar, API verisi gelir (alarm hâlâ kapalı)")
         logger.info("   📸 Pazartesi 00:00 → Snapshot alınır")
         logger.info("   💰 Pazartesi 00:05 → Marj güncellenir, jeweler rebuild yapılır")
         logger.info("   ✅ Pazartesi 00:10 → Alarm kontrolü başlar (fiyat + marj stabil)")
+        logger.info("   📸 Pazartesi 00:15 → Snapshot YENİLENİR (Pazartesi açılış baseline) ← YENİ V6.3")
         logger.info("")
-        logger.info("   🔥 V6.0 OPTIMIZED TIMELINE:")
+        logger.info("   🔥 OPTIMIZED TIMELINE:")
         logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
         logger.info("   📸 00:00 → Snapshot AL + Sabah YAYINLA")
         logger.info("   💰 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update")
+        logger.info("   📸 00:15 → [PAZ] Snapshot YENİLE (Pazartesi açılış baseline)")
         logger.info("   🔄 01:00 → Sabah Haber Retry 1")
         logger.info("   🔄 03:00 → Sabah Haber Retry 2")
         logger.info("   🎉 09:00 → Bayram Bildirimi (Dini & Milli)")
@@ -1017,7 +1075,8 @@ def start_scheduler():
         logger.info("   🔄 15:00 → Akşam Haber Retry 2")
         logger.info("   🏥 Başlangıçtan 2dk sonra + Her 6 saatte → Marj Sağlık Kontrolü")
         logger.info("")
-        logger.info("   ✅ Gelişmiş hafta sonu alarm koruması: AKTİF  ← YENİ V6.2")
+        logger.info("   ✅ Pazartesi snapshot yenileme:       AKTİF  ← YENİ V6.3")
+        logger.info("   ✅ Gelişmiş hafta sonu alarm koruması: AKTİF")
         logger.info("   ✅ Altın marj eksik tespiti:           AKTİF")
         logger.info("   ✅ Otomatik Gemini retry (5dk):        AKTİF")
         logger.info("   ✅ Son bilinen marj fallback:          AKTİF")
@@ -1069,23 +1128,25 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval':   getattr(Config, 'ALARM_CHECK_INTERVAL', 15),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V6.2',
+            'version': 'V6.3',
             'optimizations': {
-                'cpu_spike_prevention':    True,
-                'smooth_margin':           True,
-                'jeweler_auto_rebuild':    True,
-                'snapshot_auto_update':    True,
-                'async_margin_bootstrap':  True,
-                'margin_health_check':     True,
-                'gold_margin_auto_fix':    True,
-                'bayram_notifications':    True,
-                'kasim_anma':              True,
-                'redis_lock_renewal':      True,
-                'sanity_check':            True,
-                'news_retry':              True,
-                'weekend_margin_guard':    True,
-                'weekend_alarm_guard':     True,
-                'weekend_alarm_safe_window': 'Cuma 18:00 → Pazartesi 00:10',
+                'cpu_spike_prevention':       True,
+                'smooth_margin':              True,
+                'jeweler_auto_rebuild':       True,
+                'snapshot_auto_update':       True,
+                'async_margin_bootstrap':     True,
+                'margin_health_check':        True,
+                'gold_margin_auto_fix':       True,
+                'bayram_notifications':       True,
+                'kasim_anma':                 True,
+                'redis_lock_renewal':         True,
+                'sanity_check':               True,
+                'news_retry':                 True,
+                'weekend_margin_guard':       True,
+                'weekend_alarm_guard':        True,
+                'monday_snapshot_refresh':    True,
+                'weekend_alarm_safe_window':  'Cuma 18:00 → Pazartesi 00:10',
+                'monday_baseline_snapshot':   'Pazartesi 00:15',
             }
         }
 
