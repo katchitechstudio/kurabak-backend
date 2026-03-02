@@ -51,6 +51,20 @@ SANITY_NOTIFY_COOLDOWN = 3600
 
 GOLD_MARGIN_KEYS = ['GRA', 'C22', 'YAR', 'TAM', 'ATA', 'AG', 'HAS', 'GUMUS']
 
+_MIN_ACCEPTABLE = {
+    'GRA':   0.015,
+    'C22':   0.010,
+    'YAR':   0.008,
+    'TAM':   0.005,
+    'CUM':   0.008,
+    'ATA':   0.008,
+    'HAS':   0.004,
+    'AG':    0.050,
+    'GUMUS': 0.050,
+}
+
+_MAX_STEP_PER_CYCLE = 0.005
+
 
 def _is_weekend_now() -> bool:
     import pytz
@@ -60,11 +74,6 @@ def _is_weekend_now() -> bool:
 
 
 def _is_weekend_alarm_now() -> bool:
-    """
-    Alarm kontrolü için hafta sonu penceresi.
-    Cuma 18:00 → Pazartesi 00:10 arası True döner.
-    financial_service.is_weekend_alarm_closed() kullanır.
-    """
     import pytz
     from services.financial_service import is_weekend_alarm_closed
     tz = pytz.timezone('Europe/Istanbul')
@@ -385,21 +394,6 @@ def cleanup_old_backups():
 
 
 def alarm_check_job():
-    """
-    🔔 Periyodik fiyat alarm kontrolü.
-
-    🔒 Hafta sonu koruması (V6.2):
-    Alarm kontrolü Cuma 18:00 → Pazartesi 00:10 arası tamamen duraklatılır.
-
-    Neden Pazartesi 00:10?
-    - Pazar 23:58 → Worker başlar, API'den yeni fiyat gelir
-    - Pazartesi 00:00 → Snapshot alınır (cuma kapanışı baz alınır)
-    - Pazartesi 00:05 → Marj güncellenir, jeweler cache rebuild edilir
-    - Pazartesi 00:10 → Her şey stabil, alarm güvenle çalışabilir
-
-    Bu pencerede alarm tetiklenirse kullanıcı yanıltıcı/gereksiz
-    bildirim alır. is_weekend_alarm_closed() bu pencereyi yönetir.
-    """
     try:
         if _is_weekend_alarm_now():
             logger.info("🔒 [ALARM] Hafta sonu penceresi - alarm kontrolü atlandı (Cuma 18:00 → Pazartesi 00:10)")
@@ -467,53 +461,9 @@ def snapshot_and_publish_morning_job():
         raise
 
 
-def update_margins_and_rebuild_job():
-    try:
-        if _is_weekend_now():
-            logger.info("🔒 [MARJ + REBUILD] Hafta sonu - marj güncellemesi atlandı")
-            return
-
-        logger.info("💰 [MARJ + REBUILD] Marj güncelleme ve rebuild başlıyor...")
-        from utils.news_manager import update_dynamic_margins
-        margin_success = update_dynamic_margins()
-        if margin_success:
-            logger.info("✅ [MARJ + REBUILD] Dinamik marjlar güncellendi")
-            from services.financial_service import rebuild_jeweler_cache
-            rebuild_success = rebuild_jeweler_cache()
-            if rebuild_success:
-                logger.info("✅ [MARJ + REBUILD] Jeweler cache rebuild tamamlandı")
-            else:
-                logger.warning("⚠️ [MARJ + REBUILD] Jeweler cache rebuild başarısız")
-            from services.financial_service import update_jeweler_snapshot
-            update_success = update_jeweler_snapshot()
-            if update_success:
-                logger.info("✅ [MARJ + REBUILD] Jeweler snapshot güncellendi")
-            else:
-                logger.warning("⚠️ [MARJ + REBUILD] Jeweler snapshot güncellenemedi")
-        else:
-            logger.warning("⚠️ [MARJ + REBUILD] Marj güncellenemedi, fallback kullanılacak")
-        logger.info("✅ [MARJ + REBUILD] İşlem tamamlandı")
-    except Exception as e:
-        logger.error(f"❌ [MARJ + REBUILD] Hata: {e}")
-        raise
-
-
-# DEĞİŞİKLİK: Yeni job — Pazartesi 00:15 snapshot yenileme.
-#
-# Neden gerekli?
-# - 00:00'da alınan snapshot Cuma kapanış fiyatlarına dayanıyor.
-# - 00:05'te marjlar güncellendi, jeweler cache rebuild oldu.
-# - 00:10'da alarmlar açıldı (is_weekend_alarm_closed bitişi).
-# - 00:15'te snapshot'ı yeniliyoruz: artık hem ham fiyat hem marj
-#   Pazartesi açılışına göre. Bundan sonraki PERCENT alarm hesapları
-#   Cuma'ya değil, bu taze snapshot'a göre çalışır.
-#
-# PRICE alarmları (mutlak hedef fiyat) zaten doğru çalışıyor —
-# onlar için snapshot referansı değil hedef fiyat önemli.
 def monday_snapshot_refresh_job():
     try:
         now = datetime.now()
-        # Sadece Pazartesi çalış — CronTrigger zaten sağlıyor ama çift kontrol
         if now.weekday() != 0:
             return
 
@@ -667,91 +617,79 @@ def _do_jeweler_rebuild():
         from services.financial_service import rebuild_jeweler_cache, update_jeweler_snapshot
         rebuild_jeweler_cache()
         update_jeweler_snapshot()
-        logger.info("✅ [MARJ SAĞLIK] Jeweler cache rebuild tamamlandı")
+        logger.info("✅ [MARJ] Jeweler cache rebuild tamamlandı")
     except Exception as rb_err:
-        logger.error(f"❌ [MARJ SAĞLIK] Jeweler rebuild hatası: {rb_err}")
+        logger.error(f"❌ [MARJ] Jeweler rebuild hatası: {rb_err}")
+
+
+def _apply_gradual_margins(current_margins: dict, new_margins: dict) -> dict:
+    result = dict(current_margins)
+    for key, new_val in new_margins.items():
+        old_val = current_margins.get(key, new_val)
+        diff = new_val - old_val
+        if abs(diff) > _MAX_STEP_PER_CYCLE:
+            step = _MAX_STEP_PER_CYCLE if diff > 0 else -_MAX_STEP_PER_CYCLE
+            result[key] = round(old_val + step, 6)
+            logger.info(f"  📈 [KADEMELI] {key}: {old_val:.4f} → {result[key]:.4f} (hedef: {new_val:.4f})")
+        else:
+            result[key] = new_val
+    return result
 
 
 def _retry_gold_margins_async(harem_html: str, gold_api_prices: dict):
     try:
         time.sleep(300)
-        logger.info("🔄 [MARJ SAĞLIK] Altın retry başlıyor (5dk sonra)...")
+        logger.info("🔄 [MARJ] Altın retry başlıyor (5dk sonra)...")
         from utils.news_manager import calculate_full_margins_with_gemini
         result = calculate_full_margins_with_gemini(harem_html, gold_api_prices)
         if result:
             margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
             existing   = get_cache(margin_key) or {}
-            existing.update(result)
+            applied    = _apply_gradual_margins(existing, result)
+            existing.update(applied)
             set_cache(margin_key, existing, ttl=86400)
-            logger.info(f"✅ [MARJ SAĞLIK] Altın retry başarılı! {len(result)} marj güncellendi.")
+            logger.info(f"✅ [MARJ] Altın retry başarılı! {len(result)} marj güncellendi.")
             _do_jeweler_rebuild()
             _send_telegram(
-                f"✅ *MARJ SAĞLIK: Altın Retry Başarılı*\n\n"
-                f"{len(result)} altın/gümüş marjı güncellendi.\n"
+                f"✅ *MARJ: Altın Retry Başarılı*\n\n"
+                f"{len(result)} altın/gümüş marjı kademeli güncellendi.\n"
                 f"Jeweler cache yeniden oluşturuldu."
             )
         else:
-            logger.warning("⚠️ [MARJ SAĞLIK] Altın retry de başarısız, mevcut marj kalıyor.")
+            logger.warning("⚠️ [MARJ] Altın retry de başarısız, mevcut marj kalıyor.")
             _send_telegram(
-                "⚠️ *MARJ SAĞLIK: Altın Retry Başarısız*\n\n"
-                "Mevcut (eski veya fallback) marjlar kullanılmaya devam ediyor.\n"
-                "Bir sonraki sağlık kontrolünde tekrar denenecek."
+                "⚠️ *MARJ: Altın Retry Başarısız*\n\n"
+                "Mevcut marjlar kullanılmaya devam ediyor.\n"
+                "Bir sonraki 6 saatlik döngüde tekrar denenecek."
             )
     except Exception as e:
-        logger.error(f"❌ [MARJ SAĞLIK] Altın retry hatası: {e}")
+        logger.error(f"❌ [MARJ] Altın retry hatası: {e}")
 
 
 def check_and_refresh_margins():
-    """
-    🏥 Her marjı tek tek didik didik kontrol et.
-
-    Mantık:
-    1. Her altın/gümüş marjını MIN_ACCEPTABLE ile karşılaştır
-    2. Eksik VEYA düşük olanları tespit et
-    3. Sorunlu varsa Gemini'yi tetikle, rebuild yap
-    4. Sorunlu yoksa ama marjlar 24 saatten eskiyse toplu güncelle
-    5. Her şey tamam → sadece log at
-
-    Hafta sonu çalışmaz (piyasa kapalı).
-    """
     try:
         if _is_weekend_now():
-            logger.info("🔒 [MARJ SAĞLIK] Hafta sonu - kontrol atlandı")
+            logger.info("🔒 [MARJ] Hafta sonu - kontrol atlandı")
             return
 
-        logger.info("🏥 [MARJ SAĞLIK] Kontrol başlıyor — her marj tek tek inceleniyor...")
+        logger.info("🏥 [MARJ] 6 saatlik kontrol + güncelleme başlıyor...")
 
         from utils.news_manager import (
-            update_dynamic_margins,
             fetch_harem_html,
             calculate_full_margins_with_gemini,
-            _FALLBACK_GOLD_MARGINS
+            calculate_currency_margins_with_gemini,
+            fetch_ziraat_html,
+            _FALLBACK_GOLD_MARGINS,
         )
         from services.financial_service import fetch_from_v5
 
         margin_key      = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         current_margins = get_cache(margin_key) or {}
 
-        # Her altın/gümüş marjı için minimum kabul edilebilir değer.
-        # Bunun altındaysa Gemini çalışmamış veya fallback'e düşmüş demek.
-        _MIN_ACCEPTABLE = {
-            'GRA':   0.015,  # %1.5 — normalde %2-5 arası
-            'C22':   0.010,  # %1.0
-            'YAR':   0.008,  # %0.8
-            'TAM':   0.005,  # %0.5
-            'CUM':   0.008,  # %0.8
-            'ATA':   0.008,  # %0.8
-            'HAS':   0.004,  # %0.4
-            'AG':    0.050,  # %5.0 — Harem gümüş spread geniş
-            'GUMUS': 0.050,  # %5.0
-        }
-
-        # Her marjı tek tek logla
         sorunlu = []
         for key in GOLD_MARGIN_KEYS:
-            deger = current_margins.get(key, None)
+            deger     = current_margins.get(key, None)
             min_deger = _MIN_ACCEPTABLE.get(key, 0.005)
-
             if deger is None:
                 logger.warning(f"  ❌ {key}: YOK (eksik)")
                 sorunlu.append(key)
@@ -761,124 +699,152 @@ def check_and_refresh_margins():
             else:
                 logger.info(f"  ✅ {key}: {deger:.4f} (%{deger*100:.2f}) → OK")
 
+        harem_html = fetch_harem_html()
+        ziraat_html = fetch_ziraat_html()
+        gold_api_prices = {}
+        currency_api_prices = {}
+
+        try:
+            api_data = fetch_from_v5()
+            if api_data and 'Rates' in api_data:
+                gold_api_prices = {
+                    'GRA':         api_data['Rates'].get('GRA', {}).get('Selling', 0),
+                    'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Selling', 0),
+                    'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
+                    'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
+                    'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
+                }
+                major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
+                currency_api_prices = {
+                    code: api_data['Rates'].get(code, {}).get('Selling', 0)
+                    for code in major_currencies
+                }
+        except Exception as api_err:
+            logger.warning(f"⚠️ [MARJ] API verisi alınamadı: {api_err}")
+
         if sorunlu:
-            logger.warning(f"⚠️ [MARJ SAĞLIK] {len(sorunlu)} sorunlu marj: {sorunlu} → Gemini tetikleniyor!")
+            logger.warning(f"⚠️ [MARJ] {len(sorunlu)} sorunlu marj: {sorunlu} → acil Gemini tetikleniyor!")
             _send_telegram(
-                f"⚠️ *MARJ SAĞLIK: Sorunlu Marjlar Tespit Edildi!*\n\n"
+                f"⚠️ *MARJ: Sorunlu Marjlar Tespit Edildi!*\n\n"
                 f"Sorunlu: `{', '.join(sorunlu)}`\n\n"
                 f"Gemini'den çekiliyor..."
             )
-
-            harem_html      = fetch_harem_html()
-            gold_api_prices = {}
-
-            try:
-                api_data = fetch_from_v5()
-                if api_data and 'Rates' in api_data:
-                    gold_api_prices = {
-                        'GRA':         api_data['Rates'].get('GRA', {}).get('Selling', 0),
-                        'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Selling', 0),
-                        'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
-                        'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
-                        'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
-                    }
-            except Exception as api_err:
-                logger.warning(f"⚠️ [MARJ SAĞLIK] API verisi alınamadı: {api_err}")
 
             if harem_html and gold_api_prices:
                 gold_result = calculate_full_margins_with_gemini(
                     harem_html, gold_api_prices, old_margins=current_margins
                 )
                 if gold_result:
-                    # Sadece sorunlu olanları değil tüm Gemini sonuçlarını güncelle
-                    current_margins.update(gold_result)
+                    applied = _apply_gradual_margins(current_margins, gold_result)
+                    current_margins.update(applied)
                     set_cache(margin_key, current_margins, ttl=86400)
-                    logger.info(f"✅ [MARJ SAĞLIK] Gemini başarılı! Güncellenen: {list(gold_result.keys())}")
+                    _save_margin_update(current_margins)
+                    logger.info(f"✅ [MARJ] Acil güncelleme başarılı: {list(gold_result.keys())}")
                     _do_jeweler_rebuild()
                     _send_telegram(
-                        f"✅ *MARJ SAĞLIK: Marjlar Düzeltildi*\n\n"
+                        f"✅ *MARJ: Sorunlu Marjlar Düzeltildi*\n\n"
                         f"Güncellenen: `{', '.join(gold_result.keys())}`\n"
                         f"Jeweler cache yeniden oluşturuldu."
                     )
                     return
-
-                # Gemini başarısız → son bilinen marjları dene
-                logger.warning("⚠️ [MARJ SAĞLIK] Gemini başarısız, son bilinen marjlar deneniyor...")
-                last_key     = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
-                last_data    = get_cache(last_key) or {}
-                last_margins = last_data.get('margins', {})
-                old_gold     = {
-                    k: v for k, v in last_margins.items()
-                    if k in GOLD_MARGIN_KEYS and v >= _MIN_ACCEPTABLE.get(k, 0.005)
-                }
-
-                if old_gold:
-                    current_margins.update(old_gold)
-                    set_cache(margin_key, current_margins, ttl=86400)
-                    logger.warning(f"⚠️ [MARJ SAĞLIK] Son bilinen marjlar kullanıldı: {list(old_gold.keys())}")
-                    _do_jeweler_rebuild()
-                    _send_telegram(
-                        "⚠️ *MARJ SAĞLIK: Gemini Başarısız*\n\n"
-                        "Son bilinen geçerli marjlar kullanılıyor.\n"
-                        "Jeweler cache yeniden oluşturuldu.\n"
-                        "5 dakika sonra tekrar denenecek..."
-                    )
                 else:
-                    current_margins.update(_FALLBACK_GOLD_MARGINS)
-                    set_cache(margin_key, current_margins, ttl=86400)
-                    logger.warning("⚠️ [MARJ SAĞLIK] Geçmiş marj da yok, fallback devreye girdi.")
-                    _do_jeweler_rebuild()
-                    _send_telegram(
-                        "🚨 *MARJ SAĞLIK: Fallback Devreye Girdi*\n\n"
-                        "Gemini ve geçmiş marj başarısız.\n"
-                        "Sabit fallback değerler kullanılıyor.\n"
-                        "5 dakika sonra tekrar denenecek..."
-                    )
-
-                threading.Thread(
-                    target=_retry_gold_margins_async,
-                    args=(harem_html, gold_api_prices),
-                    daemon=True
-                ).start()
-
+                    last_key     = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
+                    last_data    = get_cache(last_key) or {}
+                    last_margins = last_data.get('margins', {})
+                    old_gold     = {
+                        k: v for k, v in last_margins.items()
+                        if k in GOLD_MARGIN_KEYS and v >= _MIN_ACCEPTABLE.get(k, 0.005)
+                    }
+                    if old_gold:
+                        current_margins.update(old_gold)
+                        set_cache(margin_key, current_margins, ttl=86400)
+                        logger.warning(f"⚠️ [MARJ] Son bilinen marjlar kullanıldı: {list(old_gold.keys())}")
+                        _do_jeweler_rebuild()
+                        _send_telegram(
+                            "⚠️ *MARJ: Gemini Başarısız*\n\n"
+                            "Son bilinen geçerli marjlar kullanılıyor.\n"
+                            "5 dakika sonra tekrar denenecek..."
+                        )
+                    else:
+                        current_margins.update(_FALLBACK_GOLD_MARGINS)
+                        set_cache(margin_key, current_margins, ttl=86400)
+                        logger.warning("⚠️ [MARJ] Fallback devreye girdi.")
+                        _do_jeweler_rebuild()
+                        _send_telegram(
+                            "🚨 *MARJ: Fallback Devreye Girdi*\n\n"
+                            "Gemini ve geçmiş marj başarısız.\n"
+                            "Sabit fallback değerler kullanılıyor.\n"
+                            "5 dakika sonra tekrar denenecek..."
+                        )
+                    threading.Thread(
+                        target=_retry_gold_margins_async,
+                        args=(harem_html, gold_api_prices),
+                        daemon=True
+                    ).start()
             else:
-                logger.error("❌ [MARJ SAĞLIK] Harem HTML veya API verisi alınamadı!")
+                logger.error("❌ [MARJ] Harem HTML veya API verisi alınamadı!")
                 current_margins.update(_FALLBACK_GOLD_MARGINS)
                 set_cache(margin_key, current_margins, ttl=86400)
                 _do_jeweler_rebuild()
                 _send_telegram(
-                    "🚨 *MARJ SAĞLIK: Kaynak Erişim Hatası*\n\n"
+                    "🚨 *MARJ: Kaynak Erişim Hatası*\n\n"
                     "Harem HTML veya API verisi alınamadı.\n"
-                    "Fallback marjlar kullanılıyor.\n"
-                    "Jeweler cache yeniden oluşturuldu."
+                    "Fallback marjlar kullanılıyor."
                 )
             return
 
-        # Tüm marjlar sağlıklı — ama 24 saatten eskiyse toplu güncelle
-        last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
-        last_successful     = get_cache(last_successful_key)
+        logger.info("✅ [MARJ] Tüm marjlar sağlıklı — rutin 6 saatlik güncelleme yapılıyor...")
 
-        if not last_successful:
-            logger.warning("⚠️ [MARJ SAĞLIK] Marj geçmişi yok, toplu güncelleme yapılıyor...")
-            update_dynamic_margins()
-            return
+        updated = False
 
-        timestamp = last_successful.get('timestamp', 0)
-        hours_ago = (time.time() - timestamp) / 3600
-
-        if hours_ago > 24:
-            logger.warning(f"⚠️ [MARJ SAĞLIK] Marjlar {hours_ago:.1f} saat önce güncellendi, yenileniyor...")
-            success = update_dynamic_margins()
-            if success:
-                logger.info("✅ [MARJ SAĞLIK] Toplu güncelleme başarılı!")
+        if harem_html and gold_api_prices:
+            gold_result = calculate_full_margins_with_gemini(
+                harem_html, gold_api_prices, old_margins=current_margins
+            )
+            if gold_result:
+                applied = _apply_gradual_margins(current_margins, gold_result)
+                current_margins.update(applied)
+                updated = True
+                logger.info(f"✅ [MARJ] Altın/Gümüş kademeli güncellendi: {list(gold_result.keys())}")
             else:
-                logger.error("❌ [MARJ SAĞLIK] Toplu güncelleme başarısız!")
+                logger.warning("⚠️ [MARJ] Rutin güncelleme: Gemini altın başarısız, mevcut marjlar korundu")
+
+        if ziraat_html and currency_api_prices:
+            currency_result = calculate_currency_margins_with_gemini(
+                ziraat_html, currency_api_prices, old_margins=current_margins
+            )
+            if currency_result:
+                applied_currency = _apply_gradual_margins(current_margins, currency_result)
+                current_margins.update(applied_currency)
+                updated = True
+                logger.info(f"✅ [MARJ] Döviz kademeli güncellendi: {list(currency_result.keys())}")
+            else:
+                logger.warning("⚠️ [MARJ] Rutin güncelleme: Gemini döviz başarısız, mevcut marjlar korundu")
+
+        exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
+        gold_static_margins = getattr(Config, 'STATIC_GOLD_MARGINS', {})
+        current_margins.update(exotic_margins)
+        current_margins.update(gold_static_margins)
+
+        if updated:
+            set_cache(margin_key, current_margins, ttl=86400)
+            _save_margin_update(current_margins)
+            _do_jeweler_rebuild()
+            logger.info("✅ [MARJ] 6 saatlik kademeli güncelleme tamamlandı, jeweler rebuild yapıldı")
         else:
-            logger.info(f"✅ [MARJ SAĞLIK] Tüm marjlar sağlıklı, {hours_ago:.1f} saat önce güncellendi.")
+            logger.info("ℹ️ [MARJ] Güncelleme yapılamadı, mevcut marjlar korunuyor")
 
     except Exception as e:
-        logger.error(f"❌ [MARJ SAĞLIK] Beklenmeyen hata: {e}")
+        logger.error(f"❌ [MARJ] Beklenmeyen hata: {e}")
         raise
+
+
+def _save_margin_update(margins: dict):
+    try:
+        update_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
+        set_cache(update_key, {'timestamp': time.time(), 'margins': margins}, ttl=0)
+    except Exception as e:
+        logger.warning(f"⚠️ [MARJ] margin_last_update kaydedilemedi: {e}")
 
 
 def start_scheduler():
@@ -967,20 +933,6 @@ def start_scheduler():
         )
 
         scheduler.add_job(
-            update_margins_and_rebuild_job,
-            trigger=CronTrigger(hour=0, minute=5),
-            id='margins_and_rebuild',
-            name='Marj Güncelle + Jeweler Rebuild',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True
-        )
-
-        # DEĞİŞİKLİK: Pazartesi 00:15 snapshot yenileme job'ı eklendi.
-        # Sadece Pazartesi çalışır (day_of_week='mon').
-        # 00:10'da alarmlar açıldı, 00:15'te snapshot taze fiyatla güncelleniyor.
-        # Böylece PERCENT alarmları Cuma'ya değil Pazartesi açılışına göre çalışır.
-        scheduler.add_job(
             monday_snapshot_refresh_job,
             trigger=CronTrigger(day_of_week='mon', hour=0, minute=15),
             id='monday_snapshot_refresh',
@@ -1064,7 +1016,7 @@ def start_scheduler():
             check_and_refresh_margins,
             trigger=IntervalTrigger(hours=6),
             id='margin_health_check',
-            name='Marj Sağlık Kontrolü',
+            name='Marj Sağlık + Kademeli Güncelleme (6 Saatte Bir)',
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -1092,50 +1044,51 @@ def start_scheduler():
         )
 
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.3 - PAZARTESİ SNAPSHOT YENİLEME)")
+        logger.info("✅ Scheduler başlatıldı! (V6.4 - KADEMELİ MARJ GÜNCELLEMESİ)")
         logger.info(f"   👷 Worker:       Her {worker_interval} saniyede")
         logger.info("   👮 Şef:          Her 10 dakikada (+ Sanity Check)")
         logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (Cuma 18:00 → Pazartesi 00:10 duraklatılır)")
         logger.info("   📊 Rapor:        Her gün 09:00")
         logger.info("   🧹 Cleanup:      Her gün 03:00")
         logger.info("")
-        logger.info("   🔥 V6.3 PAZARTESİ GEÇİŞ YÖNETİMİ:")
+        logger.info("   🔥 V6.4 MARJ SİSTEMİ:")
+        logger.info("   💰 Her 6 saatte bir → Hem sağlık kontrolü hem kademeli güncelleme")
+        logger.info("   📈 Kademeli adım:  Max %0.5 per döngü (alarm patlaması önlenir)")
+        logger.info("   🚫 00:05 marj job'ı kaldırıldı (6 saatlik döngü yeterli)")
+        logger.info("")
+        logger.info("   🔥 V6.4 PAZARTESİ GEÇİŞ YÖNETİMİ:")
         logger.info("   🔒 Alarm kontrolü Cuma 18:00 → Pazartesi 00:10 arası duraklatılır")
-        logger.info("   📸 Pazar 23:58 → Worker başlar, API verisi gelir (alarm hâlâ kapalı)")
+        logger.info("   📸 Pazar 23:58 → Worker başlar, API verisi gelir")
         logger.info("   📸 Pazartesi 00:00 → Snapshot alınır")
-        logger.info("   💰 Pazartesi 00:05 → Marj güncellenir, jeweler rebuild yapılır")
-        logger.info("   ✅ Pazartesi 00:10 → Alarm kontrolü başlar (fiyat + marj stabil)")
-        logger.info("   📸 Pazartesi 00:15 → Snapshot YENİLENİR (Pazartesi açılış baseline) ← YENİ V6.3")
+        logger.info("   ✅ Pazartesi 00:10 → Alarm kontrolü başlar")
+        logger.info("   📸 Pazartesi 00:15 → Snapshot YENİLENİR (Pazartesi açılış baseline)")
         logger.info("")
         logger.info("   🔥 OPTIMIZED TIMELINE:")
         logger.info("   🌙 23:55 → Sabah haberlerini HAZIRLA (Gemini)")
         logger.info("   📸 00:00 → Snapshot AL + Sabah YAYINLA")
-        logger.info("   💰 00:05 → Marj GÜNCELLE + Jeweler Rebuild + Snapshot Update")
-        logger.info("   📸 00:15 → [PAZ] Snapshot YENİLE (Pazartesi açılış baseline)")
         logger.info("   🔄 01:00 → Sabah Haber Retry 1")
         logger.info("   🔄 03:00 → Sabah Haber Retry 2")
-        logger.info("   🎉 09:00 → Bayram Bildirimi (Dini & Milli)")
+        logger.info("   🎉 09:00 → Bayram Bildirimi")
         logger.info("   🕯️ 09:05 → 10 Kasım Atatürk'ü Anma")
         logger.info("   🌆 11:55 → Akşam haberlerini HAZIRLA (Gemini)")
         logger.info("   📰 12:00 → Akşam YAYINLA")
         logger.info("   🔄 13:00 → Akşam Haber Retry 1")
         logger.info("   🔔 14:00 → Push Notification GÖNDER")
         logger.info("   🔄 15:00 → Akşam Haber Retry 2")
-        logger.info("   🏥 Başlangıçtan 2dk sonra + Her 6 saatte → Marj Sağlık Kontrolü")
+        logger.info("   💰 Her 6 saatte → Marj Sağlık + Kademeli Güncelleme")
         logger.info("")
-        logger.info("   ✅ Pazartesi snapshot yenileme:       AKTİF  ← YENİ V6.3")
-        logger.info("   ✅ Gelişmiş hafta sonu alarm koruması: AKTİF")
-        logger.info("   ✅ Altın marj eksik tespiti:           AKTİF")
-        logger.info("   ✅ Otomatik Gemini retry (5dk):        AKTİF")
-        logger.info("   ✅ Son bilinen marj fallback:          AKTİF")
-        logger.info("   ✅ Sabit fallback marj:                AKTİF")
-        logger.info("   ✅ Telegram bildirimleri:              AKTİF")
-        logger.info("   ✅ CPU spike önleme:                   AKTİF")
-        logger.info("   ✅ Smooth margin:                      AKTİF")
-        logger.info("   ✅ Jeweler rebuild:                    OTOMATİK")
-        logger.info("   ✅ Sanity check:                       AKTİF")
-        logger.info("   ✅ Haber retry:                        AKTİF")
-        logger.info("   ✅ Hafta sonu marj koruması:           AKTİF")
+        logger.info("   ✅ Kademeli marj geçişi:            AKTİF  ← YENİ V6.4")
+        logger.info("   ✅ 6 saatlik birleşik marj döngüsü: AKTİF  ← YENİ V6.4")
+        logger.info("   ✅ Pazartesi snapshot yenileme:     AKTİF")
+        logger.info("   ✅ Gelişmiş hafta sonu alarm koru.: AKTİF")
+        logger.info("   ✅ Otomatik Gemini retry (5dk):     AKTİF")
+        logger.info("   ✅ Son bilinen marj fallback:       AKTİF")
+        logger.info("   ✅ Sabit fallback marj:             AKTİF")
+        logger.info("   ✅ Telegram bildirimleri:           AKTİF")
+        logger.info("   ✅ Jeweler rebuild:                 OTOMATİK")
+        logger.info("   ✅ Sanity check:                    AKTİF")
+        logger.info("   ✅ Haber retry:                     AKTİF")
+        logger.info("   ✅ Hafta sonu marj koruması:        AKTİF")
 
 
 def stop_scheduler():
@@ -1176,10 +1129,11 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval':   getattr(Config, 'ALARM_CHECK_INTERVAL', 15),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V6.3',
+            'version': 'V6.4',
             'optimizations': {
                 'cpu_spike_prevention':       True,
-                'smooth_margin':              True,
+                'gradual_margin_transition':  True,
+                'six_hour_margin_cycle':      True,
                 'jeweler_auto_rebuild':       True,
                 'snapshot_auto_update':       True,
                 'async_margin_bootstrap':     True,
@@ -1195,6 +1149,7 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'monday_snapshot_refresh':    True,
                 'weekend_alarm_safe_window':  'Cuma 18:00 → Pazartesi 00:10',
                 'monday_baseline_snapshot':   'Pazartesi 00:15',
+                'margin_max_step_per_cycle':  _MAX_STEP_PER_CYCLE,
             }
         }
 
