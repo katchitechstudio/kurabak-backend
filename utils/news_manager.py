@@ -37,16 +37,13 @@ _last_logged_banner = None
 
 # ─── Sabit fallback marjlar — Gemini tamamen çökerse kuyumcu fiyatı ham olmaz ─
 _FALLBACK_GOLD_MARGINS = {
-    # Harem gerçek spread ortalamaları — normal piyasa günleri baz alındı.
-    # Volatile günlerde (jeopolitik, hafta başı gap) Gemini daha yüksek marj
-    # hesaplar; bu değerler sadece Gemini tamamen çöktüğünde devreye girer.
     'GRA':   0.030,  # %3.0 - Harem gram altın ortalama spread
-    'C22':   0.015,  # %1.5 - Çeyrek
+    'C22':   0.030,  # %3.0 - Çeyrek (GRA ile aynı, Gemini güvenilmez)
     'YAR':   0.015,  # %1.5 - Yarım
     'TAM':   0.013,  # %1.3 - Tam
     'CUM':   0.015,  # %1.5 - Cumhuriyet
     'ATA':   0.017,  # %1.7 - Atatürk
-    'HAS':   0.010,  # %1.0 - Has altın (daha dar spread)
+    'HAS':   0.010,  # %1.0 - Has altın
     'AG':    0.080,  # %8.0 - Gümüş spread Harem'de geniş
     'GUMUS': 0.080,  # %8.0
 }
@@ -64,18 +61,16 @@ _FALLBACK_CURRENCY_MARGINS = {
 }
 
 # ─── Validasyon aralıkları ────────────────────────────────────────────────────
-# DEĞİŞİKLİK: Üst sınırlar genişletildi — piyasa gerçeklerini yansıtacak şekilde.
-# Absürt değerlere (örn. %50+) karşı koruma hâlâ mevcut.
 _MARGIN_VALID_RANGES = {
-    'GRA':   (0.008, 0.080),  # Gram Altın — Harem spread %8'e kadar çıkabiliyor
-    'C22':   (0.010, 0.060),  # Çeyrek Altın
-    'YAR':   (0.008, 0.060),  # Yarım Altın
-    'TAM':   (0.004, 0.060),  # Tam Altın
-    'CUM':   (0.008, 0.060),  # Cumhuriyet Altını
-    'ATA':   (0.008, 0.060),  # Atatürk Altını
-    'HAS':   (0.004, 0.040),  # Has Altın
-    'AG':    (0.020, 0.120),  # Gram Gümüş — daha volatil
-    'GUMUS': (0.020, 0.120),  # Gümüş
+    'GRA':   (0.008, 0.080),
+    'C22':   (0.010, 0.060),
+    'YAR':   (0.008, 0.060),
+    'TAM':   (0.004, 0.060),
+    'CUM':   (0.008, 0.060),
+    'ATA':   (0.008, 0.060),
+    'HAS':   (0.004, 0.040),
+    'AG':    (0.020, 0.120),
+    'GUMUS': (0.020, 0.120),
     'USD':   (0.005, 0.025),
     'EUR':   (0.005, 0.025),
     'GBP':   (0.005, 0.025),
@@ -90,9 +85,8 @@ _MARGIN_VALID_RANGES = {
 }
 
 def _validate_margin(key: str, value: float) -> bool:
-    """Marj değerinin mantıklı aralıkta olup olmadığını kontrol et."""
     if key not in _MARGIN_VALID_RANGES:
-        return True  # Bilmediğimiz anahtarları geç
+        return True
     min_val, max_val = _MARGIN_VALID_RANGES[key]
     valid = min_val <= value <= max_val
     if not valid:
@@ -104,7 +98,6 @@ def _validate_margin(key: str, value: float) -> bool:
 
 
 def _get_config_fallback_margins() -> Dict[str, float]:
-    """Config'de varsa oradan al, yoksa sabit değerlere dön."""
     gold = getattr(Config, 'DEFAULT_GOLD_MARGINS', _FALLBACK_GOLD_MARGINS)
     currency = getattr(Config, 'DEFAULT_CURRENCY_MARGINS', _FALLBACK_CURRENCY_MARGINS)
     exotic = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
@@ -112,12 +105,6 @@ def _get_config_fallback_margins() -> Dict[str, float]:
 
 
 def _call_gemini_with_retry(model, prompt: str, label: str = "GEMİNİ") -> Optional[str]:
-    """
-    Gemini'yi çağır, hata alırsa:
-    - 1. retry: 5 dakika bekle
-    - 2. retry: 15 dakika bekle
-    Hepsi başarısız olursa None döner.
-    """
     delays = [300, 900]  # 5dk, 15dk
     for attempt in range(3):
         try:
@@ -403,8 +390,7 @@ def async_margin_bootstrap():
         with _margin_bootstrap_lock:
             _margin_bootstrap_in_progress = False
 
-# DEĞİŞİKLİK: old_margins parametresi eklendi.
-# Validation başarısız olunca sabit fallback'e değil, eski marja dönülüyor.
+
 def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict, old_margins: Dict = None) -> Optional[Dict]:
     try:
         if not GEMINI_API_KEY:
@@ -468,13 +454,10 @@ MARJ_AG: 4.50
                         value = float(parts[1].strip()) / 100
                         if _validate_margin(key, value):
                             margins[key] = value
-                            # AG ve GUMUS aynı varlık, ikisini birlikte güncelle
                             if key == 'AG':
                                 margins['GUMUS'] = value
                                 logger.debug(f"🔄 [GEMİNİ MARJ] GUMUS = AG: {value:.4f}")
                         else:
-                            # DEĞİŞİKLİK: Validation başarısız → sabit fallback değil,
-                            # en son bilinen geçerli marjı koru.
                             if old_margins and key in old_margins:
                                 margins[key] = old_margins[key]
                                 logger.warning(
@@ -491,6 +474,16 @@ MARJ_AG: 4.50
             logger.error("❌ [GEMİNİ MARJ] Parse edilemedi veya tümü reddedildi!")
             return None
 
+        # C22 FIX: Gemini çeyrek altını sürekli yanlış hesaplıyor (alış/satış karışıklığı).
+        # GRA doğru geliyorsa C22'yi GRA'dan türet — spread neredeyse aynı.
+        if 'GRA' in margins and margins.get('C22', 0) < 0.010:
+            old_c22 = margins.get('C22', 0)
+            margins['C22'] = margins['GRA']
+            logger.info(
+                f"🔄 [C22 FIX] C22 Gemini'den düşük geldi ({old_c22:.4f}), "
+                f"GRA'dan türetildi: {margins['GRA']:.4f}"
+            )
+
         logger.info(f"✅ [GEMİNİ] {len(margins)} ALTIN+GÜMÜŞ marjı hesaplandı")
         return margins
 
@@ -498,7 +491,7 @@ MARJ_AG: 4.50
         logger.error(f"❌ [GEMİNİ MARJ] Hata: {e}")
         return None
 
-# DEĞİŞİKLİK: old_margins parametresi eklendi — aynı mantık döviz marjları için de.
+
 def calculate_currency_margins_with_gemini(html_data: str, api_prices: Dict, old_margins: Dict = None) -> Optional[Dict]:
     try:
         if not GEMINI_API_KEY:
@@ -559,7 +552,6 @@ HİÇBİR AÇIKLAMA YAPMA!
                         if _validate_margin(key, value):
                             margins[key] = value
                         else:
-                            # DEĞİŞİKLİK: Validation başarısız → eski marjı koru.
                             if old_margins and key in old_margins:
                                 margins[key] = old_margins[key]
                                 logger.warning(
@@ -614,9 +606,6 @@ def update_dynamic_margins() -> bool:
             logger.error(f"❌ [HİBRİT MARJ] API çağrısı başarısız: {api_error}")
             return False
 
-        # DEĞİŞİKLİK: old_margins'ı ÖNCE al — validation fallback'i için Gemini
-        # fonksiyonlarına geçiriyoruz. Böylece reddedilen marjlar sabit fallback'e
-        # değil, en son bilinen geçerli değere döner.
         old_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')) or {}
 
         gold_silver_margins = {}
@@ -646,8 +635,7 @@ def update_dynamic_margins() -> bool:
             f"EXOTIC:{len(exotic_margins)} + GOLD:{len(gold_static_margins)})"
         )
 
-        # Mevcut marjları koru — sadece başarılı gelen marjları güncelle
-        smooth_margins = dict(old_margins)  # Önce mevcut marjları kopyala
+        smooth_margins = dict(old_margins)
         threshold = Config.MARGIN_SMOOTH_THRESHOLD
 
         for key, new_val in all_new_margins.items():
@@ -661,9 +649,6 @@ def update_dynamic_margins() -> bool:
             else:
                 smooth_margins[key] = new_val
 
-        # ─── FALLBACK KONTROLÜ ─────────────────────────────────────────────────
-        # Gemini'den hiç gelmeyen altın/gümüş marjlarını doldur.
-        # DEĞİŞİKLİK: Önce eski marjı dene, yoksa sabit fallback'e düş.
         fallback_applied = []
         for key, fallback_val in _FALLBACK_GOLD_MARGINS.items():
             if key not in smooth_margins or smooth_margins.get(key, 0) == 0:
@@ -679,7 +664,6 @@ def update_dynamic_margins() -> bool:
             logger.warning(f"⚠️ [FALLBACK] Eksik marjlar dolduruldu: {fallback_applied}")
         else:
             logger.info("✅ [FALLBACK] Tüm altın/gümüş marjları mevcut, fallback gerekmedi")
-        # ───────────────────────────────────────────────────────────────────────
 
         margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         set_cache(margin_key, smooth_margins, ttl=86400)
@@ -697,12 +681,10 @@ def update_dynamic_margins() -> bool:
 def get_dynamic_margins() -> Dict[str, float]:
     global _margin_bootstrap_in_progress
 
-    # 1. Önce aktif cache'e bak
     dynamic_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
     if dynamic_margins and isinstance(dynamic_margins, dict):
         return dynamic_margins
 
-    # 2. Son başarılı güncellemeye bak
     last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
     last_successful = get_cache(last_successful_key)
 
@@ -723,7 +705,6 @@ def get_dynamic_margins() -> Dict[str, float]:
 
             return margins
 
-    # 3. Gemini'yi bir kez dene
     logger.error("🔴 [HİBRİT MARJ BOOTSTRAP] Marj yok! Gemini çağrılıyor...")
     bootstrap_success = update_dynamic_margins()
 
@@ -733,7 +714,6 @@ def get_dynamic_margins() -> Dict[str, float]:
             logger.info("✅ [HİBRİT MARJ BOOTSTRAP] Başarılı!")
             return fresh_margins
 
-    # 4. Gemini de çöktü → sabit fallback marjlar (0.0 değil!)
     logger.critical(
         "💣 [HİBRİT MARJ BOOTSTRAP] Gemini başarısız! "
         "SABIT FALLBACK MARJLAR kullanılıyor — kuyumcu fiyatı ham fiyata EŞİTLENMEYECEK!"
