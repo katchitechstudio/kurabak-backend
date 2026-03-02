@@ -1068,7 +1068,7 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
             coalesce=True,
-            next_run_time=datetime.now() + timedelta(minutes=2)
+            next_run_time=datetime.now() + timedelta(hours=1)
         )
 
         scheduler.add_job(
