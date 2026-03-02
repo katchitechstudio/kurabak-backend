@@ -707,12 +707,13 @@ def check_and_refresh_margins():
         try:
             api_data = fetch_from_v5()
             if api_data and 'Rates' in api_data:
+                # Buying kullanıyoruz: kuyumcu marjı = (Harem Satış - Borsa Alış) / Borsa Alış
                 gold_api_prices = {
-                    'GRA':         api_data['Rates'].get('GRA', {}).get('Selling', 0),
-                    'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Selling', 0),
-                    'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Selling', 0),
-                    'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Selling', 0),
-                    'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Selling', 0),
+                    'GRA':         api_data['Rates'].get('GRA', {}).get('Buying', 0),
+                    'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Buying', 0),
+                    'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Buying', 0),
+                    'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Buying', 0),
+                    'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Buying', 0),
                 }
                 major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
                 currency_api_prices = {
