@@ -584,12 +584,17 @@ def update_dynamic_margins() -> bool:
                 logger.error("❌ [HİBRİT MARJ] API verisi alınamadı!")
                 return False
 
+            ata_buy = (
+                api_data['Rates'].get('ATA', {}).get('Buying', 0) or
+                api_data['Rates'].get('CUM', {}).get('Buying', 0) or 0
+            )
             gold_api_prices = {
-                'GRA':         api_data['Rates'].get('GRA', {}).get('Buying', 0),
-                'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Buying', 0),
-                'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Buying', 0),
-                'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Buying', 0),
-                'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Buying', 0),
+                'GRA': api_data['Rates'].get('GRA', {}).get('Buying', 0),
+                'C22': api_data['Rates'].get('CEYREKALTIN', {}).get('Buying', 0),
+                'YAR': api_data['Rates'].get('YARIMALTIN', {}).get('Buying', 0),
+                'TAM': api_data['Rates'].get('TAMALTIN', {}).get('Buying', 0),
+                'AG':  api_data['Rates'].get('GUMUS', {}).get('Buying', 0),
+                'ATA': ata_buy,
             }
 
             major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
