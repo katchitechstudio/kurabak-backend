@@ -1,33 +1,3 @@
-"""
-KuraBak Backend - ENTRY POINT V6.0 🚀
-=====================================================
-✅ V5 API: Tek ve güvenilir kaynak
-✅ GERİ BİLDİRİM SİSTEMİ: Telegram entegrasyonu ile kullanıcı mesajları
-✅ CİHAZ KAYIT SİSTEMİ: FCM Token yönetimi
-✅ BACKUP SYSTEM: 15 dakikalık otomatik yedekleme
-✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için uyarı
-✅ FIREBASE PUSH NOTIFICATIONS: Android bildirimler
-✅ ALARM SİSTEMİ: Redis tabanlı fiyat alarmları
-✅ SILENT START: Arka plan işlemleri sessizce başlar
-✅ İLK KONTROL: Şef uygulama açılır açılmaz sistemi kontrol ediyor
-✅ FIREBASE PATH FIX V5.2: Render Secret Files path düzeltmesi
-✅ GUNICORN WORKER FIX V5.3: Her worker'da Firebase başlatılır
-✅ ADMIN CLEANUP GÜVENLİĞİ V5.4: Token auth + güvenli temizlik
-✅ REDIS LOCK ZOMBIE FIX V5.5: Lock worker_job tarafından her 60s'de yenilenir.
-   Sunucu çökerse 120s içinde lock kalkar, yeni worker devralır.
-✅ CIRCULAR IMPORT FIX V5.6: renew_scheduler_lock utils/cache.py'e taşındı.
-   app.py → maintenance_service.py → app.py döngüsü kırıldı.
-✅ FIREBASE BEFORE LOCK FIX V5.7: Firebase lock kontrolünden ÖNCE başlatılıyor.
-   Lock'tan erken return olsa bile Firebase her zaman başlatılmış olur.
-   14:00 push notification artık çalışıyor.
-✅ ADMIN TRIGGER PUSH V5.8: Manuel push notification tetikleme endpoint'i eklendi.
-   X-Admin-Token ile korumalı.
-✅ TOKEN CHECK V5.9: /api/device/check-token endpoint'i eklendi.
-   Android açılışta token sunucuda kayıtlı mı kontrol eder, değilse yeniden kaydeder.
-✅ DEPLOY RACE CONDITION FIX V6.0: SET NX kullanımı + watch_scheduler_health eklendi.
-   Deploy sonrası eski lock kalıntısı varsa yeni instance scheduler'ı devralır.
-   Lock sahibi çökerse 150s içinde izleyen instance devralır.
-"""
 import os
 import logging
 import threading
@@ -46,20 +16,12 @@ from utils.notification_service import register_fcm_token, send_test_notificatio
 
 from utils.cache import renew_scheduler_lock, SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL
 
-# ======================================
-# LOGGING AYARLARI
-# ======================================
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger("KuraBak")
-
-# ======================================
-# 🔥 V5.2: FIREBASE SINGLETON
-# ======================================
 
 import firebase_admin
 from firebase_admin import credentials
@@ -117,7 +79,19 @@ def init_firebase():
             
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {'projectId': 'kurabak-f1950'})
-            
+
+            import requests as _requests
+            import google.auth.transport.requests as _google_transport
+            _session = _requests.Session()
+            _adapter = _requests.adapters.HTTPAdapter(
+                pool_connections=10,
+                pool_maxsize=100,
+                max_retries=3
+            )
+            _session.mount('https://', _adapter)
+            _google_transport.Request(session=_session)
+            logger.info("✅ [Firebase] HTTP connection pool genişletildi (maxsize=100)")
+
             _firebase_initialized = True
             logger.info("✅ [Firebase] Admin SDK başarıyla başlatıldı! (Singleton)")
             logger.info(f"   📁 Credentials: {cred_path}")
@@ -139,10 +113,6 @@ def init_firebase():
             logger.warning("   Push notification özellikleri devre dışı!")
             return False
 
-# ======================================
-# FLASK APP KURULUMU
-# ======================================
-
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -150,10 +120,6 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 app.register_blueprint(api_bp)
 app.register_blueprint(alarm_bp)
-
-# ======================================
-# 🔥 V5.1: TELEGRAM SINGLETON
-# ======================================
 
 _telegram_instance = None
 _telegram_lock = threading.Lock()
@@ -177,15 +143,7 @@ def get_telegram_instance():
             logger.error(f"❌ [Telegram] Instance oluşturma hatası: {e}")
             return None
 
-# ======================================
-# 🔥 V5.3: GUNICORN POST_FORK HOOK
-# ======================================
-
 def post_fork(server, worker):
-    """
-    Gunicorn her worker başlattığında çalışır.
-    Sadece Firebase başlatır — scheduler burada başlatılmaz.
-    """
     global _firebase_initialized
     
     logger.info(f"🔥 [Worker {worker.pid}] Post-fork hook tetiklendi")
@@ -202,20 +160,7 @@ def post_fork(server, worker):
         logger.error(f"❌ [Worker {worker.pid}] Firebase başlatma hatası: {e}")
 
 
-# ======================================
-# 🔥 V6.0: SCHEDULER SAĞLIK İZLEYİCİ
-# ======================================
-
 def _watch_scheduler_health(current_pid: int):
-    """
-    🔥 V6.0: Lock sahibi çökerse scheduler'ı devral.
-
-    Lock alan PID çöküp lock TTL dolunca bu fonksiyon
-    yeni lock alır ve scheduler'ı başlatır.
-
-    Kontrol aralığı: 30s
-    Devralma eşiği: Lock yoksa → hemen devral
-    """
     logger.info(f"👁️ [Watch] PID {current_pid} izleme modunda başladı")
 
     while True:
@@ -231,10 +176,8 @@ def _watch_scheduler_health(current_pid: int):
             existing = redis_client.get(SCHEDULER_LOCK_KEY)
 
             if existing:
-                # Lock hâlâ var, başkası çalışıyor
                 continue
 
-            # Lock yok → devral!
             acquired = redis_client.set(
                 SCHEDULER_LOCK_KEY, current_pid,
                 ex=SCHEDULER_LOCK_TTL,
@@ -259,35 +202,18 @@ def _watch_scheduler_health(current_pid: int):
                 start_scheduler()
                 renew_scheduler_lock()
                 logger.info(f"✅ [Watch] Scheduler devralındı! PID {current_pid} aktif.")
-                return  # İzleme bitti, scheduler bu PID'de çalışıyor
+                return
 
         except Exception as e:
             logger.error(f"❌ [Watch] İzleme hatası: {e}")
             time.sleep(30)
 
 
-# ======================================
-# ASENKRON BAŞLATICI
-# ======================================
-
 def background_initialization():
-    """
-    🔥 V6.0: SET NX ile race condition fix + watch_scheduler_health eklendi.
-
-    Önceki bug: Birden fazla Gunicorn worker aynı anda başlayınca
-    hepsi lock'u GET ile kontrol ediyordu. Aralarında race condition
-    oluşuyor, bazen hiçbiri scheduler'ı başlatmıyordu.
-
-    Yeni çözüm:
-    - SET NX (atomic) → sadece gerçekten yoksa yaz
-    - Lock alamayan worker → _watch_scheduler_health() ile izlemeye geçer
-    - Lock sahibi çökerse izleyen worker 30s içinde devralır
-    """
     from utils.cache import get_redis_client
 
     current_pid = os.getpid()
 
-    # 🔥 V5.7: Firebase ÖNCE başlat — lock kontrolünden BAĞIMSIZ
     logger.info(f"🔥 [Firebase] Lock kontrolünden önce başlatılıyor (PID: {current_pid})...")
     firebase_status = init_firebase()
     if firebase_status:
@@ -295,14 +221,12 @@ def background_initialization():
     else:
         logger.warning("⚠️ [Firebase] Push notification sistemi devre dışı!")
 
-    # 🔥 V6.0: SET NX ile atomik lock alma
     try:
         redis_client = get_redis_client()
 
         if not redis_client:
             logger.warning("⚠️ [Redis Lock] Redis bağlantısı yok, fallback mode — scheduler başlatılıyor")
         else:
-            # SET NX: sadece key yoksa yaz (atomik)
             acquired = redis_client.set(
                 SCHEDULER_LOCK_KEY, current_pid,
                 ex=SCHEDULER_LOCK_TTL,
@@ -310,13 +234,11 @@ def background_initialization():
             )
 
             if not acquired:
-                # Başka bir PID lock aldı
                 existing_pid = redis_client.get(SCHEDULER_LOCK_KEY)
                 logger.info(
                     f"⏭️ [Redis Lock] Lock PID {existing_pid} tarafından alındı. "
                     f"PID {current_pid} izleme moduna geçiyor..."
                 )
-                # Arka planda izle — lock sahibi çökerse devral
                 watch_thread = threading.Thread(
                     target=_watch_scheduler_health,
                     args=(current_pid,),
@@ -324,7 +246,7 @@ def background_initialization():
                     name=f"SchedulerWatch-{current_pid}"
                 )
                 watch_thread.start()
-                return  # Bu PID scheduler başlatmayacak
+                return
 
             logger.info(f"🔒 [Redis Lock] Lock alındı: PID {current_pid} ({SCHEDULER_LOCK_TTL}s TTL)")
 
@@ -335,21 +257,17 @@ def background_initialization():
     logger.info(f"⏳ [Arka Plan] Sistem servisleri başlatılıyor (PID: {current_pid})...")
     time.sleep(1)
 
-    # 1. Telegram
     telegram = get_telegram_instance()
     if telegram:
         logger.info("📱 [Telegram] Komut sistemi aktif!")
     else:
         logger.warning("⚠️ [Telegram] Komut sistemi devre dışı!")
 
-    # 2. Scheduler
     start_scheduler()
 
-    # Lock'u yenile — worker_job devam ettirir
     renew_scheduler_lock()
     logger.info(f"🔒 [Redis Lock] Scheduler başladı, ilk yenileme yapıldı (PID: {current_pid})")
 
-    # 3. İlk Şef Kontrolü
     logger.info("👮 [İlk Kontrol] Şef sistemi kontrol ediyor...")
 
     try:
@@ -366,10 +284,6 @@ def background_initialization():
         except Exception:
             pass
 
-# ======================================
-# PRODUCTION / LOCAL BAŞLATMA
-# ======================================
-
 is_render = os.environ.get("RENDER") is not None
 
 if is_render:
@@ -381,10 +295,6 @@ else:
         logger.info("💻 [Local] Development modda thread başlatılıyor...")
         init_thread = threading.Thread(target=background_initialization, daemon=True)
         init_thread.start()
-
-# ======================================
-# TEMEL ENDPOINTLER
-# ======================================
 
 @app.route('/', methods=['GET'])
 def index():
@@ -505,10 +415,6 @@ def register_device():
 
 @app.route('/api/device/check-token', methods=['POST'])
 def check_token():
-    """
-    🔥 V5.9: Token sunucuda kayıtlı mı kontrol et.
-    Android açılışta bunu sorgular — kayıtlı değilse /api/device/register'a gider.
-    """
     try:
         data  = request.json
         token = data.get('token') if data else None
@@ -534,10 +440,6 @@ def trigger_test_push():
 
 @app.route('/api/admin/trigger-push', methods=['POST'])
 def trigger_daily_push():
-    """
-    🔥 V5.8: Manuel push notification tetikleme.
-    X-Admin-Token header'ı ile korumalı.
-    """
     try:
         admin_token    = request.headers.get('X-Admin-Token') or (request.json.get('admin_token') if request.json else None)
         expected_token = os.environ.get('ADMIN_SECRET_TOKEN')
@@ -561,12 +463,6 @@ def trigger_daily_push():
 
 @app.route('/api/admin/cleanup', methods=['POST'])
 def emergency_cleanup():
-    """
-    🔥 DÜZELTİLDİ (V5.4):
-    - Admin token authentication eklendi
-    - flush_all_cache() → güvenli kurabak:* pattern silme
-    - FCM token seti ve alarm keyleri korunuyor
-    """
     try:
         admin_token    = request.headers.get('X-Admin-Token') or request.json.get('admin_token') if request.json else None
         expected_token = os.environ.get('ADMIN_SECRET_TOKEN')
@@ -631,10 +527,6 @@ def emergency_cleanup():
         logger.error(f"❌ [CLEANUP] Hata: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ======================================
-# TEMİZLİK (SHUTDOWN)
-# ======================================
-
 def on_exit():
     global _firebase_initialized, _telegram_instance
     
@@ -668,10 +560,6 @@ def on_exit():
     logger.info("✅ Temiz kapanış tamamlandı.")
 
 atexit.register(on_exit)
-
-# ======================================
-# BAŞLATMA
-# ======================================
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
