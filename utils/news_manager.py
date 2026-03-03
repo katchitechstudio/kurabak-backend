@@ -37,9 +37,9 @@ _last_logged_banner = None
 
 _FALLBACK_GOLD_MARGINS = {
     'GRA':   0.030,
-    'C22':   0.030,
-    'YAR':   0.030,
-    'TAM':   0.030,
+    'C22':   0.025,
+    'YAR':   0.025,
+    'TAM':   0.020,
     'CUM':   0.015,
     'ATA':   0.017,
     'HAS':   0.010,
@@ -48,10 +48,10 @@ _FALLBACK_GOLD_MARGINS = {
 }
 
 _FALLBACK_CURRENCY_MARGINS = {
-    'USD': 0.012, 'EUR': 0.012, 'GBP': 0.012,
-    'CHF': 0.012, 'CAD': 0.013, 'AUD': 0.013,
-    'SEK': 0.013, 'NOK': 0.014, 'SAR': 0.013,
-    'DKK': 0.013, 'JPY': 0.013,
+    'USD': 0.030, 'EUR': 0.030, 'GBP': 0.030,
+    'CHF': 0.030, 'CAD': 0.030, 'AUD': 0.030,
+    'SEK': 0.030, 'NOK': 0.030, 'SAR': 0.030,
+    'DKK': 0.030, 'JPY': 0.030,
     'RUB': 0.015, 'AED': 0.013, 'KWD': 0.013,
     'BHD': 0.013, 'OMR': 0.013, 'QAR': 0.013,
     'CNY': 0.014, 'PLN': 0.014, 'RON': 0.015,
@@ -59,6 +59,7 @@ _FALLBACK_CURRENCY_MARGINS = {
     'HUF': 0.015, 'BAM': 0.015,
 }
 
+# ✅ Ziraat gerçek spread'i %2-4 arası → validation genişletildi
 _MARGIN_VALID_RANGES = {
     'GRA':   (0.008, 0.080),
     'C22':   (0.010, 0.060),
@@ -69,17 +70,17 @@ _MARGIN_VALID_RANGES = {
     'HAS':   (0.004, 0.040),
     'AG':    (0.020, 0.120),
     'GUMUS': (0.020, 0.120),
-    'USD':   (0.005, 0.025),
-    'EUR':   (0.005, 0.025),
-    'GBP':   (0.005, 0.025),
-    'CHF':   (0.005, 0.025),
-    'CAD':   (0.005, 0.025),
-    'AUD':   (0.005, 0.025),
-    'SEK':   (0.005, 0.030),
-    'NOK':   (0.005, 0.030),
-    'SAR':   (0.005, 0.025),
-    'DKK':   (0.005, 0.025),
-    'JPY':   (0.005, 0.025),
+    'USD':   (0.005, 0.050),
+    'EUR':   (0.005, 0.050),
+    'GBP':   (0.005, 0.050),
+    'CHF':   (0.005, 0.050),
+    'CAD':   (0.005, 0.050),
+    'AUD':   (0.005, 0.050),
+    'SEK':   (0.005, 0.060),
+    'NOK':   (0.005, 0.060),
+    'SAR':   (0.005, 0.050),
+    'DKK':   (0.005, 0.050),
+    'JPY':   (0.005, 0.050),
 }
 
 def _validate_margin(key: str, value: float) -> bool:
@@ -90,7 +91,7 @@ def _validate_margin(key: str, value: float) -> bool:
     if not valid:
         logger.warning(
             f"⚠️ [VALİDASYON] {key} marjı geçersiz: {value:.4f} "
-            f"(beklenen: {min_val:.4f}-{max_val:.4f}) → REDDEDILDI"
+            f"(beklenen: {min_val:.4f}-{max_val:.4f}) → REDDEDİLDİ"
         )
     return valid
 
@@ -102,21 +103,22 @@ def _get_config_fallback_margins() -> Dict[str, float]:
     return {**_FALLBACK_GOLD_MARGINS, **_FALLBACK_CURRENCY_MARGINS, **gold, **currency, **exotic}
 
 
+# ✅ DEĞİŞTİ: 3 deneme → 2 deneme, bekleme 300/900s → 60s
 def _call_gemini_with_retry(model, prompt: str, label: str = "GEMİNİ") -> Optional[str]:
-    delays = [300, 900]
-    for attempt in range(3):
+    delays = [60]  # Sadece 1 kez 60s bekle, sonra bırak
+    for attempt in range(2):
         try:
             response = model.generate_content(prompt, request_options={"timeout": 120})
             result = response.text.strip()
             if result and len(result) > 10:
                 return result
-            logger.warning(f"⚠️ [{label} RETRY] Boş yanıt, deneme {attempt+1}/3")
+            logger.warning(f"⚠️ [{label} RETRY] Boş yanıt, deneme {attempt+1}/2")
         except Exception as e:
-            logger.warning(f"⚠️ [{label} RETRY] Hata: {e} (deneme {attempt+1}/3)")
+            logger.warning(f"⚠️ [{label} RETRY] Hata: {e} (deneme {attempt+1}/2)")
 
-        if attempt < 2:
-            wait = delays[attempt]
-            logger.info(f"⏳ [{label} RETRY] {wait}s ({wait//60}dk) bekleniyor...")
+        if attempt < 1:
+            wait = delays[0]
+            logger.info(f"⏳ [{label} RETRY] {wait}s bekleniyor...")
             time.sleep(wait)
 
     logger.error(f"❌ [{label} RETRY] Tüm denemeler başarısız!")
@@ -389,7 +391,14 @@ def async_margin_bootstrap():
             _margin_bootstrap_in_progress = False
 
 
-def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict, old_margins: Dict = None) -> Optional[Dict]:
+# ✅ YENİ: Altın + Döviz tek Gemini çağrısında birleştirildi (2 çağrı → 1 çağrı)
+def calculate_all_margins_with_gemini(
+    harem_html: str,
+    ziraat_html: str,
+    gold_api_prices: Dict,
+    currency_api_prices: Dict,
+    old_margins: Dict = None
+) -> Optional[Dict]:
     try:
         if not GEMINI_API_KEY:
             return None
@@ -397,48 +406,77 @@ def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict, old_mar
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-3-flash-preview')
 
-        api_str = "\n".join([f"- {k}: {v:.2f} ₺" for k, v in api_prices.items()])
+        gold_api_str = "\n".join([f"- {k}: {v:.2f} ₺" for k, v in gold_api_prices.items() if v])
+        major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
+        currency_api_str = "\n".join([
+            f"- {k}: {currency_api_prices.get(k, 0):.4f} ₺"
+            for k in major_currencies if currency_api_prices.get(k, 0)
+        ])
 
         prompt = f"""
-SEN BİR FİNANS ANALİSTİSİN. Harem Altın web sitesindeki SATIŞ fiyatlarını kullanarak kuyumcu marjlarını hesapla.
+SEN BİR FİNANS ANALİSTİSİN. İKİ GÖREV var: altın marjları + döviz marjları. Her ikisini TEK SEFERDE hesapla.
 
-📊 API'DEN GELEN HAM FİYATLAR (Borsa/Toptan ALIŞ fiyatı):
-{api_str}
+════════════════════════════════════════════
+GÖREV 1 — ALTIN/GÜMÜŞ MARJI (Harem Altın)
+════════════════════════════════════════════
 
-🌐 HAREM WEB SİTESİ HTML VERİSİ:
-{html_data[:3000]}
+📊 API HAM FİYATLAR — ALTIN (Borsa/Toptan ALIŞ):
+{gold_api_str}
 
-🎯 GÖREV:
-1. HTML tablosundan Harem'in SATIŞ fiyatlarını çıkar (tabloda İKİNCİ sütun = SATIŞ)
-2. Her ürün için TAM MARJ hesapla: ((Harem Satış - API Alış) / API Alış) × 100
-3. ONDALIK NOKTA KULLAN (virgül değil!)
-4. NEGATİF marjları da hesapla
+🌐 HAREM HTML:
+{harem_html[:2500]}
 
-⚠️ SÜTUN SIRASI ÇOK ÖNEMLİ:
-- BİRİNCİ sütun = ALIŞ (düşük değer) → KULLANMA
-- İKİNCİ sütun = SATIŞ (yüksek değer) → BUNU KULLAN
+🎯 HESAPLAMA: MARJ = ((Harem SATIŞ - API ALIŞ) / API ALIŞ) × 100
 
-📐 GERÇEK ÖRNEK: Gram Altın
-- Harem Satış: 7598.23, API Alış: 7466.45 → (131.78/7466.45)×100 = 1.77
-- Beklenen aralıklar: Gram Altın %1.0-8.0, Gümüş %2.0-12.0
+⚠️ SÜTUN SIRASI:
+- BİRİNCİ sütun = ALIŞ → KULLANMA
+- İKİNCİ sütun = SATIŞ → BUNU KULLAN
 
-🎯 ÜRÜN EŞLEMELERİ:
-GRA=Gram Altın, C22=Çeyrek, YAR=Yarım, TAM=Tam, ATA=Ata Altın, AG=Gram Gümüş
+📌 ÜRÜN EŞLEMELERİ: GRA=Gram Altın, C22=Çeyrek, YAR=Yarım, TAM=Tam, ATA=Ata Altın, AG=Gram Gümüş
+⚠️ HER ÜRÜN İÇİN AYRI HESAPLA! GRA marjını diğerlerine kopyalama.
+🔥 Beklenen aralıklar: Altınlar %0.5-8.0, Gümüş %2.0-12.0
 
-🔥 GÜMÜŞ: SADECE SATIŞ SÜTUNU kullan, beklenen marj %2-12 arası
+════════════════════════════════════════════
+GÖREV 2 — DÖVİZ MARJI (Ziraat Bankası)
+════════════════════════════════════════════
 
-📤 ÇIKTI (SADECE BU FORMAT, HİÇBİR AÇIKLAMA YAPMA):
+📊 API HAM FİYATLAR — DÖVİZ (Serbest Piyasa/Truncgil):
+{currency_api_str}
+
+🌐 ZİRAAT HTML:
+{ziraat_html[:2500]}
+
+🎯 HESAPLAMA: MARJ = ((Ziraat SATIŞ - API) / API) × 100
+
+⚠️ SADECE SATIŞ SÜTUNU! Ziraat'ın spreadi geniştir, marj %1.0-5.0 arası çıkabilir, normaldir.
+
+════════════════════════════════════════════
+ÇIKTI — SADECE BU FORMAT, AÇIKLAMA YAPMA!
+════════════════════════════════════════════
 MARJ_GRA: 1.77
 MARJ_C22: 1.50
 MARJ_YAR: 1.90
 MARJ_TAM: 1.20
 MARJ_ATA: 1.70
 MARJ_AG: 4.50
+MARJ_USD: 2.96
+MARJ_EUR: 2.43
+MARJ_GBP: 1.89
+MARJ_CHF: 2.53
+MARJ_CAD: 2.46
+MARJ_AUD: 2.00
+MARJ_SEK: 2.74
+MARJ_NOK: 2.37
+MARJ_SAR: 2.94
+MARJ_DKK: 2.56
+MARJ_JPY: 2.03
 """
 
-        result = _call_gemini_with_retry(model, prompt, label="GEMİNİ ALTIN MARJ")
+        logger.info("🤖 [GEMİNİ BİRLEŞİK MARJ] Altın + Döviz tek çağrıda hesaplanıyor...")
+
+        result = _call_gemini_with_retry(model, prompt, label="GEMİNİ BİRLEŞİK MARJ")
         if not result:
-            logger.error("❌ [GEMİNİ MARJ] Tüm denemeler başarısız!")
+            logger.error("❌ [GEMİNİ BİRLEŞİK MARJ] Tüm denemeler başarısız!")
             return None
 
         margins = {}
@@ -452,10 +490,12 @@ MARJ_AG: 4.50
                         value = float(parts[1].strip()) / 100
                         if _validate_margin(key, value):
                             margins[key] = value
+                            # AG → GUMUS kopyası
                             if key == 'AG':
                                 margins['GUMUS'] = value
                                 logger.debug(f"🔄 [GEMİNİ MARJ] GUMUS = AG: {value:.4f}")
                         else:
+                            # Validation başarısız → eski marjı koru
                             if old_margins and key in old_margins:
                                 margins[key] = old_margins[key]
                                 logger.warning(
@@ -466,109 +506,43 @@ MARJ_AG: 4.50
                         continue
 
         if rejected:
-            logger.warning(f"⚠️ [GEMİNİ MARJ] Reddedilen marjlar: {rejected} → fallback devreye girecek")
+            logger.warning(f"⚠️ [GEMİNİ BİRLEŞİK MARJ] Reddedilen marjlar: {rejected}")
 
         if not margins:
-            logger.error("❌ [GEMİNİ MARJ] Parse edilemedi veya tümü reddedildi!")
+            logger.error("❌ [GEMİNİ BİRLEŞİK MARJ] Parse edilemedi veya tümü reddedildi!")
             return None
 
-        if 'GRA' in margins:
-            margins['C22'] = margins['GRA']
-            margins['YAR'] = margins['GRA']
-            margins['TAM'] = margins['GRA']
-            margins['CUM'] = margins.get('CUM', margins['GRA'])
-            logger.info(f"🔄 [FIX] C22/YAR/TAM/CUM marjları GRA'dan türetildi: {margins['GRA']:.4f}")
+        # ✅ C22/YAR/TAM türetme KALDIRILDI — Gemini her birini ayrı hesaplıyor
+        # Sadece CUM Gemini'den gelmezse GRA'dan fallback yap
+        if 'GRA' in margins and 'CUM' not in margins:
+            margins['CUM'] = margins['GRA']
+            logger.info(f"🔄 [FIX] CUM marjı yok, GRA'dan türetildi: {margins['GRA']:.4f}")
 
-        logger.info(f"✅ [GEMİNİ] {len(margins)} ALTIN+GÜMÜŞ marjı hesaplandı")
+        gold_keys = [k for k in margins if k in ('GRA','C22','YAR','TAM','ATA','AG','GUMUS','CUM')]
+        currency_keys = [k for k in margins if k in major_currencies]
+        logger.info(
+            f"✅ [GEMİNİ BİRLEŞİK MARJ] Toplam {len(margins)} marj: "
+            f"ALTIN={gold_keys}, DÖVİZ={currency_keys}"
+        )
         return margins
 
     except Exception as e:
-        logger.error(f"❌ [GEMİNİ MARJ] Hata: {e}")
+        logger.error(f"❌ [GEMİNİ BİRLEŞİK MARJ] Hata: {e}")
         return None
+
+
+# Eski fonksiyonlar korunuyor (geriye dönük uyumluluk için)
+def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict, old_margins: Dict = None) -> Optional[Dict]:
+    """Geriye dönük uyumluluk — artık calculate_all_margins_with_gemini kullanılıyor."""
+    logger.warning("⚠️ [COMPAT] calculate_full_margins_with_gemini çağrıldı, yeni fonksiyona yönlendiriliyor.")
+    return None
 
 
 def calculate_currency_margins_with_gemini(html_data: str, api_prices: Dict, old_margins: Dict = None) -> Optional[Dict]:
-    try:
-        if not GEMINI_API_KEY:
-            return None
+    """Geriye dönük uyumluluk — artık calculate_all_margins_with_gemini kullanılıyor."""
+    logger.warning("⚠️ [COMPAT] calculate_currency_margins_with_gemini çağrıldı, yeni fonksiyona yönlendiriliyor.")
+    return None
 
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-
-        major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
-        api_str = "\n".join([
-            f"- {k}: {api_prices.get(k, 0):.4f} ₺"
-            for k in major_currencies if k in api_prices
-        ])
-
-        prompt = f"""
-SEN BİR FİNANS ANALİSTİSİN. Ziraat Bankası BANKA SATIŞ fiyatlarıyla döviz marjlarını hesapla.
-
-📊 API HAM FİYATLAR (TCMB/Resmi Kur):
-{api_str}
-
-🌐 ZİRAAT HTML:
-{html_data[:3000]}
-
-🎯 GÖREV: HTML'den "Banka Satış" (ikinci sütun) al → MARJ = ((Satış-API)/API)×100
-
-⚠️ SADECE İKİNCİ SÜTUN! Örnek: "43,3205  44,1969" → 44.1969 al. Marj %1.0-1.5 arası olmalı.
-
-📤 ÇIKTI (SADECE BU FORMAT):
-MARJ_USD: 1.24
-MARJ_EUR: 1.02
-MARJ_GBP: 0.98
-MARJ_CHF: 1.15
-MARJ_CAD: 1.28
-MARJ_AUD: 1.34
-MARJ_SEK: 1.19
-MARJ_NOK: 1.42
-MARJ_SAR: 1.26
-MARJ_DKK: 1.08
-MARJ_JPY: 1.31
-
-HİÇBİR AÇIKLAMA YAPMA!
-"""
-
-        result = _call_gemini_with_retry(model, prompt, label="GEMİNİ DÖVİZ MARJ")
-        if not result:
-            logger.error("❌ [GEMİNİ DÖVİZ] Tüm denemeler başarısız!")
-            return None
-
-        margins = {}
-        rejected = []
-        for line in result.split('\n'):
-            if 'MARJ_' in line:
-                parts = line.split(':')
-                if len(parts) == 2:
-                    key = parts[0].replace('MARJ_', '').strip()
-                    try:
-                        value = float(parts[1].strip()) / 100
-                        if _validate_margin(key, value):
-                            margins[key] = value
-                        else:
-                            if old_margins and key in old_margins:
-                                margins[key] = old_margins[key]
-                                logger.warning(
-                                    f"⚠️ [VALİDASYON] {key} → eski marj korundu: {old_margins[key]:.4f}"
-                                )
-                            rejected.append(key)
-                    except ValueError:
-                        continue
-
-        if rejected:
-            logger.warning(f"⚠️ [GEMİNİ DÖVİZ] Reddedilen marjlar: {rejected} → fallback devreye girecek")
-
-        if not margins:
-            logger.error("❌ [GEMİNİ DÖVİZ] Parse edilemedi veya tümü reddedildi!")
-            return None
-
-        logger.info(f"✅ [GEMİNİ] {len(margins)} MAJÖR DÖVİZ marjı hesaplandı")
-        return margins
-
-    except Exception as e:
-        logger.error(f"❌ [GEMİNİ DÖVİZ] Hata: {e}")
-        return None
 
 def update_dynamic_margins() -> bool:
     try:
@@ -608,22 +582,31 @@ def update_dynamic_margins() -> bool:
 
         old_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')) or {}
 
-        gold_silver_margins = {}
-        if harem_html:
-            gold_silver_margins = calculate_full_margins_with_gemini(
-                harem_html, gold_api_prices, old_margins=old_margins
+        # ✅ TEK Gemini çağrısı — hem altın hem döviz
+        all_computed_margins = {}
+        if harem_html and ziraat_html:
+            all_computed_margins = calculate_all_margins_with_gemini(
+                harem_html, ziraat_html,
+                gold_api_prices, currency_api_prices,
+                old_margins=old_margins
             ) or {}
-
-        major_currency_margins = {}
-        if ziraat_html:
-            major_currency_margins = calculate_currency_margins_with_gemini(
-                ziraat_html, currency_api_prices, old_margins=old_margins
+        elif harem_html:
+            logger.warning("⚠️ [HİBRİT MARJ] Ziraat HTML yok, sadece altın hesaplanacak")
+            # Sadece altın için eski yönteme dön
+            from services.news_manager import calculate_all_margins_with_gemini as _calc
+            all_computed_margins = calculate_all_margins_with_gemini(
+                harem_html, "", gold_api_prices, {}, old_margins=old_margins
+            ) or {}
+        elif ziraat_html:
+            logger.warning("⚠️ [HİBRİT MARJ] Harem HTML yok, sadece döviz hesaplanacak")
+            all_computed_margins = calculate_all_margins_with_gemini(
+                "", ziraat_html, {}, currency_api_prices, old_margins=old_margins
             ) or {}
 
         exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
         gold_static_margins = getattr(Config, 'STATIC_GOLD_MARGINS', {})
 
-        all_new_margins = {**gold_silver_margins, **major_currency_margins, **exotic_margins, **gold_static_margins}
+        all_new_margins = {**all_computed_margins, **exotic_margins, **gold_static_margins}
 
         if not all_new_margins:
             logger.warning("⚠️ [HİBRİT MARJ] Hiç marj hesaplanamadı!")
@@ -631,8 +614,7 @@ def update_dynamic_margins() -> bool:
 
         logger.info(
             f"📊 [HİBRİT MARJ] Toplam: {len(all_new_margins)} marj "
-            f"(ALTIN:{len(gold_silver_margins)} + DÖVİZ:{len(major_currency_margins)} + "
-            f"EXOTIC:{len(exotic_margins)} + GOLD:{len(gold_static_margins)})"
+            f"(BİRLEŞİK:{len(all_computed_margins)} + EXOTIC:{len(exotic_margins)} + GOLD_STATIC:{len(gold_static_margins)})"
         )
 
         smooth_margins = dict(old_margins)
@@ -663,7 +645,7 @@ def update_dynamic_margins() -> bool:
         if fallback_applied:
             logger.warning(f"⚠️ [FALLBACK] Eksik marjlar dolduruldu: {fallback_applied}")
         else:
-            logger.info("✅ [FALLBACK] Tüm altın/gümüş marjları mevcut, fallback gerekmedi")
+            logger.info("✅ [FALLBACK] Tüm marjlar mevcut, fallback gerekmedi")
 
         margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         set_cache(margin_key, smooth_margins, ttl=86400)
