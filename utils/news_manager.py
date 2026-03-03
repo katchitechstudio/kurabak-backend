@@ -592,8 +592,6 @@ def update_dynamic_margins() -> bool:
             ) or {}
         elif harem_html:
             logger.warning("⚠️ [HİBRİT MARJ] Ziraat HTML yok, sadece altın hesaplanacak")
-            # Sadece altın için eski yönteme dön
-            from services.news_manager import calculate_all_margins_with_gemini as _calc
             all_computed_margins = calculate_all_margins_with_gemini(
                 harem_html, "", gold_api_prices, {}, old_margins=old_margins
             ) or {}
