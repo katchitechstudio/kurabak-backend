@@ -35,17 +35,16 @@ _margin_bootstrap_in_progress = False
 
 _last_logged_banner = None
 
-# ─── Sabit fallback marjlar — Gemini tamamen çökerse kuyumcu fiyatı ham olmaz ─
 _FALLBACK_GOLD_MARGINS = {
-    'GRA':   0.030,  # %3.0 - Harem gram altın ortalama spread
-    'C22':   0.030,  # %3.0 - Çeyrek (GRA ile aynı, Gemini güvenilmez)
-    'YAR':   0.015,  # %1.5 - Yarım
-    'TAM':   0.013,  # %1.3 - Tam
-    'CUM':   0.015,  # %1.5 - Cumhuriyet
-    'ATA':   0.017,  # %1.7 - Atatürk
-    'HAS':   0.010,  # %1.0 - Has altın
-    'AG':    0.080,  # %8.0 - Gümüş spread Harem'de geniş
-    'GUMUS': 0.080,  # %8.0
+    'GRA':   0.030,
+    'C22':   0.030,
+    'YAR':   0.030,
+    'TAM':   0.030,
+    'CUM':   0.015,
+    'ATA':   0.017,
+    'HAS':   0.010,
+    'AG':    0.080,
+    'GUMUS': 0.080,
 }
 
 _FALLBACK_CURRENCY_MARGINS = {
@@ -60,7 +59,6 @@ _FALLBACK_CURRENCY_MARGINS = {
     'HUF': 0.015, 'BAM': 0.015,
 }
 
-# ─── Validasyon aralıkları ────────────────────────────────────────────────────
 _MARGIN_VALID_RANGES = {
     'GRA':   (0.008, 0.080),
     'C22':   (0.010, 0.060),
@@ -105,7 +103,7 @@ def _get_config_fallback_margins() -> Dict[str, float]:
 
 
 def _call_gemini_with_retry(model, prompt: str, label: str = "GEMİNİ") -> Optional[str]:
-    delays = [300, 900]  # 5dk, 15dk
+    delays = [300, 900]
     for attempt in range(3):
         try:
             response = model.generate_content(prompt, request_options={"timeout": 120})
@@ -474,15 +472,12 @@ MARJ_AG: 4.50
             logger.error("❌ [GEMİNİ MARJ] Parse edilemedi veya tümü reddedildi!")
             return None
 
-        # C22 FIX: Gemini çeyrek altını sürekli yanlış hesaplıyor (alış/satış karışıklığı).
-        # GRA doğru geliyorsa C22'yi GRA'dan türet — spread neredeyse aynı.
-        if 'GRA' in margins and margins.get('C22', 0) < 0.010:
-            old_c22 = margins.get('C22', 0)
+        if 'GRA' in margins:
             margins['C22'] = margins['GRA']
-            logger.info(
-                f"🔄 [C22 FIX] C22 Gemini'den düşük geldi ({old_c22:.4f}), "
-                f"GRA'dan türetildi: {margins['GRA']:.4f}"
-            )
+            margins['YAR'] = margins['GRA']
+            margins['TAM'] = margins['GRA']
+            margins['CUM'] = margins.get('CUM', margins['GRA'])
+            logger.info(f"🔄 [FIX] C22/YAR/TAM/CUM marjları GRA'dan türetildi: {margins['GRA']:.4f}")
 
         logger.info(f"✅ [GEMİNİ] {len(margins)} ALTIN+GÜMÜŞ marjı hesaplandı")
         return margins
@@ -589,7 +584,6 @@ def update_dynamic_margins() -> bool:
                 logger.error("❌ [HİBRİT MARJ] API verisi alınamadı!")
                 return False
 
-            # Buying kullanıyoruz: kuyumcu marjı = (Harem Satış - Borsa Alış) / Borsa Alış
             gold_api_prices = {
                 'GRA':         api_data['Rates'].get('GRA', {}).get('Buying', 0),
                 'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Buying', 0),
