@@ -59,8 +59,8 @@ _MIN_ACCEPTABLE = {
     'CUM':   0.008,
     'ATA':   0.008,
     'HAS':   0.004,
-    'AG':    0.050,
-    'GUMUS': 0.050,
+    'AG':    0.040,
+    'GUMUS': 0.040,
 }
 
 _MAX_STEP_PER_CYCLE = 0.005
