@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_API_KEY_MARGIN = os.getenv('GEMINI_API_KEY_MARGIN', GEMINI_API_KEY)  # 🔥 Marj için ayrı key
 
 _bootstrap_lock = threading.Lock()
 _bootstrap_in_progress = {
@@ -270,6 +271,7 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         if not GEMINI_API_KEY or not news_list:
             return [], None
 
+        # 🔥 Haberler için ana key kullanılır
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-3-flash-preview')
 
@@ -541,10 +543,11 @@ def calculate_all_margins_with_gemini(
     old_margins: Dict = None
 ) -> Optional[Dict]:
     try:
-        if not GEMINI_API_KEY:
+        if not GEMINI_API_KEY_MARGIN:
             return None
 
-        genai.configure(api_key=GEMINI_API_KEY)
+        # 🔥 Marj hesaplama için ayrı key kullanılır
+        genai.configure(api_key=GEMINI_API_KEY_MARGIN)
         model = genai.GenerativeModel('gemini-3-flash-preview')
 
         gold_api_str = "\n".join([f"- {k}: {v:.2f} ₺" for k, v in gold_api_prices.items() if v])
