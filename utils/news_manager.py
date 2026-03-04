@@ -59,7 +59,6 @@ _FALLBACK_CURRENCY_MARGINS = {
     'HUF': 0.015, 'BAM': 0.015,
 }
 
-# ✅ Ziraat gerçek spread'i %2-4 arası → validation genişletildi
 _MARGIN_VALID_RANGES = {
     'GRA':   (0.008, 0.080),
     'C22':   (0.010, 0.060),
@@ -83,6 +82,36 @@ _MARGIN_VALID_RANGES = {
     'JPY':   (0.005, 0.050),
 }
 
+_HAREM_PRODUCT_MAP = {
+    'gram altın':   'GRA',
+    'gramaltin':    'GRA',
+    'çeyrek altın': 'C22',
+    'ceyrek altin': 'C22',
+    'yarım altın':  'YAR',
+    'yarim altin':  'YAR',
+    'tam altın':    'TAM',
+    'tam altin':    'TAM',
+    'ata altın':    'ATA',
+    'ata altin':    'ATA',
+    'gram gümüş':   'AG',
+    'gram gumus':   'AG',
+}
+
+_ZIRAAT_CURRENCY_MAP = {
+    'abd dolari': 'USD', 'usd': 'USD', 'dolar': 'USD',
+    'euro':       'EUR', 'eur': 'EUR',
+    'ingiliz sterlini': 'GBP', 'gbp': 'GBP', 'sterlin': 'GBP',
+    'isviçre frangı': 'CHF', 'chf': 'CHF', 'franc': 'CHF',
+    'kanada dolari': 'CAD', 'cad': 'CAD',
+    'avustralya dolari': 'AUD', 'aud': 'AUD',
+    'isveç kronasi': 'SEK', 'sek': 'SEK',
+    'norveç kronasi': 'NOK', 'nok': 'NOK',
+    'suudi arabistan riyali': 'SAR', 'sar': 'SAR',
+    'danimarka kronasi': 'DKK', 'dkk': 'DKK',
+    'japon yeni': 'JPY', 'jpy': 'JPY',
+}
+
+
 def _validate_margin(key: str, value: float) -> bool:
     if key not in _MARGIN_VALID_RANGES:
         return True
@@ -103,9 +132,8 @@ def _get_config_fallback_margins() -> Dict[str, float]:
     return {**_FALLBACK_GOLD_MARGINS, **_FALLBACK_CURRENCY_MARGINS, **gold, **currency, **exotic}
 
 
-# ✅ DEĞİŞTİ: 3 deneme → 2 deneme, bekleme 300/900s → 60s
 def _call_gemini_with_retry(model, prompt: str, label: str = "GEMİNİ") -> Optional[str]:
-    delays = [60]  # Sadece 1 kez 60s bekle, sonra bırak
+    delays = [60]
     for attempt in range(2):
         try:
             response = model.generate_content(prompt, request_options={"timeout": 120})
@@ -344,7 +372,63 @@ BAYRAM: [VAR/YOK veya isim]
         logger.error(f"❌ [GEMİNİ] Hata: {e}")
         return [], None
 
+
+def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
+    try:
+        url = Config.HAREM_PRICE_URL
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=Config.HAREM_FETCH_TIMEOUT)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        prices = {}
+        rows = soup.find_all('tr')
+        for row in rows:
+            cells = row.find_all(['td', 'th'])
+            if len(cells) < 2:
+                continue
+            name = cells[0].get_text(strip=True).lower()
+            code = None
+            for key, val in _HAREM_PRODUCT_MAP.items():
+                if key in name:
+                    code = val
+                    break
+            if not code:
+                continue
+            nums = []
+            for cell in cells[1:]:
+                txt = cell.get_text(strip=True).replace('.', '').replace(',', '.').replace('₺', '').replace(' ', '')
+                try:
+                    nums.append(float(txt))
+                except ValueError:
+                    continue
+            if len(nums) >= 2:
+                prices[code] = {'buying': nums[0], 'selling': nums[1]}
+            elif len(nums) == 1:
+                prices[code] = {'buying': nums[0], 'selling': nums[0]}
+
+        if not prices:
+            logger.error("❌ [HAREM PARSE] Hiç fiyat parse edilemedi, raw HTML fallback...")
+            return None
+
+        logger.info(f"✅ [HAREM PARSE] {len(prices)} ürün parse edildi: {list(prices.keys())}")
+        return prices
+
+    except Exception as e:
+        logger.error(f"❌ [HAREM PARSE] Hata: {e}")
+        return None
+
+
 def fetch_harem_html() -> Optional[str]:
+    prices = fetch_harem_prices()
+    if prices:
+        lines = []
+        for code, p in prices.items():
+            lines.append(f"{code}: Alış={p['buying']:.2f} Satış={p['selling']:.2f}")
+        result = "\n".join(lines)
+        logger.info(f"✅ [HAREM HTML] {len(prices)} ürün → {len(result)} karakter")
+        return result
+
     try:
         url = Config.HAREM_PRICE_URL
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -353,27 +437,85 @@ def fetch_harem_html() -> Optional[str]:
         soup = BeautifulSoup(response.content, 'html.parser')
         table = soup.find('table') or soup.find_all('div', class_='data')
         if table:
-            html_text = str(table)[:5000]
-            logger.info(f"✅ [HAREM HTML] {len(html_text)} karakter alındı")
+            html_text = str(table)[:3000]
+            logger.warning(f"⚠️ [HAREM HTML] Parse başarısız, raw HTML fallback: {len(html_text)} karakter")
             return html_text
-        logger.error("❌ [HAREM HTML] Tablo bulunamadı!")
         return None
     except Exception as e:
-        logger.error(f"❌ [HAREM HTML] Hata: {e}")
+        logger.error(f"❌ [HAREM HTML] Fallback hata: {e}")
         return None
 
-def fetch_ziraat_html() -> Optional[str]:
+
+def fetch_ziraat_prices() -> Optional[Dict[str, Dict[str, float]]]:
     try:
         url = Config.ZIRAAT_CURRENCY_URL
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=Config.ZIRAAT_FETCH_TIMEOUT)
         response.raise_for_status()
-        html_text = response.text[:10000]
-        logger.info(f"✅ [ZİRAAT HTML] {len(html_text)} karakter alındı")
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        prices = {}
+        rows = soup.find_all('tr')
+        for row in rows:
+            cells = row.find_all(['td', 'th'])
+            if len(cells) < 2:
+                continue
+            name = cells[0].get_text(strip=True).lower()
+            code = None
+            for key, val in _ZIRAAT_CURRENCY_MAP.items():
+                if key in name:
+                    code = val
+                    break
+            if not code:
+                continue
+            nums = []
+            for cell in cells[1:]:
+                txt = cell.get_text(strip=True).replace(',', '.').replace(' ', '')
+                try:
+                    v = float(txt)
+                    if v > 0.001:
+                        nums.append(v)
+                except ValueError:
+                    continue
+            if len(nums) >= 2:
+                prices[code] = {'buying': nums[0], 'selling': nums[-1]}
+            elif len(nums) == 1:
+                prices[code] = {'buying': nums[0], 'selling': nums[0]}
+
+        if not prices:
+            logger.error("❌ [ZİRAAT PARSE] Hiç fiyat parse edilemedi, raw HTML fallback...")
+            return None
+
+        logger.info(f"✅ [ZİRAAT PARSE] {len(prices)} döviz parse edildi: {list(prices.keys())}")
+        return prices
+
+    except Exception as e:
+        logger.error(f"❌ [ZİRAAT PARSE] Hata: {e}")
+        return None
+
+
+def fetch_ziraat_html() -> Optional[str]:
+    prices = fetch_ziraat_prices()
+    if prices:
+        lines = []
+        for code, p in prices.items():
+            lines.append(f"{code}: Alış={p['buying']:.4f} Satış={p['selling']:.4f}")
+        result = "\n".join(lines)
+        logger.info(f"✅ [ZİRAAT HTML] {len(prices)} döviz → {len(result)} karakter")
+        return result
+
+    try:
+        url = Config.ZIRAAT_CURRENCY_URL
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=Config.ZIRAAT_FETCH_TIMEOUT)
+        response.raise_for_status()
+        html_text = response.text[:5000]
+        logger.warning(f"⚠️ [ZİRAAT HTML] Parse başarısız, raw HTML fallback: {len(html_text)} karakter")
         return html_text
     except Exception as e:
-        logger.error(f"❌ [ZİRAAT HTML] Hata: {e}")
+        logger.error(f"❌ [ZİRAAT HTML] Fallback hata: {e}")
         return None
+
 
 def async_margin_bootstrap():
     global _margin_bootstrap_in_progress
@@ -391,7 +533,6 @@ def async_margin_bootstrap():
             _margin_bootstrap_in_progress = False
 
 
-# ✅ YENİ: Altın + Döviz tek Gemini çağrısında birleştirildi (2 çağrı → 1 çağrı)
 def calculate_all_margins_with_gemini(
     harem_html: str,
     ziraat_html: str,
@@ -423,16 +564,10 @@ GÖREV 1 — ALTIN/GÜMÜŞ MARJI (Harem Altın)
 📊 API HAM FİYATLAR — ALTIN (Borsa/Toptan ALIŞ):
 {gold_api_str}
 
-🌐 HAREM HTML:
-{harem_html[:2500]}
+📋 HAREM SATIŞ FİYATLARI (parse edilmiş, temiz):
+{harem_html}
 
-🎯 HESAPLAMA: MARJ = ((Harem SATIŞ - API ALIŞ) / API ALIŞ) × 100
-
-⚠️ SÜTUN SIRASI:
-- BİRİNCİ sütun = ALIŞ → KULLANMA
-- İKİNCİ sütun = SATIŞ → BUNU KULLAN
-
-📌 ÜRÜN EŞLEMELERİ: GRA=Gram Altın, C22=Çeyrek, YAR=Yarım, TAM=Tam, ATA=Ata Altın, AG=Gram Gümüş
+🎯 HESAPLAMA: MARJ = ((Harem Satış - API Alış) / API Alış) × 100
 ⚠️ HER ÜRÜN İÇİN AYRI HESAPLA! GRA marjını diğerlerine kopyalama.
 🔥 Beklenen aralıklar: Altınlar %0.5-8.0, Gümüş %2.0-12.0
 
@@ -440,15 +575,14 @@ GÖREV 1 — ALTIN/GÜMÜŞ MARJI (Harem Altın)
 GÖREV 2 — DÖVİZ MARJI (Ziraat Bankası)
 ════════════════════════════════════════════
 
-📊 API HAM FİYATLAR — DÖVİZ (Serbest Piyasa/Truncgil):
+📊 API HAM FİYATLAR — DÖVİZ (Serbest Piyasa):
 {currency_api_str}
 
-🌐 ZİRAAT HTML:
-{ziraat_html[:2500]}
+📋 ZİRAAT SATIŞ FİYATLARI (parse edilmiş, temiz):
+{ziraat_html}
 
-🎯 HESAPLAMA: MARJ = ((Ziraat SATIŞ - API) / API) × 100
-
-⚠️ SADECE SATIŞ SÜTUNU! Ziraat'ın spreadi geniştir, marj %1.0-5.0 arası çıkabilir, normaldir.
+🎯 HESAPLAMA: MARJ = ((Ziraat Satış - API) / API) × 100
+⚠️ SADECE SATIŞ değerini kullan. Marj %1.0-5.0 arası normaldir.
 
 ════════════════════════════════════════════
 ÇIKTI — SADECE BU FORMAT, AÇIKLAMA YAPMA!
@@ -490,12 +624,10 @@ MARJ_JPY: 2.03
                         value = float(parts[1].strip()) / 100
                         if _validate_margin(key, value):
                             margins[key] = value
-                            # AG → GUMUS kopyası
                             if key == 'AG':
                                 margins['GUMUS'] = value
                                 logger.debug(f"🔄 [GEMİNİ MARJ] GUMUS = AG: {value:.4f}")
                         else:
-                            # Validation başarısız → eski marjı koru
                             if old_margins and key in old_margins:
                                 margins[key] = old_margins[key]
                                 logger.warning(
@@ -512,8 +644,6 @@ MARJ_JPY: 2.03
             logger.error("❌ [GEMİNİ BİRLEŞİK MARJ] Parse edilemedi veya tümü reddedildi!")
             return None
 
-        # ✅ C22/YAR/TAM türetme KALDIRILDI — Gemini her birini ayrı hesaplıyor
-        # Sadece CUM Gemini'den gelmezse GRA'dan fallback yap
         if 'GRA' in margins and 'CUM' not in margins:
             margins['CUM'] = margins['GRA']
             logger.info(f"🔄 [FIX] CUM marjı yok, GRA'dan türetildi: {margins['GRA']:.4f}")
@@ -531,15 +661,12 @@ MARJ_JPY: 2.03
         return None
 
 
-# Eski fonksiyonlar korunuyor (geriye dönük uyumluluk için)
 def calculate_full_margins_with_gemini(html_data: str, api_prices: Dict, old_margins: Dict = None) -> Optional[Dict]:
-    """Geriye dönük uyumluluk — artık calculate_all_margins_with_gemini kullanılıyor."""
     logger.warning("⚠️ [COMPAT] calculate_full_margins_with_gemini çağrıldı, yeni fonksiyona yönlendiriliyor.")
     return None
 
 
 def calculate_currency_margins_with_gemini(html_data: str, api_prices: Dict, old_margins: Dict = None) -> Optional[Dict]:
-    """Geriye dönük uyumluluk — artık calculate_all_margins_with_gemini kullanılıyor."""
     logger.warning("⚠️ [COMPAT] calculate_currency_margins_with_gemini çağrıldı, yeni fonksiyona yönlendiriliyor.")
     return None
 
@@ -582,7 +709,6 @@ def update_dynamic_margins() -> bool:
 
         old_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')) or {}
 
-        # ✅ TEK Gemini çağrısı — hem altın hem döviz
         all_computed_margins = {}
         if harem_html and ziraat_html:
             all_computed_margins = calculate_all_margins_with_gemini(
@@ -591,12 +717,12 @@ def update_dynamic_margins() -> bool:
                 old_margins=old_margins
             ) or {}
         elif harem_html:
-            logger.warning("⚠️ [HİBRİT MARJ] Ziraat HTML yok, sadece altın hesaplanacak")
+            logger.warning("⚠️ [HİBRİT MARJ] Ziraat verisi yok, sadece altın hesaplanacak")
             all_computed_margins = calculate_all_margins_with_gemini(
                 harem_html, "", gold_api_prices, {}, old_margins=old_margins
             ) or {}
         elif ziraat_html:
-            logger.warning("⚠️ [HİBRİT MARJ] Harem HTML yok, sadece döviz hesaplanacak")
+            logger.warning("⚠️ [HİBRİT MARJ] Harem verisi yok, sadece döviz hesaplanacak")
             all_computed_margins = calculate_all_margins_with_gemini(
                 "", ziraat_html, {}, currency_api_prices, old_margins=old_margins
             ) or {}
