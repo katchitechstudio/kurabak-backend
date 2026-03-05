@@ -1,5 +1,5 @@
 """
-Financial Service - PRODUCTION READY V5.8
+Financial Service - PRODUCTION READY V5.9
 """
 
 import requests
@@ -16,6 +16,17 @@ from utils.event_manager import get_todays_banner
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# Altın/gümüş kodları — rounding ve snapshot için kullanılır
+GOLD_SILVER_CODES = {"GRA", "C22", "YAR", "TAM", "CUM", "ATA", "AG", "GUMUS", "SILVER"}
+
+
+def _round_price(code: str, value: float, decimals_currency: int = 4, decimals_gold: int = 2) -> float:
+    """Döviz 4, altın/gümüş 2 basamak."""
+    if code in GOLD_SILVER_CODES:
+        return round(value, decimals_gold)
+    return round(value, decimals_currency)
+
 
 class CircuitBreaker:
     def __init__(self):
@@ -80,7 +91,7 @@ class CircuitBreaker:
         if self.state == "HALF_OPEN":
             self.state = "CLOSED"
             self.failure_count = 0
-            self._save_state()
+            self._save_state()  # FIX #3
             logger.info("✅ [CIRCUIT] HALF_OPEN → CLOSED (Sistem kurtarıldı!)")
             self._send_recovery_notification()
         
@@ -88,6 +99,7 @@ class CircuitBreaker:
             if self.failure_count > 0:
                 logger.info(f"✅ [CIRCUIT] Başarılı çağrı, hata sayacı sıfırlandı (önceki: {self.failure_count})")
                 self.failure_count = 0
+                self._save_state()  # FIX #3
     
     def record_failure(self):
         current_time = time.time()
@@ -108,6 +120,7 @@ class CircuitBreaker:
                 logger.error(f"🔴 [CIRCUIT] CLOSED → OPEN ({self.failure_count} hata, {self.timeout}s beklenecek)")
                 self._send_open_notification()
             else:
+                self._save_state()  # FIX #4 — threshold altında da kaydet
                 remaining = self.failure_threshold - self.failure_count
                 logger.warning(f"⚠️ [CIRCUIT] Hata kaydedildi ({self.failure_count}/{self.failure_threshold}, {remaining} hata kaldı)")
     
@@ -229,13 +242,17 @@ def create_item(code: str, raw_item: dict, item_type: str) -> dict:
     if buying == 0: buying = selling
     
     turkish_name = TURKISH_NAMES.get(code, code)
-    
+
+    # FIX #1 — altın/gümüş 2 basamak, döviz 4 basamak
+    buying_r  = _round_price(code, buying)
+    selling_r = _round_price(code, selling)
+
     return {
         "code": code,
         "name": turkish_name,
-        "buying": round(buying, 4),
-        "selling": round(selling, 4),
-        "rate": round(selling, 4),
+        "buying": buying_r,
+        "selling": selling_r,
+        "rate": selling_r,
         "change_percent": round(change, 2),
         "type": item_type
     }
@@ -244,6 +261,8 @@ def get_dynamic_margins() -> Dict[str, float]:
     hybrid_margins = get_cache(Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins'))
     
     if hybrid_margins and isinstance(hybrid_margins, dict):
+        # FIX #5 — cache'den gelen dict'i kopyala, orijinali kirletme
+        hybrid_margins = dict(hybrid_margins)
         exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
         for code, margin in exotic_margins.items():
             if code not in hybrid_margins:
@@ -256,6 +275,8 @@ def get_dynamic_margins() -> Dict[str, float]:
     if last_update and isinstance(last_update, dict):
         margins = last_update.get('margins')
         if margins and isinstance(margins, dict):
+            # FIX #5 — burada da kopyala
+            margins = dict(margins)
             exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
             for code, margin in exotic_margins.items():
                 if code not in margins:
@@ -370,6 +391,25 @@ def determine_banner_message() -> Optional[str]:
     auto_banner = get_todays_banner()
     return auto_banner
 
+
+# FIX #6 — tek marj uygulama fonksiyonu (3x kopya loop yerine)
+def _apply_margins(items: list, margin_map: Dict[str, float]) -> list:
+    result = []
+    for item in items:
+        code = item.get("code", "")
+        margin = margin_map.get(code, 0.0)
+        new_item = copy.deepcopy(item)
+        if margin < 0:
+            margin = 0.005
+            logger.warning(f"⚠️ [NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
+        if margin > 0:
+            new_item["selling"] = _round_price(code, new_item["selling"] * (1 + margin))
+            new_item["buying"]  = _round_price(code, new_item["buying"]  * (1 + margin))
+            new_item["rate"]    = new_item["selling"]
+        result.append(new_item)
+    return result
+
+
 def save_daily_snapshot() -> bool:
     logger.info("📸 [SNAPSHOT] Gün sonu kapanış fiyatları alınıyor (Raw + Jeweler)...")
     
@@ -427,7 +467,8 @@ def save_daily_snapshot() -> bool:
                 logger.warning(f"⚠️ [SNAPSHOT NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
             
             jeweler_price = raw_price * (1 + margin)
-            jeweler_snapshot[code] = round(jeweler_price, 4)
+            # FIX #7 — snapshot'ta da altın 2 basamak
+            jeweler_snapshot[code] = _round_price(code, jeweler_price)
         
         set_cache(
             Config.CACHE_KEYS['jeweler_snapshot'],
@@ -506,26 +547,11 @@ def rebuild_jeweler_cache() -> bool:
             return False
         
         margin_map = get_dynamic_margins()
-        
-        def apply_margins_to_items(items, margin_map):
-            result = []
-            for item in items:
-                code = item.get("code")
-                margin = margin_map.get(code, 0.0)
-                new_item = copy.deepcopy(item)
-                if margin < 0:
-                    margin = 0.005
-                    logger.warning(f"⚠️ [NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
-                if margin > 0:
-                    new_item["selling"] = round(new_item["selling"] * (1 + margin), 4)
-                    new_item["buying"] = round(new_item["buying"] * (1 + margin), 4)
-                    new_item["rate"] = new_item["selling"]
-                result.append(new_item)
-            return result
-        
-        currencies_jeweler = apply_margins_to_items(currencies_raw.get("data", []), margin_map)
-        golds_jeweler = apply_margins_to_items(golds_raw.get("data", []), margin_map)
-        silvers_jeweler = apply_margins_to_items(silvers_raw.get("data", []), margin_map)
+
+        # FIX #6 — merkezi _apply_margins kullan
+        currencies_jeweler = _apply_margins(currencies_raw.get("data", []), margin_map)
+        golds_jeweler      = _apply_margins(golds_raw.get("data", []) if golds_raw else [], margin_map)
+        silvers_jeweler    = _apply_margins(silvers_raw.get("data", []) if silvers_raw else [], margin_map)
         
         tz = pytz.timezone('Europe/Istanbul')
         now = datetime.now(tz)
@@ -540,13 +566,9 @@ def rebuild_jeweler_cache() -> bool:
             "banner": determine_banner_message()
         }
         
-        jeweler_currencies_payload = {**base_meta, "data": currencies_jeweler}
-        jeweler_golds_payload = {**base_meta, "data": golds_jeweler}
-        jeweler_silvers_payload = {**base_meta, "data": silvers_jeweler}
-        
-        set_cache(Config.CACHE_KEYS['currencies_jeweler'], jeweler_currencies_payload, ttl=0)
-        set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
-        set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['currencies_jeweler'], {**base_meta, "data": currencies_jeweler}, ttl=0)
+        set_cache(Config.CACHE_KEYS['golds_jeweler'],      {**base_meta, "data": golds_jeweler},      ttl=0)
+        set_cache(Config.CACHE_KEYS['silvers_jeweler'],    {**base_meta, "data": silvers_jeweler},    ttl=0)
         
         logger.info(
             f"✅ [JEWELER REBUILD] Tamamlandı: "
@@ -583,7 +605,8 @@ def update_jeweler_snapshot() -> bool:
                 logger.warning(f"⚠️ [SNAPSHOT NEGATİF MARJ] {code}: %0.5 zorla uygulandı")
             
             jeweler_price = raw_price * (1 + margin)
-            jeweler_snapshot[code] = round(jeweler_price, 4)
+            # FIX #7 — altın 2 basamak
+            jeweler_snapshot[code] = _round_price(code, jeweler_price)
         
         set_cache(
             Config.CACHE_KEYS['jeweler_snapshot'],
@@ -636,14 +659,9 @@ def is_weekend_closed(now) -> bool:
     hour = now.hour
     minute = now.minute
 
-    # Cuma 18:00'dan sonra kapalı
-    is_friday_closed = (weekday == 4 and hour >= Config.MARKET_CLOSE_FRIDAY_HOUR)
-
-    # Cumartesi tüm gün kapalı
+    is_friday_closed  = (weekday == 4 and hour >= Config.MARKET_CLOSE_FRIDAY_HOUR)
     is_saturday_closed = (weekday == 5)
-
-    # Pazar: 23:58'e kadar kapalı, 23:58'den sonra açık (API başlıyor, worker devreye giriyor)
-    is_sunday_closed = (weekday == 6 and not (hour == 23 and minute >= 58))
+    is_sunday_closed  = (weekday == 6 and not (hour == 23 and minute >= 58))
 
     return is_friday_closed or is_saturday_closed or is_sunday_closed
 
@@ -659,21 +677,14 @@ def is_weekend_alarm_closed(now) -> bool:
     Kapalı pencere: Cuma 18:00 → Pazartesi 00:10
     Açık: Pazartesi 00:10'dan itibaren
     """
-    weekday = now.weekday()  # 0=Pazartesi, 4=Cuma, 5=Cumartesi, 6=Pazar
+    weekday = now.weekday()
     hour = now.hour
     minute = now.minute
 
-    # Cuma 18:00'dan sonra kapalı
-    is_friday_closed = (weekday == 4 and hour >= Config.MARKET_CLOSE_FRIDAY_HOUR)
-
-    # Cumartesi tüm gün kapalı
+    is_friday_closed   = (weekday == 4 and hour >= Config.MARKET_CLOSE_FRIDAY_HOUR)
     is_saturday_closed = (weekday == 5)
-
-    # Pazar tüm gün kapalı
-    is_sunday_closed = (weekday == 6)
-
-    # Pazartesi 00:10'a kadar kapalı (marj güncellemesi için güvenli bekleme)
-    is_monday_early = (weekday == 0 and (hour == 0 and minute < 10))
+    is_sunday_closed   = (weekday == 6)
+    is_monday_early    = (weekday == 0 and (hour == 0 and minute < 10))
 
     return is_friday_closed or is_saturday_closed or is_sunday_closed or is_monday_early
 
@@ -687,11 +698,9 @@ def update_financial_data():
         logger.info(f"🚧 [WORKER] Bakım Modu Aktif ({maint_status})")
         
         try:
-            update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
             maintenance_cache_meta = {
                 "source": "MAINTENANCE",
-                "update_date": update_date_str,
+                "update_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "timestamp": time.time(),
                 "status": maint_status,
                 "market_msg": maint_message,
@@ -721,12 +730,11 @@ def update_financial_data():
             set_cache("market_closed_logged", "true", ttl=43200)
             
             try:
-                update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 banner_message = determine_banner_message()
                 
+                # FIX #8 — hafta sonu kapanışında update_date eski kalır, sadece status güncellenir
                 closed_meta = {
                     "source": "CACHED",
-                    "update_date": update_date_str,
                     "timestamp": time.time(),
                     "status": "CLOSED",
                     "market_msg": "Piyasalar Kapalı - Hafta Sonu",
@@ -808,7 +816,7 @@ def update_financial_data():
             Metrics.inc('errors')
             return False
         
-        raw_snapshot = get_cache(Config.CACHE_KEYS['raw_snapshot']) or {}
+        raw_snapshot     = get_cache(Config.CACHE_KEYS['raw_snapshot'])     or {}
         jeweler_snapshot = get_cache(Config.CACHE_KEYS['jeweler_snapshot']) or {}
         
         def enrich_with_calculation(items, snapshot):
@@ -835,11 +843,11 @@ def update_financial_data():
                     enriched.append(item)
             return enriched
         
-        currencies_raw = enrich_with_calculation(currencies, raw_snapshot)
-        golds_raw = enrich_with_calculation(golds, raw_snapshot)
-        silvers_raw = enrich_with_calculation(silvers, raw_snapshot)
+        currencies_raw_e = enrich_with_calculation(currencies, raw_snapshot)
+        golds_raw_e      = enrich_with_calculation(golds, raw_snapshot)
+        silvers_raw_e    = enrich_with_calculation(silvers, raw_snapshot)
         
-        if not currencies_raw:
+        if not currencies_raw_e:
             logger.error("❌ Tüm veriler zehirli!")
             Metrics.inc('errors')
             return False
@@ -847,7 +855,7 @@ def update_financial_data():
         Metrics.inc('v5')
         
         update_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        banner_message = determine_banner_message()
+        banner_message  = determine_banner_message()
         
         base_meta = {
             "source": source,
@@ -859,61 +867,27 @@ def update_financial_data():
             "banner": banner_message
         }
         
-        raw_currencies_payload = {**base_meta, "data": currencies_raw}
-        raw_golds_payload = {**base_meta, "data": golds_raw}
-        raw_silvers_payload = {**base_meta, "data": silvers_raw}
+        raw_currencies_payload = {**base_meta, "data": currencies_raw_e}
+        raw_golds_payload      = {**base_meta, "data": golds_raw_e}
+        raw_silvers_payload    = {**base_meta, "data": silvers_raw_e}
         
         set_cache(Config.CACHE_KEYS['currencies_all'], raw_currencies_payload, ttl=0)
-        set_cache(Config.CACHE_KEYS['golds_all'], raw_golds_payload, ttl=0)
-        set_cache(Config.CACHE_KEYS['silvers_all'], raw_silvers_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['golds_all'],      raw_golds_payload,      ttl=0)
+        set_cache(Config.CACHE_KEYS['silvers_all'],    raw_silvers_payload,    ttl=0)
         
-        jeweler_currencies_items = copy.deepcopy(currencies)
-        jeweler_golds_items = copy.deepcopy(golds)
-        jeweler_silvers_items = copy.deepcopy(silvers)
-        
+        # FIX #6 — 3x kopya loop yerine merkezi _apply_margins
         margin_map = get_dynamic_margins()
-        
-        for item in jeweler_currencies_items:
-            code = item.get("code")
-            margin = margin_map.get(code, 0.0)
-            if margin < 0:
-                margin = 0.005
-            if margin > 0:
-                item["selling"] = round(item["selling"] * (1 + margin), 4)
-                item["buying"] = round(item["buying"] * (1 + margin), 4)
-                item["rate"] = item["selling"]
-        
-        for item in jeweler_golds_items:
-            code = item.get("code")
-            margin = margin_map.get(code, 0.0)
-            if margin < 0:
-                margin = 0.005
-            if margin > 0:
-                item["selling"] = round(item["selling"] * (1 + margin), 4)
-                item["buying"] = round(item["buying"] * (1 + margin), 4)
-                item["rate"] = item["selling"]
-        
-        for item in jeweler_silvers_items:
-            code = item.get("code")
-            margin = margin_map.get(code, 0.0)
-            if margin < 0:
-                margin = 0.005
-            if margin > 0:
-                item["selling"] = round(item["selling"] * (1 + margin), 4)
-                item["buying"] = round(item["buying"] * (1 + margin), 4)
-                item["rate"] = item["selling"]
+        jeweler_currencies_items = _apply_margins(copy.deepcopy(currencies), margin_map)
+        jeweler_golds_items      = _apply_margins(copy.deepcopy(golds),      margin_map)
+        jeweler_silvers_items    = _apply_margins(copy.deepcopy(silvers),     margin_map)
         
         jeweler_currencies = enrich_with_calculation(jeweler_currencies_items, jeweler_snapshot)
-        jeweler_golds = enrich_with_calculation(jeweler_golds_items, jeweler_snapshot)
-        jeweler_silvers = enrich_with_calculation(jeweler_silvers_items, jeweler_snapshot)
+        jeweler_golds      = enrich_with_calculation(jeweler_golds_items,      jeweler_snapshot)
+        jeweler_silvers    = enrich_with_calculation(jeweler_silvers_items,    jeweler_snapshot)
         
-        jeweler_currencies_payload = {**base_meta, "data": jeweler_currencies}
-        jeweler_golds_payload = {**base_meta, "data": jeweler_golds}
-        jeweler_silvers_payload = {**base_meta, "data": jeweler_silvers}
-        
-        set_cache(Config.CACHE_KEYS['currencies_jeweler'], jeweler_currencies_payload, ttl=0)
-        set_cache(Config.CACHE_KEYS['golds_jeweler'], jeweler_golds_payload, ttl=0)
-        set_cache(Config.CACHE_KEYS['silvers_jeweler'], jeweler_silvers_payload, ttl=0)
+        set_cache(Config.CACHE_KEYS['currencies_jeweler'], {**base_meta, "data": jeweler_currencies}, ttl=0)
+        set_cache(Config.CACHE_KEYS['golds_jeweler'],      {**base_meta, "data": jeweler_golds},      ttl=0)
+        set_cache(Config.CACHE_KEYS['silvers_jeweler'],    {**base_meta, "data": jeweler_silvers},    ttl=0)
         
         set_cache("kurabak:last_worker_run", time.time(), ttl=0)
         
@@ -922,37 +896,35 @@ def update_financial_data():
         
         if current_time - float(last_backup_time) > 900:
             backup_payload = {
-                "currencies": raw_currencies_payload,
-                "golds": raw_golds_payload,
-                "silvers": raw_silvers_payload,
-                "currencies_jeweler": jeweler_currencies_payload,
-                "golds_jeweler": jeweler_golds_payload,
-                "silvers_jeweler": jeweler_silvers_payload,
+                "currencies":          raw_currencies_payload,
+                "golds":               raw_golds_payload,
+                "silvers":             raw_silvers_payload,
+                "currencies_jeweler":  {**base_meta, "data": jeweler_currencies},
+                "golds_jeweler":       {**base_meta, "data": jeweler_golds},
+                "silvers_jeweler":     {**base_meta, "data": jeweler_silvers},
             }
-            
-            set_cache("kurabak:backup:all", backup_payload, ttl=0, force_disk_backup=True)
-            set_cache("kurabak:backup:timestamp", current_time, ttl=0)
+            set_cache("kurabak:backup:all",       backup_payload,  ttl=0, force_disk_backup=True)
+            set_cache("kurabak:backup:timestamp", current_time,    ttl=0)
         
         incr_cache('worker:success_count', ttl=1800)
         
-        last_summary = get_cache('worker:last_summary') or 0
+        last_summary  = get_cache('worker:last_summary') or 0
         now_timestamp = time.time()
         
         if (now_timestamp - float(last_summary)) >= 1800:
             success_count = get_cache('worker:success_count') or 30
-            cb_status = circuit_breaker.get_status()
-            
-            banner_short = banner_message[:30] + "..." if banner_message and len(banner_message) > 30 else (banner_message or "Yok")
+            cb_status     = circuit_breaker.get_status()
+            banner_short  = banner_message[:30] + "..." if banner_message and len(banner_message) > 30 else (banner_message or "Yok")
             
             logger.info(
                 f"📊 [ÖZET] 30dk: Worker {success_count}/30 | "
-                f"{len(currencies_raw)}D+{len(golds_raw)}A+{len(silvers_raw)}G | "
+                f"{len(currencies_raw_e)}D+{len(golds_raw_e)}A+{len(silvers_raw_e)}G | "
                 f"CB: {cb_status['state']} | "
                 f"Banner: {banner_short}"
             )
             
-            set_cache('worker:last_summary', str(now_timestamp), ttl=1800)
-            set_cache('worker:success_count', 0, ttl=1800)
+            set_cache('worker:last_summary',  str(now_timestamp), ttl=1800)
+            set_cache('worker:success_count', 0,                  ttl=1800)
         
         return True
         
