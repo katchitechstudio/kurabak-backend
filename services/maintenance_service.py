@@ -8,6 +8,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.events import EVENT_JOB_ERROR
 
+import pytz
+
 from utils.cache import get_cache, set_cache, delete_cache
 from config import Config
 
@@ -15,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 scheduler = None
 _scheduler_lock = threading.Lock()
+
+_TZ = pytz.timezone('Europe/Istanbul')
 
 
 DINI_BAYRAMLAR = {
@@ -67,17 +71,13 @@ _MAX_STEP_PER_CYCLE = 0.005
 
 
 def _is_weekend_now() -> bool:
-    import pytz
     from services.financial_service import is_weekend_closed
-    tz = pytz.timezone('Europe/Istanbul')
-    return is_weekend_closed(datetime.now(tz))
+    return is_weekend_closed(datetime.now(_TZ))
 
 
 def _is_weekend_alarm_now() -> bool:
-    import pytz
     from services.financial_service import is_weekend_alarm_closed
-    tz = pytz.timezone('Europe/Istanbul')
-    return is_weekend_alarm_closed(datetime.now(tz))
+    return is_weekend_alarm_closed(datetime.now(_TZ))
 
 
 def _send_telegram(message: str, level: str = 'warning'):
@@ -109,6 +109,9 @@ def run_sanity_check() -> bool:
         for item in all_items:
             code    = item.get("code")
             selling = item.get("selling", 0)
+            # FIX #6 — selling 0 ise buying'e bak, gereksiz critical önle
+            if selling == 0:
+                selling = item.get("buying", 0) or item.get("rate", 0)
             if code not in SANITY_RULES:
                 continue
             min_val, max_val = SANITY_RULES[code]
@@ -463,7 +466,8 @@ def snapshot_and_publish_morning_job():
 
 def monday_snapshot_refresh_job():
     try:
-        now = datetime.now()
+        # FIX #2 — timezone-aware now
+        now = datetime.now(_TZ)
         if now.weekday() != 0:
             return
 
@@ -636,15 +640,58 @@ def _apply_gradual_margins(current_margins: dict, new_margins: dict) -> dict:
     return result
 
 
-def _retry_gold_margins_async(harem_html: str, ziraat_html: str, gold_api_prices: dict, currency_api_prices: dict):
+def _retry_gold_margins_async():
+    # FIX #5 — retry kendi HTML'ini çekiyor, eski/bozuk HTML'e bağımlı değil
     try:
         time.sleep(300)
-        logger.info("🔄 [MARJ] Altın retry başlıyor (5dk sonra)...")
-        from utils.news_manager import calculate_all_margins_with_gemini
+        logger.info("🔄 [MARJ] Altın retry başlıyor (5dk sonra) — taze HTML çekiliyor...")
+
+        from utils.news_manager import (
+            fetch_harem_html,
+            fetch_ziraat_html,
+            calculate_all_margins_with_gemini,
+        )
+        from services.financial_service import fetch_from_v5
+
+        harem_html  = fetch_harem_html()
+        ziraat_html = fetch_ziraat_html()
+
+        gold_api_prices     = {}
+        currency_api_prices = {}
+        try:
+            api_data = fetch_from_v5()
+            if api_data and 'Rates' in api_data:
+                gold_api_prices = {
+                    'GRA':         api_data['Rates'].get('GRA', {}).get('Buying', 0),
+                    'CEYREKALTIN': api_data['Rates'].get('CEYREKALTIN', {}).get('Buying', 0),
+                    'YARIMALTIN':  api_data['Rates'].get('YARIMALTIN', {}).get('Buying', 0),
+                    'TAMALTIN':    api_data['Rates'].get('TAMALTIN', {}).get('Buying', 0),
+                    'GUMUS':       api_data['Rates'].get('GUMUS', {}).get('Buying', 0),
+                }
+                major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
+                currency_api_prices = {
+                    code: api_data['Rates'].get(code, {}).get('Selling', 0)
+                    for code in major_currencies
+                }
+        except Exception as api_err:
+            logger.warning(f"⚠️ [MARJ RETRY] API verisi alınamadı: {api_err}")
+
+        if not harem_html or not gold_api_prices:
+            logger.warning("⚠️ [MARJ RETRY] Taze HTML veya API alınamadı, retry iptal.")
+            _send_telegram(
+                "⚠️ *MARJ: Altın Retry İptal*\n\n"
+                "Taze kaynak alınamadı.\n"
+                "Bir sonraki 6 saatlik döngüde tekrar denenecek."
+            )
+            return
+
         margin_key = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         existing   = get_cache(margin_key) or {}
+
         result = calculate_all_margins_with_gemini(
-            harem_html, ziraat_html, gold_api_prices, currency_api_prices, old_margins=existing
+            harem_html, ziraat_html or "",
+            gold_api_prices, currency_api_prices,
+            old_margins=existing
         )
         if result:
             applied = _apply_gradual_margins(existing, result)
@@ -779,9 +826,9 @@ def check_and_refresh_margins():
                             "Sabit fallback değerler kullanılıyor.\n"
                             "5 dakika sonra tekrar denenecek..."
                         )
+                    # FIX #5 — thread'e artık parametre geçmiyoruz, kendi fetch ediyor
                     threading.Thread(
                         target=_retry_gold_margins_async,
-                        args=(harem_html, ziraat_html or "", gold_api_prices, currency_api_prices),
                         daemon=True
                     ).start()
             else:
@@ -810,7 +857,7 @@ def check_and_refresh_margins():
                 applied = _apply_gradual_margins(current_margins, result)
                 current_margins.update(applied)
                 updated = True
-                gold_keys = [k for k in result if k in GOLD_MARGIN_KEYS]
+                gold_keys     = [k for k in result if k in GOLD_MARGIN_KEYS]
                 currency_keys = [k for k in result if k not in GOLD_MARGIN_KEYS]
                 if gold_keys:
                     logger.info(f"✅ [MARJ] Altın/Gümüş kademeli güncellendi: {gold_keys}")
@@ -819,7 +866,7 @@ def check_and_refresh_margins():
             else:
                 logger.warning("⚠️ [MARJ] Rutin güncelleme: Gemini başarısız, mevcut marjlar korundu")
 
-        exotic_margins = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
+        exotic_margins      = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
         gold_static_margins = getattr(Config, 'STATIC_GOLD_MARGINS', {})
         current_margins.update(exotic_margins)
         current_margins.update(gold_static_margins)
@@ -1017,8 +1064,8 @@ def start_scheduler():
             name='Marj Sağlık + Kademeli Güncelleme (6 Saatte Bir)',
             replace_existing=True,
             max_instances=1,
-            coalesce=True,
-            next_run_time=datetime.now() + timedelta(hours=1)
+            coalesce=True
+            # FIX #7 — next_run_time kaldırıldı, APS kendi planlasın (naive datetime riski önlendi)
         )
 
         scheduler.add_job(
@@ -1042,7 +1089,7 @@ def start_scheduler():
         )
 
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.5 - KADEMELİ MARJ GÜNCELLEMESİ)")
+        logger.info("✅ Scheduler başlatıldı! (V6.6 - TZ + RETRY FIX)")
         logger.info(f"   👷 Worker:       Her {worker_interval} saniyede")
         logger.info("   👮 Şef:          Her 10 dakikada (+ Sanity Check)")
         logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (Cuma 18:00 → Pazartesi 00:10 duraklatılır)")
@@ -1089,7 +1136,7 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval':   getattr(Config, 'ALARM_CHECK_INTERVAL', 15),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V6.5',
+            'version': 'V6.6',
             'optimizations': {
                 'cpu_spike_prevention':       True,
                 'gradual_margin_transition':  True,
@@ -1110,6 +1157,8 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'weekend_alarm_safe_window':  'Cuma 18:00 → Pazartesi 00:10',
                 'monday_baseline_snapshot':   'Pazartesi 00:15',
                 'margin_max_step_per_cycle':  _MAX_STEP_PER_CYCLE,
+                'retry_fresh_fetch':          True,
+                'timezone_aware':             True,
             }
         }
 
