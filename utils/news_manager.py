@@ -585,7 +585,12 @@ GÖREV 2 — DÖVİZ MARJI (Ziraat Bankası)
 {ziraat_html}
 
 🎯 HESAPLAMA: MARJ = ((Ziraat Satış - API) / API) × 100
-⚠️ SADECE SATIŞ değerini kullan. Marj %1.0-5.0 arası normaldir.
+⚠️ SADECE SATIŞ değerini kullan. Marj %0.5-5.0 arası normaldir.
+⚠️ KESİNLİKLE UYARI: Sonuç YÜZDE (%) cinsinden, küçük bir sayı olmalı!
+   ÖRNEK: Satış=44.08, API=44.07 → MARJ = (44.08-44.07)/44.07 × 100 = 0.02
+   YANLIŞ: 1.2453 → Bu kur fiyatıdır, marj DEĞİLDİR!
+   DOĞRU:  0.02   → Bu marjdır, çıktıya bunu yaz.
+   Marj hiçbir zaman 0.5'ten küçük veya 5.0'dan büyük OLAMAZ!
 
 ════════════════════════════════════════════
 ÇIKTI — SADECE BU FORMAT, AÇIKLAMA YAPMA!
