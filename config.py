@@ -273,7 +273,7 @@ class Config:
     ALARM_CHECK_INTERVAL = 15  # 15 dakika (eski: 10) → RAM tasarrufu
     
     # Alarm TTL (Time To Live) - Alarmların Redis'te ne kadar süre saklanacağı
-    ALARM_TTL = 90 * 24 * 60 * 60  # 90 gün (saniye cinsinden)
+    ALARM_TTL = 30 * 24 * 60 * 60  # 30 gün (saniye cinsinden)
     
     # Kullanıcı başına maksimum alarm sayısı
     MAX_ALARMS_PER_USER = 50  # Her kullanıcı en fazla 50 alarm kurabilir
