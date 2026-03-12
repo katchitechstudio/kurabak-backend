@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 GNEWS_API_KEY = os.getenv('GNEWS_API_KEY')
 NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-GEMINI_API_KEY_MARGIN = os.getenv('GEMINI_API_KEY_MARGIN', GEMINI_API_KEY)  # 🔥 Marj için ayrı key
+GEMINI_API_KEY_MARGIN = os.getenv('GEMINI_API_KEY_MARGIN', GEMINI_API_KEY)
 
 _bootstrap_lock = threading.Lock()
 _bootstrap_in_progress = {
@@ -43,7 +43,6 @@ _FALLBACK_GOLD_MARGINS = {
     'TAM':   0.020,
     'CUM':   0.015,
     'ATA':   0.017,
-    'HAS':   0.010,
     'AG':    0.080,
     'GUMUS': 0.080,
 }
@@ -67,7 +66,6 @@ _MARGIN_VALID_RANGES = {
     'TAM':   (0.004, 0.060),
     'CUM':   (0.008, 0.060),
     'ATA':   (0.008, 0.060),
-    'HAS':   (0.004, 0.040),
     'AG':    (0.020, 0.120),
     'GUMUS': (0.020, 0.120),
     'USD':   (0.005, 0.050),
@@ -271,7 +269,6 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         if not GEMINI_API_KEY or not news_list:
             return [], None
 
-        # 🔥 Haberler için ana key kullanılır
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-3-flash-preview')
 
@@ -546,7 +543,6 @@ def calculate_all_margins_with_gemini(
         if not GEMINI_API_KEY_MARGIN:
             return None
 
-        # 🔥 Marj hesaplama için ayrı key kullanılır
         genai.configure(api_key=GEMINI_API_KEY_MARGIN)
         model = genai.GenerativeModel('gemini-3-flash-preview')
 
@@ -573,6 +569,7 @@ GÖREV 1 — ALTIN/GÜMÜŞ MARJI (Harem Altın)
 🎯 HESAPLAMA: MARJ = ((Harem Satış - API Alış) / API Alış) × 100
 ⚠️ HER ÜRÜN İÇİN AYRI HESAPLA! GRA marjını diğerlerine kopyalama.
 🔥 Beklenen aralıklar: Altınlar %0.5-8.0, Gümüş %2.0-12.0
+⚠️ NOT: CUM (Cumhuriyet Altını) ve ATA (Ata Altın) Harem'de yok, hesaplama.
 
 ════════════════════════════════════════════
 GÖREV 2 — DÖVİZ MARJI (Ziraat Bankası)
@@ -599,7 +596,6 @@ MARJ_GRA: 1.77
 MARJ_C22: 1.50
 MARJ_YAR: 1.90
 MARJ_TAM: 1.20
-MARJ_ATA: 1.70
 MARJ_AG: 4.50
 MARJ_USD: 2.96
 MARJ_EUR: 2.43
@@ -652,11 +648,7 @@ MARJ_JPY: 2.03
             logger.error("❌ [GEMİNİ BİRLEŞİK MARJ] Parse edilemedi veya tümü reddedildi!")
             return None
 
-        if 'GRA' in margins and 'CUM' not in margins:
-            margins['CUM'] = margins['GRA']
-            logger.info(f"🔄 [FIX] CUM marjı yok, GRA'dan türetildi: {margins['GRA']:.4f}")
-
-        gold_keys = [k for k in margins if k in ('GRA','C22','YAR','TAM','ATA','AG','GUMUS','CUM')]
+        gold_keys = [k for k in margins if k in ('GRA','C22','YAR','TAM','AG','GUMUS')]
         currency_keys = [k for k in margins if k in major_currencies]
         logger.info(
             f"✅ [GEMİNİ BİRLEŞİK MARJ] Toplam {len(margins)} marj: "
@@ -693,17 +685,12 @@ def update_dynamic_margins() -> bool:
                 logger.error("❌ [HİBRİT MARJ] API verisi alınamadı!")
                 return False
 
-            ata_buy = (
-                api_data['Rates'].get('ATA', {}).get('Buying', 0) or
-                api_data['Rates'].get('CUM', {}).get('Buying', 0) or 0
-            )
             gold_api_prices = {
                 'GRA': api_data['Rates'].get('GRA', {}).get('Buying', 0),
                 'C22': api_data['Rates'].get('CEYREKALTIN', {}).get('Buying', 0),
                 'YAR': api_data['Rates'].get('YARIMALTIN', {}).get('Buying', 0),
                 'TAM': api_data['Rates'].get('TAMALTIN', {}).get('Buying', 0),
                 'AG':  api_data['Rates'].get('GUMUS', {}).get('Buying', 0),
-                'ATA': ata_buy,
             }
 
             major_currencies = ["USD", "EUR", "GBP", "CHF", "CAD", "AUD", "SEK", "NOK", "SAR", "DKK", "JPY"]
