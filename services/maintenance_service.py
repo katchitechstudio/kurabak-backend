@@ -53,7 +53,7 @@ SANITY_RULES = {
 
 SANITY_NOTIFY_COOLDOWN = 3600
 
-GOLD_MARGIN_KEYS = ['GRA', 'C22', 'YAR', 'TAM', 'ATA', 'AG', 'HAS', 'GUMUS']
+GOLD_MARGIN_KEYS = ['GRA', 'C22', 'YAR', 'TAM', 'ATA', 'AG', 'GUMUS']
 
 _MIN_ACCEPTABLE = {
     'GRA':   0.015,
@@ -62,9 +62,8 @@ _MIN_ACCEPTABLE = {
     'TAM':   0.005,
     'CUM':   0.008,
     'ATA':   0.008,
-    'HAS':   0.004,
-    'AG':    0.040,
-    'GUMUS': 0.040,
+    'AG':    0.030,
+    'GUMUS': 0.030,
 }
 
 _MAX_STEP_PER_CYCLE = 0.005
@@ -109,7 +108,6 @@ def run_sanity_check() -> bool:
         for item in all_items:
             code    = item.get("code")
             selling = item.get("selling", 0)
-            # FIX #6 — selling 0 ise buying'e bak, gereksiz critical önle
             if selling == 0:
                 selling = item.get("buying", 0) or item.get("rate", 0)
             if code not in SANITY_RULES:
@@ -466,7 +464,6 @@ def snapshot_and_publish_morning_job():
 
 def monday_snapshot_refresh_job():
     try:
-        # FIX #2 — timezone-aware now
         now = datetime.now(_TZ)
         if now.weekday() != 0:
             return
@@ -641,7 +638,6 @@ def _apply_gradual_margins(current_margins: dict, new_margins: dict) -> dict:
 
 
 def _retry_gold_margins_async():
-    # FIX #5 — retry kendi HTML'ini çekiyor, eski/bozuk HTML'e bağımlı değil
     try:
         time.sleep(300)
         logger.info("🔄 [MARJ] Altın retry başlıyor (5dk sonra) — taze HTML çekiliyor...")
@@ -826,7 +822,6 @@ def check_and_refresh_margins():
                             "Sabit fallback değerler kullanılıyor.\n"
                             "5 dakika sonra tekrar denenecek..."
                         )
-                    # FIX #5 — thread'e artık parametre geçmiyoruz, kendi fetch ediyor
                     threading.Thread(
                         target=_retry_gold_margins_async,
                         daemon=True
@@ -1065,7 +1060,6 @@ def start_scheduler():
             replace_existing=True,
             max_instances=1,
             coalesce=True
-            # FIX #7 — next_run_time kaldırıldı, APS kendi planlasın (naive datetime riski önlendi)
         )
 
         scheduler.add_job(
@@ -1089,7 +1083,7 @@ def start_scheduler():
         )
 
         scheduler.start()
-        logger.info("✅ Scheduler başlatıldı! (V6.6 - TZ + RETRY FIX)")
+        logger.info("✅ Scheduler başlatıldı!")
         logger.info(f"   👷 Worker:       Her {worker_interval} saniyede")
         logger.info("   👮 Şef:          Her 10 dakikada (+ Sanity Check)")
         logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (Cuma 18:00 → Pazartesi 00:10 duraklatılır)")
@@ -1136,7 +1130,7 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval':   getattr(Config, 'ALARM_CHECK_INTERVAL', 15),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V6.6',
+            'version': 'V6.7',
             'optimizations': {
                 'cpu_spike_prevention':       True,
                 'gradual_margin_transition':  True,
