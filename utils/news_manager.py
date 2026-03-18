@@ -120,10 +120,22 @@ _GOLD_API_MAPPING = {
 }
 
 # Döviz: Ziraat kodu → Truncgil API key (aynı, direkt map)
+# JPY gösterilmiyor → listeden çıkarıldı
+# CAD/AUD Ziraat'ta yok → fallback marj kullanır, listeden çıkarıldı
 _CURRENCY_API_KEYS = [
-    'USD', 'EUR', 'GBP', 'CHF', 'CAD', 'AUD',
-    'SEK', 'NOK', 'SAR', 'DKK', 'JPY'
+    'USD', 'EUR', 'GBP', 'CHF',
+    'SEK', 'NOK', 'SAR', 'DKK'
 ]
+
+# Altın fiyatları için minimum eşik — değişim yüzdesi/saat gibi küçük sayıları eler
+_GOLD_MIN_PRICE = {
+    'GRA': 500.0,
+    'C22': 5000.0,
+    'YAR': 10000.0,
+    'TAM': 20000.0,
+    'ATA': 20000.0,
+    'AG':  50.0,
+}
 
 
 def _validate_margin(key: str, value: float) -> bool:
@@ -409,11 +421,14 @@ def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
                     break
             if not code:
                 continue
+            min_price = _GOLD_MIN_PRICE.get(code, 1.0)
             nums = []
             for cell in cells[1:]:
                 txt = cell.get_text(strip=True).replace('.', '').replace(',', '.').replace('₺', '').replace(' ', '')
                 try:
-                    nums.append(float(txt))
+                    v = float(txt)
+                    if v >= min_price:  # değişim %, saat gibi küçük sayıları eler
+                        nums.append(v)
                 except ValueError:
                     continue
             if len(nums) >= 2:
@@ -488,12 +503,15 @@ def fetch_ziraat_prices() -> Optional[Dict[str, Dict[str, float]]]:
                 txt = cell.get_text(strip=True).replace(',', '.').replace(' ', '')
                 try:
                     v = float(txt)
-                    if v > 0.001:
+                    # 0.001'den büyük, 10000'den küçük → geçerli kur fiyatı aralığı
+                    # Bu sayede yüzde değişim veya anlamsız büyük değerler elenir
+                    if 0.001 < v < 10000:
                         nums.append(v)
                 except ValueError:
                     continue
             if len(nums) >= 2:
-                prices[code] = {'buying': nums[0], 'selling': nums[-1]}
+                # Ziraat tablosunda alış=nums[0], satış=nums[1]
+                prices[code] = {'buying': nums[0], 'selling': nums[1]}
             elif len(nums) == 1:
                 prices[code] = {'buying': nums[0], 'selling': nums[0]}
 
