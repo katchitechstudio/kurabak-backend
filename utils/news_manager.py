@@ -58,13 +58,15 @@ _FALLBACK_CURRENCY_MARGINS = {
     'HUF': 0.015, 'BAM': 0.015,
 }
 
+# FIX 1: C22/YAR/TAM/ATA alt limitleri gerçek piyasa verilerine göre düşürüldü
+# Harem-Truncgil farkı bu ürünlerde %0.5-1 aralığında olabiliyor
 _MARGIN_VALID_RANGES = {
     'GRA':   (0.008, 0.080),
-    'C22':   (0.010, 0.060),
-    'YAR':   (0.008, 0.060),
-    'TAM':   (0.004, 0.060),
+    'C22':   (0.003, 0.060),  # 0.010 → 0.003
+    'YAR':   (0.003, 0.060),  # 0.008 → 0.003
+    'TAM':   (0.003, 0.060),  # 0.004 → 0.003
     'CUM':   (0.008, 0.060),
-    'ATA':   (0.008, 0.060),
+    'ATA':   (0.003, 0.060),  # 0.008 → 0.003
     'AG':    (0.020, 0.120),
     'GUMUS': (0.020, 0.120),
     'USD':   (0.005, 0.050),
@@ -110,12 +112,13 @@ _ZIRAAT_CURRENCY_MAP = {
 }
 
 # Altın: Harem kodu → Truncgil API key
+# FIX 2: ATA çıkarıldı — Harem/Truncgil verileri çelişkili (negatif marj),
+# static fallback (0.017) her zaman daha güvenilir
 _GOLD_API_MAPPING = {
     'GRA': 'GRA',
     'C22': 'CEYREKALTIN',
     'YAR': 'YARIMALTIN',
     'TAM': 'TAMALTIN',
-    'ATA': 'ATAALTIN',
     'AG':  'GUMUS',
 }
 
@@ -500,11 +503,14 @@ def fetch_ziraat_prices() -> Optional[Dict[str, Dict[str, float]]]:
                 continue
             nums = []
             for cell in cells[1:]:
-                txt = cell.get_text(strip=True).replace(',', '.').replace(' ', '')
+                raw_txt = cell.get_text(strip=True)
+                # FIX 3: Saat formatını (ör: "12:05") atla — USD parse hatasının sebebi
+                if ':' in raw_txt:
+                    continue
+                txt = raw_txt.replace(',', '.').replace(' ', '')
                 try:
                     v = float(txt)
                     # 0.001'den büyük, 10000'den küçük → geçerli kur fiyatı aralığı
-                    # Bu sayede yüzde değişim veya anlamsız büyük değerler elenir
                     if 0.001 < v < 10000:
                         nums.append(v)
                 except ValueError:
