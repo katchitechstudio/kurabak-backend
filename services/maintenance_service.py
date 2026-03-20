@@ -60,8 +60,8 @@ _MIN_ACCEPTABLE = {
     'C22':   0.010,
     'YAR':   0.008,
     'TAM':   0.005,
-    'CUM':   0.012,   # STATIC_GOLD_MARGINS (0.015) ile uyumlu
-    'ATA':   0.015,   # STATIC_GOLD_MARGINS (0.017) ile uyumlu — artık sorunlu çıkmaz
+    'CUM':   0.012,
+    'ATA':   0.015,
     'AG':    0.030,
     'GUMUS': 0.030,
 }
@@ -127,9 +127,9 @@ def run_sanity_check() -> bool:
         bad_list_str = "\n".join(f"  ❌ {b}" for b in bad_items)
         logger.critical(f"🚨 [SANİTY] BOZUK VERİ TESPİT EDİLDİ!\n{bad_list_str}")
 
-        cooldown_key = "sanity:last_notify"
-        last_notify  = get_cache(cooldown_key)
-        now          = time.time()
+        cooldown_key  = "sanity:last_notify"
+        last_notify   = get_cache(cooldown_key)
+        now           = time.time()
         should_notify = True
 
         if last_notify:
@@ -172,7 +172,7 @@ def run_sanity_check() -> bool:
                 raw_key = Config.CACHE_KEYS.get(f'{asset_type}_all')
                 if raw_key and asset_type in backup_data:
                     set_cache(raw_key, backup_data[asset_type], ttl=0)
-                jeweler_key = Config.CACHE_KEYS.get(f'{asset_type}_jeweler')
+                jeweler_key      = Config.CACHE_KEYS.get(f'{asset_type}_jeweler')
                 jeweler_data_key = f"{asset_type}_jeweler"
                 if jeweler_key and jeweler_data_key in backup_data:
                     set_cache(jeweler_key, backup_data[jeweler_data_key], ttl=0)
@@ -203,14 +203,14 @@ def check_maintenance_status() -> Dict[str, Any]:
     if not maintenance_data:
         return {'is_active': False, 'banner_message': None}
     return {
-        'is_active': True,
+        'is_active':      True,
         'banner_message': maintenance_data.get('message', Config.MAINTENANCE_DEFAULT_MESSAGE)
     }
 
 
 def activate_maintenance(message: Optional[str] = None) -> bool:
     try:
-        banner_msg = message or Config.MAINTENANCE_DEFAULT_MESSAGE
+        banner_msg       = message or Config.MAINTENANCE_DEFAULT_MESSAGE
         maintenance_data = {'message': banner_msg, 'activated_at': time.time()}
         set_cache(Config.CACHE_KEYS['maintenance'], maintenance_data, ttl=0)
         logger.info(f"🚧 Bakım modu aktif edildi: {banner_msg}")
@@ -378,8 +378,8 @@ def cleanup_old_backups():
     try:
         logger.info("🧹 [CLEANUP] Eski backup temizliği başlıyor...")
         from utils.cache import cleanup_old_disk_backups, get_disk_backup_stats
-        before_stats = get_disk_backup_stats()
-        result       = cleanup_old_disk_backups(max_age_days=Config.CLEANUP_BACKUP_AGE_DAYS)
+        before_stats  = get_disk_backup_stats()
+        result        = cleanup_old_disk_backups(max_age_days=Config.CLEANUP_BACKUP_AGE_DAYS)
         deleted_count = result.get('deleted_count', 0)
         after_stats   = result.get('after_stats', {})
         if deleted_count > 0:
@@ -391,6 +391,31 @@ def cleanup_old_backups():
         set_cache(Config.CACHE_KEYS['cleanup_last_run'], str(time.time()), ttl=0)
     except Exception as e:
         logger.error(f"❌ [CLEANUP] Hata: {e}")
+        raise
+
+
+def fcm_token_cleanup_job():
+    try:
+        logger.info("🧹 [FCM CLEANUP] Haftalık geçersiz token temizliği başlıyor...")
+        from utils.notification_service import cleanup_invalid_tokens
+        result = cleanup_invalid_tokens()
+        if result.get('success'):
+            logger.info(
+                f"✅ [FCM CLEANUP] Tamamlandı: "
+                f"{result.get('checked', 0)} kontrol edildi, "
+                f"{result.get('removed', 0)} silindi, "
+                f"{result.get('remaining', 0)} kaldı"
+            )
+            _send_telegram(
+                f"🧹 *FCM Token Temizliği Tamamlandı*\n\n"
+                f"✅ Kontrol: {result.get('checked', 0)}\n"
+                f"🗑️ Silinen: {result.get('removed', 0)}\n"
+                f"📱 Kalan: {result.get('remaining', 0)}"
+            )
+        else:
+            logger.error(f"❌ [FCM CLEANUP] Hata: {result.get('error')}")
+    except Exception as e:
+        logger.error(f"❌ [FCM CLEANUP] Beklenmeyen hata: {e}")
         raise
 
 
@@ -627,9 +652,9 @@ def _apply_gradual_margins(current_margins: dict, new_margins: dict) -> dict:
     result = dict(current_margins)
     for key, new_val in new_margins.items():
         old_val = current_margins.get(key, new_val)
-        diff = new_val - old_val
+        diff    = new_val - old_val
         if abs(diff) > _MAX_STEP_PER_CYCLE:
-            step = _MAX_STEP_PER_CYCLE if diff > 0 else -_MAX_STEP_PER_CYCLE
+            step       = _MAX_STEP_PER_CYCLE if diff > 0 else -_MAX_STEP_PER_CYCLE
             result[key] = round(old_val + step, 6)
             logger.info(f"  📈 [KADEMELI] {key}: {old_val:.4f} → {result[key]:.4f} (hedef: {new_val:.4f})")
         else:
@@ -715,9 +740,6 @@ def check_and_refresh_margins():
         margin_key      = Config.CACHE_KEYS.get('dynamic_margins', 'dynamic:margins')
         current_margins = get_cache(margin_key) or {}
 
-        # ── Marj sağlık kontrolü ────────────────────────────────────
-        # Static marjları kontrol öncesi uygula — CUM ve ATA her zaman
-        # Config.STATIC_GOLD_MARGINS değerlerini taşır, asla sorunlu çıkmaz
         exotic_margins      = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
         gold_static_margins = getattr(Config, 'STATIC_GOLD_MARGINS', {})
         current_margins.update(exotic_margins)
@@ -761,7 +783,6 @@ def check_and_refresh_margins():
                 if gold_result:
                     applied = _apply_gradual_margins(current_margins, gold_result)
                     current_margins.update(applied)
-                    # Static override'ları tekrar uygula
                     current_margins.update(exotic_margins)
                     current_margins.update(gold_static_margins)
                     set_cache(margin_key, current_margins, ttl=86400)
@@ -837,7 +858,7 @@ def check_and_refresh_margins():
             if result:
                 applied = _apply_gradual_margins(current_margins, result)
                 current_margins.update(applied)
-                updated = True
+                updated       = True
                 gold_keys     = [k for k in result if k in GOLD_MARGIN_KEYS]
                 currency_keys = [k for k in result if k not in GOLD_MARGIN_KEYS]
                 if gold_keys:
@@ -847,7 +868,6 @@ def check_and_refresh_margins():
             else:
                 logger.warning("⚠️ [MARJ] Rutin güncelleme başarısız, mevcut marjlar korundu")
 
-        # Static override'lar her zaman en son uygulanır
         current_margins.update(exotic_margins)
         current_margins.update(gold_static_margins)
 
@@ -922,6 +942,16 @@ def start_scheduler():
             trigger=CronTrigger(hour=3, minute=0),
             id='cleanup',
             name='Cleanup (Eski Backup Temizliği)',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True
+        )
+
+        scheduler.add_job(
+            fcm_token_cleanup_job,
+            trigger=CronTrigger(day_of_week='sun', hour=3, minute=30),
+            id='fcm_token_cleanup',
+            name='FCM Token Temizliği (Haftalık)',
             replace_existing=True,
             max_instances=1,
             coalesce=True
@@ -1069,12 +1099,13 @@ def start_scheduler():
 
         scheduler.start()
         logger.info("✅ Scheduler başlatıldı!")
-        logger.info(f"   👷 Worker:       Her {worker_interval} saniyede")
-        logger.info("   👮 Şef:          Her 10 dakikada (+ Sanity Check)")
-        logger.info(f"   🔔 Alarm:        Her {alarm_interval_minutes} dakikada (Cuma 18:00 → Pazartesi 00:10 duraklatılır)")
-        logger.info("   📊 Rapor:        Her gün 09:00")
-        logger.info("   🧹 Cleanup:      Her gün 03:00")
-        logger.info("   💰 Her 6 saatte → Marj Sağlık + Kademeli Güncelleme (Direkt Hesaplama)")
+        logger.info(f"   👷 Worker:          Her {worker_interval} saniyede")
+        logger.info("   👮 Şef:             Her 10 dakikada (+ Sanity Check)")
+        logger.info(f"   🔔 Alarm:           Her {alarm_interval_minutes} dakikada (Cuma 18:00 → Pazartesi 00:10 duraklatılır)")
+        logger.info("   📊 Rapor:           Her gün 09:00")
+        logger.info("   🧹 Cleanup:         Her gün 03:00")
+        logger.info("   🧹 FCM Cleanup:     Her Pazar 03:30 (dry_run ile geçersiz token temizliği)")
+        logger.info("   💰 Her 6 saatte → Marj Sağlık + Kademeli Güncelleme")
 
 
 def stop_scheduler():
@@ -1115,7 +1146,7 @@ def get_scheduler_status() -> Dict[str, Any]:
             'alarm_interval':   getattr(Config, 'ALARM_CHECK_INTERVAL', 15),
             'cleanup_age_days': Config.CLEANUP_BACKUP_AGE_DAYS,
             'maintenance_active': check_maintenance_status()['is_active'],
-            'version': 'V6.8',
+            'version': 'V6.9',
             'optimizations': {
                 'cpu_spike_prevention':       True,
                 'gradual_margin_transition':  True,
@@ -1125,7 +1156,7 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'async_margin_bootstrap':     True,
                 'margin_health_check':        True,
                 'gold_margin_auto_fix':       True,
-                'direct_margin_calculation':  True,   # Gemini yerine direkt matematik
+                'direct_margin_calculation':  True,
                 'bayram_notifications':       True,
                 'kasim_anma':                 True,
                 'redis_lock_renewal':         True,
@@ -1134,10 +1165,12 @@ def get_scheduler_status() -> Dict[str, Any]:
                 'weekend_margin_guard':       True,
                 'weekend_alarm_guard':        True,
                 'monday_snapshot_refresh':    True,
+                'fcm_weekly_cleanup':         True,
                 'weekend_alarm_safe_window':  'Cuma 18:00 → Pazartesi 00:10',
                 'monday_baseline_snapshot':   'Pazartesi 00:15',
+                'fcm_cleanup_schedule':       'Pazar 03:30',
                 'margin_max_step_per_cycle':  _MAX_STEP_PER_CYCLE,
-                'static_override_first':      True,   # Static marjlar kontrol öncesi uygulanır
+                'static_override_first':      True,
                 'timezone_aware':             True,
             }
         }
