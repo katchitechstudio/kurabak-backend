@@ -1,26 +1,3 @@
-"""
-Event Manager - AKILLI TAKVİM SİSTEMİ V7.2 🗓️📰🏦
-======================================
-✅ BAYRAMLAR: Gemini otomatik tespit (her vardiya hazırlığında)
-✅ HABERLER: GNews + NewsData + Gemini özet
-✅ ÖNCELİK SİSTEMİ: Bayram (15:00'a kadar) > Haberler
-✅ TEK BANNER KURALI: Sadece en yüksek priority gösterilir
-✅ BASIT VE ETKİLİ: Gereksiz karmaşıklık yok
-✅ CLEAN CODE: Yorumsuz, profesyonel, production-ready
-✅ LOG SPAM FIX: Banner sadece değiştiğinde loglanır (V7.1)
-✅ ÇİFTE BİLDİRİM FIX: Bayram bildirimi sadece 1 kez gönderilir (V7.2)
-
-Priority Değerleri (Düşük sayı = Yüksek öncelik):
-- 10: Bayram/Tatil
-- 30: Piyasa Kapalı
-- 75: Günlük Haberler
-
-V7.2 Değişiklikler:
-- ÇİFTE BİLDİRİM FIX: get_daily_notification_content() artık saat kontrolü yapıyor.
-  Bayram mesajı yalnızca saat < 15 iken döndürülür; 15:00+ olduğunda haber moduna geçer.
-  Bu sayede sabah 9 ve öğlen 14 job'larının ikisi de bayram mesajı göndermesi engellendi.
-"""
-
 import logging
 from datetime import datetime, date
 from typing import Optional, List, Dict
@@ -122,29 +99,6 @@ def get_todays_banner() -> Optional[str]:
 
 
 def get_daily_notification_content() -> Optional[Dict[str, str]]:
-    current_time = datetime.now()
-
-    try:
-        bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-        bayram_msg = get_cache(bayram_key)
-
-        # Bayram mesajı sadece saat 15:00'dan önce gönderilir.
-        # Bu sayede sabah (09:00) ve öğlen (14:00) job'larından
-        # yalnızca biri bayram bildirimi gönderir; 14:00 job'u
-        # bu koşulu geçer, 15:00+ çalışan job'lar haber moduna düşer.
-        if bayram_msg and current_time.hour < 15:
-            logger.info(f"🔔 [PUSH NOTIFICATION] Bayram mesajı hazırlandı: {bayram_msg[:50]}...")
-            return {
-                "title": "Bugün Özel Gün!",
-                "body":  bayram_msg,
-                "type":  "bayram"
-            }
-        elif bayram_msg and current_time.hour >= 15:
-            logger.info("🔔 [PUSH NOTIFICATION] Bayram mesajı süresi doldu (15:00+), habere geçiliyor...")
-
-    except Exception as e:
-        logger.warning(f"⚠️ [PUSH NOTIFICATION] Bayram kontrolü hatası: {e}")
-
     try:
         from utils.news_manager import get_current_news_banner
 
@@ -162,7 +116,7 @@ def get_daily_notification_content() -> Optional[Dict[str, str]]:
     except Exception as e:
         logger.error(f"❌ [PUSH NOTIFICATION] Haber kontrolü hatası: {e}")
 
-    logger.warning("⚠️ [PUSH NOTIFICATION] Ne bayram ne haber var, bildirim gönderilmeyecek")
+    logger.warning("⚠️ [PUSH NOTIFICATION] Gönderilecek haber yok, bildirim gönderilmeyecek")
     return None
 
 
@@ -212,7 +166,7 @@ def test_event_manager():
 
     print("=" * 60)
     print("🧪 get_daily_notification_content() TEST EDİLİYOR...")
-    print("   (14:00'da gönderilecek bildirim içeriği)")
+    print("   (14:00'da gönderilecek bildirim içeriği — sadece haber)")
     print("=" * 60)
     try:
         notification = get_daily_notification_content()
@@ -222,7 +176,7 @@ def test_event_manager():
             print(f"   İçerik: {notification['body'][:100]}...")
             print(f"   Tür: {notification['type']}")
         else:
-            print("⚠️ Bildirim yok (Ne bayram ne haber var)")
+            print("⚠️ Bildirim yok (Haber bulunamadı)")
     except Exception as e:
         print(f"❌ Hata: {e}")
         import traceback
