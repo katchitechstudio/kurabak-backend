@@ -237,6 +237,59 @@ def get_token_count() -> int:
         return 0
 
 
+def _send_batch(
+    batch_tokens: List[str],
+    data_payload: Dict,
+    priority: str,
+    batch_num: int,
+    batch_count: int
+) -> Dict:
+    """Tek bir batch'i FCM'e gönderir. send_notification ve send_to_all tarafından ortak kullanılır."""
+    total_success     = 0
+    total_failure     = 0
+    failed_tokens     = []
+
+    logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
+
+    try:
+        response = messaging.send_each_for_multicast(
+            messaging.MulticastMessage(
+                tokens=batch_tokens,
+                data=data_payload,
+                android=messaging.AndroidConfig(priority=priority)
+            )
+        )
+
+        total_success += response.success_count
+        total_failure += response.failure_count
+
+        if response.failure_count > 0:
+            for idx, send_response in enumerate(response.responses):
+                if not send_response.success:
+                    err = send_response.exception
+                    if err and _is_invalid_token_error(err):
+                        failed_tokens.append(batch_tokens[idx])
+                        logger.debug(f"   ❌ Geçersiz token {idx+1}: {err}")
+                    else:
+                        logger.debug(f"   ⚠️ Geçici hata token {idx+1}: {err} (token korunuyor)")
+
+        logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
+
+    except Exception as batch_error:
+        if _is_firebase_init_error(batch_error):
+            logger.error(f"❌ [FCM] Batch {batch_num} Firebase init hatası: {batch_error}")
+        else:
+            logger.error(f"❌ [FCM] Batch {batch_num} kritik hata: {batch_error}")
+        total_failure += len(batch_tokens)
+
+    if failed_tokens:
+        logger.warning(f"🗑️ [FCM] {len(failed_tokens)} geçersiz token temizleniyor...")
+        for token in failed_tokens:
+            unregister_fcm_token(token)
+
+    return {"success_count": total_success, "failure_count": total_failure}
+
+
 def send_notification(
     tokens: List[str],
     title: str,
@@ -258,12 +311,10 @@ def send_notification(
         data_payload["title"] = title
         data_payload["body"]  = body
 
-        total_success     = 0
-        total_failure     = 0
-        failed_tokens_all = []
-
-        total_tokens = len(tokens)
-        batch_count  = (total_tokens + FCM_BATCH_SIZE - 1) // FCM_BATCH_SIZE
+        total_success = 0
+        total_failure = 0
+        total_tokens  = len(tokens)
+        batch_count   = (total_tokens + FCM_BATCH_SIZE - 1) // FCM_BATCH_SIZE
 
         logger.info(f"📦 [FCM] {total_tokens} token, {batch_count} batch'e bölünüyor...")
 
@@ -271,56 +322,12 @@ def send_notification(
             batch_tokens = tokens[i:i + FCM_BATCH_SIZE]
             batch_num    = (i // FCM_BATCH_SIZE) + 1
 
-            logger.info(f"📤 [FCM] Batch {batch_num}/{batch_count} gönderiliyor ({len(batch_tokens)} token)...")
-
-            try:
-                response = messaging.send_each_for_multicast(
-                    messaging.MulticastMessage(
-                        tokens=batch_tokens,
-                        data=data_payload,
-                        android=messaging.AndroidConfig(priority=priority)
-                    )
-                )
-
-                total_success += response.success_count
-                total_failure += response.failure_count
-
-                if response.failure_count > 0:
-                    for idx, send_response in enumerate(response.responses):
-                        if not send_response.success:
-                            err = send_response.exception
-                            if err and _is_invalid_token_error(err):
-                                failed_tokens_all.append(batch_tokens[idx])
-                                logger.debug(f"   ❌ Geçersiz token {idx+1}: {err}")
-                            else:
-                                logger.debug(f"   ⚠️ Geçici hata token {idx+1}: {err} (token korunuyor)")
-
-                logger.info(f"   ✅ Batch {batch_num}: {response.success_count} başarılı, {response.failure_count} başarısız")
-
-            except Exception as batch_error:
-                if _is_firebase_init_error(batch_error):
-                    logger.error(f"❌ [FCM] Batch {batch_num} Firebase init hatası: {batch_error}")
-                    total_failure += len(batch_tokens)
-                else:
-                    logger.error(f"❌ [FCM] Batch {batch_num} kritik hata: {batch_error}")
-                    total_failure += len(batch_tokens)
+            result         = _send_batch(batch_tokens, data_payload, priority, batch_num, batch_count)
+            total_success += result["success_count"]
+            total_failure += result["failure_count"]
 
             if batch_num < batch_count:
                 time.sleep(0.1)
-
-        if failed_tokens_all:
-            logger.warning(f"🗑️ [FCM] {len(failed_tokens_all)} geçersiz token temizleniyor...")
-            for token in failed_tokens_all:
-                unregister_fcm_token(token)
-
-        result = {
-            "success":       True,
-            "success_count": total_success,
-            "failure_count": total_failure,
-            "total_tokens":  total_tokens,
-            "batch_count":   batch_count,
-            "timestamp":     datetime.now().isoformat()
-        }
 
         logger.info(f"🎉 [FCM] Gönderim tamamlandı!")
         logger.info(f"   📊 Toplam: {total_tokens} token")
@@ -331,7 +338,14 @@ def send_notification(
 
         set_cache(Config.CACHE_KEYS['fcm_last_notification'], str(datetime.now().timestamp()), ttl=86400)
 
-        return result
+        return {
+            "success":       True,
+            "success_count": total_success,
+            "failure_count": total_failure,
+            "total_tokens":  total_tokens,
+            "batch_count":   batch_count,
+            "timestamp":     datetime.now().isoformat()
+        }
 
     except Exception as e:
         logger.error(f"❌ [FCM] Bildirim gönderme hatası: {e}")
@@ -340,7 +354,7 @@ def send_notification(
         return {"success": False, "error": str(e)}
 
 
-def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
+def send_to_all(title: str, body: str, data: Optional[Dict] = None, priority: str = "high") -> Dict:
     try:
         if not firebase_admin._apps:
             logger.error("❌ [FCM] Firebase başlatılmamış! send_to_all atlanıyor, tokenlar KORUNUYOR.")
@@ -348,49 +362,35 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
 
         logger.info("📢 [FCM] Toplu bildirim gönderiliyor (Generator modu)...")
 
+        data_payload          = dict(data) if data else {}
+        data_payload["title"] = title
+        data_payload["body"]  = body
+
         total_success = 0
         total_failure = 0
         total_tokens  = 0
         batch_num     = 0
 
-        for batch_tokens in get_tokens_generator(batch_size=FCM_BATCH_SIZE):
-            batch_num += 1
+        # Toplam token sayısını batch sayısı için önceden al
+        total_token_count = get_token_count()
+        batch_count       = (total_token_count + FCM_BATCH_SIZE - 1) // FCM_BATCH_SIZE if total_token_count else 1
 
+        for batch_tokens in get_tokens_generator(batch_size=FCM_BATCH_SIZE):
             if not batch_tokens:
                 continue
 
-            logger.info(f"📤 [FCM] Batch {batch_num} gönderiliyor ({len(batch_tokens)} token)...")
+            batch_num    += 1
+            total_tokens += len(batch_tokens)
 
-            result = send_notification(
-                tokens=batch_tokens,
-                title=title,
-                body=body,
-                data=data
-            )
-
-            if result.get('success'):
-                total_success += result.get('success_count', 0)
-                total_failure += result.get('failure_count', 0)
-                total_tokens  += len(batch_tokens)
-            else:
-                logger.error(f"❌ [FCM] Batch {batch_num} tamamen başarısız!")
-                total_failure += len(batch_tokens)
-                total_tokens  += len(batch_tokens)
+            result         = _send_batch(batch_tokens, data_payload, priority, batch_num, batch_count)
+            total_success += result["success_count"]
+            total_failure += result["failure_count"]
 
             time.sleep(0.2)
 
         if total_tokens == 0:
             logger.warning("⚠️ [FCM] Hiç kayıtlı cihaz yok!")
             return {"success": False, "error": "No registered devices"}
-
-        result = {
-            "success":       True,
-            "total_sent":    total_tokens,
-            "success_count": total_success,
-            "failure_count": total_failure,
-            "batch_count":   batch_num,
-            "timestamp":     datetime.now().isoformat()
-        }
 
         logger.info(f"🏁 [FCM] Toplu gönderim tamamlandı!")
         logger.info(f"   📊 Toplam: {total_tokens} token")
@@ -399,7 +399,14 @@ def send_to_all(title: str, body: str, data: Optional[Dict] = None) -> Dict:
 
         set_cache(Config.CACHE_KEYS['fcm_last_notification'], str(datetime.now().timestamp()), ttl=86400)
 
-        return result
+        return {
+            "success":       True,
+            "total_sent":    total_tokens,
+            "success_count": total_success,
+            "failure_count": total_failure,
+            "batch_count":   batch_num,
+            "timestamp":     datetime.now().isoformat()
+        }
 
     except Exception as e:
         logger.error(f"❌ [FCM] Toplu gönderim hatası: {e}")
