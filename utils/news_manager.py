@@ -58,15 +58,13 @@ _FALLBACK_CURRENCY_MARGINS = {
     'HUF': 0.015, 'BAM': 0.015,
 }
 
-# FIX 1: C22/YAR/TAM/ATA alt limitleri gerçek piyasa verilerine göre düşürüldü
-# Harem-Truncgil farkı bu ürünlerde %0.5-1 aralığında olabiliyor
 _MARGIN_VALID_RANGES = {
-    'GRA':   (0.008, 0.080),
-    'C22':   (0.003, 0.060),  # 0.010 → 0.003
-    'YAR':   (0.003, 0.060),  # 0.008 → 0.003
-    'TAM':   (0.003, 0.060),  # 0.004 → 0.003
+    'GRA':   (0.008, 0.120),
+    'C22':   (0.003, 0.060),
+    'YAR':   (0.003, 0.060),
+    'TAM':   (0.003, 0.060),
     'CUM':   (0.008, 0.060),
-    'ATA':   (0.003, 0.060),  # 0.008 → 0.003
+    'ATA':   (0.003, 0.060),
     'AG':    (0.020, 0.120),
     'GUMUS': (0.020, 0.120),
     'USD':   (0.005, 0.050),
@@ -98,22 +96,32 @@ _HAREM_PRODUCT_MAP = {
 }
 
 _ZIRAAT_CURRENCY_MAP = {
-    'abd dolari': 'USD', 'usd': 'USD', 'dolar': 'USD',
-    'euro':       'EUR', 'eur': 'EUR',
-    'ingiliz sterlini': 'GBP', 'gbp': 'GBP', 'sterlin': 'GBP',
-    'isviçre frangı': 'CHF', 'chf': 'CHF', 'franc': 'CHF',
-    'kanada dolari': 'CAD', 'cad': 'CAD',
-    'avustralya dolari': 'AUD', 'aud': 'AUD',
-    'isveç kronasi': 'SEK', 'sek': 'SEK',
-    'norveç kronasi': 'NOK', 'nok': 'NOK',
-    'suudi arabistan riyali': 'SAR', 'sar': 'SAR',
-    'danimarka kronasi': 'DKK', 'dkk': 'DKK',
-    'japon yeni': 'JPY', 'jpy': 'JPY',
+    'abd dolari':         'USD',
+    'usd':                'USD',
+    'euro':               'EUR',
+    'eur':                'EUR',
+    'ingiliz sterlini':   'GBP',
+    'gbp':                'GBP',
+    'sterlin':            'GBP',
+    'isviçre frangı':     'CHF',
+    'chf':                'CHF',
+    'franc':              'CHF',
+    'kanada dolari':      'CAD',
+    'cad':                'CAD',
+    'avustralya dolari':  'AUD',
+    'aud':                'AUD',
+    'isveç kronasi':      'SEK',
+    'sek':                'SEK',
+    'norveç kronasi':     'NOK',
+    'nok':                'NOK',
+    'suudi arabistan riyali': 'SAR',
+    'sar':                'SAR',
+    'danimarka kronasi':  'DKK',
+    'dkk':                'DKK',
+    'japon yeni':         'JPY',
+    'jpy':                'JPY',
 }
 
-# Altın: Harem kodu → Truncgil API key
-# FIX 2: ATA çıkarıldı — Harem/Truncgil verileri çelişkili (negatif marj),
-# static fallback (0.017) her zaman daha güvenilir
 _GOLD_API_MAPPING = {
     'GRA': 'GRA',
     'C22': 'CEYREKALTIN',
@@ -122,15 +130,11 @@ _GOLD_API_MAPPING = {
     'AG':  'GUMUS',
 }
 
-# Döviz: Ziraat kodu → Truncgil API key (aynı, direkt map)
-# JPY gösterilmiyor → listeden çıkarıldı
-# CAD/AUD Ziraat'ta yok → fallback marj kullanır, listeden çıkarıldı
 _CURRENCY_API_KEYS = [
     'USD', 'EUR', 'GBP', 'CHF',
     'SEK', 'NOK', 'SAR', 'DKK'
 ]
 
-# Altın fiyatları için minimum eşik — değişim yüzdesi/saat gibi küçük sayıları eler
 _GOLD_MIN_PRICE = {
     'GRA': 500.0,
     'C22': 5000.0,
@@ -155,9 +159,9 @@ def _validate_margin(key: str, value: float) -> bool:
 
 
 def _get_config_fallback_margins() -> Dict[str, float]:
-    gold = getattr(Config, 'DEFAULT_GOLD_MARGINS', _FALLBACK_GOLD_MARGINS)
+    gold     = getattr(Config, 'DEFAULT_GOLD_MARGINS', _FALLBACK_GOLD_MARGINS)
     currency = getattr(Config, 'DEFAULT_CURRENCY_MARGINS', _FALLBACK_CURRENCY_MARGINS)
-    exotic = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
+    exotic   = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
     return {**_FALLBACK_GOLD_MARGINS, **_FALLBACK_CURRENCY_MARGINS, **gold, **currency, **exotic}
 
 
@@ -199,7 +203,7 @@ def get_previously_shown_news() -> List[str]:
 
 def save_shown_news(news_list: List[str]):
     existing = get_cache("news:shown_history") or []
-    unique = list(set(existing + news_list))
+    unique   = list(set(existing + news_list))
     set_cache("news:shown_history", unique, ttl=86400)
 
 def filter_already_shown(news_list: List[str]) -> List[str]:
@@ -244,10 +248,10 @@ def fetch_gnews(max_results: int = 30) -> List[str]:
             return []
         news_list = []
         for article in data.get('articles', [])[:max_results]:
-            title = article.get('title', '').strip()
+            title       = article.get('title', '').strip()
             description = article.get('description', '').strip()
-            pub_date = article.get('publishedAt', '')
-            full_text = f"{title}. {description}" if description else title
+            pub_date    = article.get('publishedAt', '')
+            full_text   = f"{title}. {description}" if description else title
             if full_text and len(full_text) > 15:
                 news_list.append(f"{full_text} [Tarih: {pub_date}]")
         logger.info(f"✅ [GNEWS] {len(news_list)} haber alındı")
@@ -273,10 +277,10 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
             title = article.get('title')
             if title is None:
                 continue
-            title = title.strip()
+            title       = title.strip()
             description = article.get('description')
-            pub_date = article.get('pubDate', '')
-            full_text = f"{title}. {description.strip()}" if description else title
+            pub_date    = article.get('pubDate', '')
+            full_text   = f"{title}. {description.strip()}" if description else title
             if full_text and len(full_text) > 15:
                 news_list.append(f"{full_text} [Tarih: {pub_date}]")
         logger.info(f"✅ [NEWSDATA] {len(news_list)} haber alındı")
@@ -287,10 +291,10 @@ def fetch_newsdata(max_results: int = 40) -> List[str]:
 
 def fetch_all_news() -> List[str]:
     logger.info("📰 [NEWS] Haber toplama başlıyor...")
-    gnews_list = fetch_gnews(max_results=Config.NEWS_MAX_RESULTS_PER_SOURCE)
+    gnews_list    = fetch_gnews(max_results=Config.NEWS_MAX_RESULTS_PER_SOURCE)
     newsdata_list = fetch_newsdata(max_results=Config.NEWS_MAX_RESULTS_PER_SOURCE)
-    all_news = gnews_list + newsdata_list
-    unique_news = deduplicate_news(all_news)
+    all_news      = gnews_list + newsdata_list
+    unique_news   = deduplicate_news(all_news)
     logger.info(f"✅ [NEWS] Toplam {len(unique_news)} benzersiz haber toplandı")
     return unique_news
 
@@ -303,9 +307,9 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         model = genai.GenerativeModel('gemini-3-flash-preview')
 
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
-        today = datetime.now().strftime('%d %B %Y, %A')
-        current_time = datetime.now().strftime('%H:%M')
-        two_days_ago = (datetime.now() - timedelta(days=2)).strftime('%d %B %Y')
+        today         = datetime.now().strftime('%d %B %Y, %A')
+        current_time  = datetime.now().strftime('%H:%M')
+        two_days_ago  = (datetime.now() - timedelta(days=2)).strftime('%d %B %Y')
 
         prompt = f"""
 SEN BİR FİNANS EDİTÖRÜSÜN. Sadece PİYASAYI ETKİLEYEN kritik haberleri seç.
@@ -370,14 +374,23 @@ BAYRAM: [VAR/YOK veya isim]
             logger.error("❌ [GEMİNİ HABER] Tüm denemeler başarısız!")
             return [], None
 
-        lines = result.split('\n')
+        lines      = result.split('\n')
         bayram_msg = None
         first_line = lines[0].strip()
 
         if first_line.startswith("BAYRAM:"):
             bayram_text = first_line.replace("BAYRAM:", "").strip()
             if bayram_text and bayram_text.upper() != "YOK":
-                bayram_msg = f"🏦 {bayram_text}"
+                text_lower = bayram_text.lower()
+                if "ramazan" in text_lower:
+                    emoji = "🌙"
+                elif "kurban" in text_lower:
+                    emoji = "🐑"
+                elif "kasım" in text_lower or "atatürk" in text_lower:
+                    emoji = "🕯️"
+                else:
+                    emoji = ""
+                bayram_msg = f"{emoji} {bayram_text}".strip()
             lines = lines[1:]
 
         summaries = []
@@ -404,14 +417,14 @@ BAYRAM: [VAR/YOK veya isim]
 
 def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
     try:
-        url = Config.HAREM_PRICE_URL
+        url     = Config.HAREM_PRICE_URL
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=Config.HAREM_FETCH_TIMEOUT)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
 
         prices = {}
-        rows = soup.find_all('tr')
+        rows   = soup.find_all('tr')
         for row in rows:
             cells = row.find_all(['td', 'th'])
             if len(cells) < 2:
@@ -430,7 +443,7 @@ def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
                 txt = cell.get_text(strip=True).replace('.', '').replace(',', '.').replace('₺', '').replace(' ', '')
                 try:
                     v = float(txt)
-                    if v >= min_price:  # değişim %, saat gibi küçük sayıları eler
+                    if v >= min_price:
                         nums.append(v)
                 except ValueError:
                     continue
@@ -452,7 +465,6 @@ def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
 
 
 def fetch_harem_html() -> Optional[str]:
-    """Geriye dönük uyumluluk için korundu — direkt hesaplamada kullanılmaz."""
     prices = fetch_harem_prices()
     if prices:
         lines = []
@@ -463,11 +475,11 @@ def fetch_harem_html() -> Optional[str]:
         return result
 
     try:
-        url = Config.HAREM_PRICE_URL
+        url     = Config.HAREM_PRICE_URL
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=Config.HAREM_FETCH_TIMEOUT)
         response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup  = BeautifulSoup(response.content, 'html.parser')
         table = soup.find('table') or soup.find_all('div', class_='data')
         if table:
             html_text = str(table)[:3000]
@@ -481,14 +493,14 @@ def fetch_harem_html() -> Optional[str]:
 
 def fetch_ziraat_prices() -> Optional[Dict[str, Dict[str, float]]]:
     try:
-        url = Config.ZIRAAT_CURRENCY_URL
+        url     = Config.ZIRAAT_CURRENCY_URL
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=Config.ZIRAAT_FETCH_TIMEOUT)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
         prices = {}
-        rows = soup.find_all('tr')
+        rows   = soup.find_all('tr')
         for row in rows:
             cells = row.find_all(['td', 'th'])
             if len(cells) < 2:
@@ -501,22 +513,23 @@ def fetch_ziraat_prices() -> Optional[Dict[str, Dict[str, float]]]:
                     break
             if not code:
                 continue
+            if code in prices:
+                continue
             nums = []
             for cell in cells[1:]:
                 raw_txt = cell.get_text(strip=True)
-                # FIX 3: Saat formatını (ör: "12:05") atla — USD parse hatasının sebebi
                 if ':' in raw_txt:
+                    continue
+                if raw_txt.startswith('%'):
                     continue
                 txt = raw_txt.replace(',', '.').replace(' ', '')
                 try:
                     v = float(txt)
-                    # 0.001'den büyük, 10000'den küçük → geçerli kur fiyatı aralığı
                     if 0.001 < v < 10000:
                         nums.append(v)
                 except ValueError:
                     continue
             if len(nums) >= 2:
-                # Ziraat tablosunda alış=nums[0], satış=nums[1]
                 prices[code] = {'buying': nums[0], 'selling': nums[1]}
             elif len(nums) == 1:
                 prices[code] = {'buying': nums[0], 'selling': nums[0]}
@@ -534,7 +547,6 @@ def fetch_ziraat_prices() -> Optional[Dict[str, Dict[str, float]]]:
 
 
 def fetch_ziraat_html() -> Optional[str]:
-    """Geriye dönük uyumluluk için korundu — direkt hesaplamada kullanılmaz."""
     prices = fetch_ziraat_prices()
     if prices:
         lines = []
@@ -545,7 +557,7 @@ def fetch_ziraat_html() -> Optional[str]:
         return result
 
     try:
-        url = Config.ZIRAAT_CURRENCY_URL
+        url     = Config.ZIRAAT_CURRENCY_URL
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=Config.ZIRAAT_FETCH_TIMEOUT)
         response.raise_for_status()
@@ -563,22 +575,13 @@ def calculate_all_margins_direct(
     api_rates: Dict,
     old_margins: Dict = None
 ) -> Optional[Dict]:
-    """
-    Gemini olmadan direkt matematiksel marj hesaplama.
-
-    Altın/Gümüş: MARJ = (Harem Satış - API Satış) / API Satış
-    Döviz:       MARJ = (Ziraat Satış - API Satış) / API Satış
-
-    api_rates: truncgil today.json'dan gelen Rates dict'i
-    """
     old_margins = old_margins or {}
-    margins = {}
-    rates = api_rates.get('Rates', api_rates)
+    margins     = {}
+    rates       = api_rates.get('Rates', api_rates)
 
-    # ── ALTIN / GÜMÜŞ ──────────────────────────────────────────────
     if harem_prices:
         for code, api_key in _GOLD_API_MAPPING.items():
-            harem = harem_prices.get(code)
+            harem     = harem_prices.get(code)
             api_entry = rates.get(api_key, {})
             api_selling = api_entry.get('Selling', 0)
 
@@ -605,17 +608,15 @@ def calculate_all_margins_direct(
                     logger.warning(f"  ⚠️ [DİREKT MARJ] {code}: geçersiz ({margin:.4f}), "
                                    f"eski marj korundu: {old_margins[code]:.4f}")
 
-        # AG = GUMUS eşitle
         if 'AG' in margins:
             margins['GUMUS'] = margins['AG']
             logger.debug(f"🔄 [DİREKT MARJ] GUMUS = AG: {margins['AG']:.4f}")
     else:
         logger.warning("⚠️ [DİREKT MARJ] Harem verisi yok, altın marjları hesaplanamadı")
 
-    # ── DÖVİZ ──────────────────────────────────────────────────────
     if ziraat_prices:
         for code in _CURRENCY_API_KEYS:
-            ziraat = ziraat_prices.get(code)
+            ziraat    = ziraat_prices.get(code)
             api_entry = rates.get(code, {})
             api_selling = api_entry.get('Selling', 0)
 
@@ -647,7 +648,7 @@ def calculate_all_margins_direct(
         logger.error("❌ [DİREKT MARJ] Hiç marj hesaplanamadı!")
         return None
 
-    gold_keys    = [k for k in margins if k in _GOLD_API_MAPPING or k == 'GUMUS']
+    gold_keys     = [k for k in margins if k in _GOLD_API_MAPPING or k == 'GUMUS']
     currency_keys = [k for k in margins if k in _CURRENCY_API_KEYS]
     logger.info(
         f"✅ [DİREKT MARJ] Toplam {len(margins)} marj hesaplandı: "
@@ -656,7 +657,6 @@ def calculate_all_margins_direct(
     return margins
 
 
-# ── Geriye dönük uyumluluk — eski çağrılar çalışmaya devam eder ──
 def calculate_all_margins_with_gemini(
     harem_html: str,
     ziraat_html: str,
@@ -664,11 +664,6 @@ def calculate_all_margins_with_gemini(
     currency_api_prices: Dict,
     old_margins: Dict = None
 ) -> Optional[Dict]:
-    """
-    DEPRECATED: Artık Gemini kullanılmıyor.
-    Eski çağrılar (maintenance_service vb.) için köprü fonksiyon.
-    Direkt hesaplamaya yönlendirir.
-    """
     logger.warning("⚠️ [COMPAT] calculate_all_margins_with_gemini çağrıldı → direkt hesaplamaya yönlendiriliyor")
     try:
         harem_prices  = fetch_harem_prices()
@@ -736,7 +731,6 @@ def update_dynamic_margins() -> bool:
         exotic_margins      = getattr(Config, 'STATIC_EXOTIC_MARGINS', {})
         gold_static_margins = getattr(Config, 'STATIC_GOLD_MARGINS', {})
 
-        # Static marjları computed üzerine yaz (CUM, ATA gibi override'lar geçerli)
         all_new_margins = {**computed_margins, **exotic_margins, **gold_static_margins}
 
         if not all_new_margins:
@@ -748,8 +742,7 @@ def update_dynamic_margins() -> bool:
             f"(HESAPLANAN:{len(computed_margins)} + EXOTIC:{len(exotic_margins)} + GOLD_STATIC:{len(gold_static_margins)})"
         )
 
-        # Kademeli geçiş (ani sıçramaları önle)
-        threshold = Config.MARGIN_SMOOTH_THRESHOLD
+        threshold      = Config.MARGIN_SMOOTH_THRESHOLD
         smooth_margins = dict(old_margins)
 
         for key, new_val in all_new_margins.items():
@@ -757,13 +750,12 @@ def update_dynamic_margins() -> bool:
                 smooth_margins[key] = new_val
                 continue
             old_val = old_margins.get(key, new_val)
-            diff = abs(new_val - old_val)
+            diff    = abs(new_val - old_val)
             if diff > threshold and Config.MARGIN_SMOOTH_TRANSITION:
                 smooth_margins[key] = round((old_val + new_val) / 2, 4)
             else:
                 smooth_margins[key] = new_val
 
-        # Eksik marjlar için fallback
         fallback_applied = []
         for key, fallback_val in _FALLBACK_GOLD_MARGINS.items():
             if key not in smooth_margins or smooth_margins.get(key, 0) == 0:
@@ -802,10 +794,10 @@ def get_dynamic_margins() -> Dict[str, float]:
         return dynamic_margins
 
     last_successful_key = Config.CACHE_KEYS.get('margin_last_update', 'margin:last_update')
-    last_successful = get_cache(last_successful_key)
+    last_successful     = get_cache(last_successful_key)
 
     if last_successful and isinstance(last_successful, dict):
-        margins = last_successful.get('margins')
+        margins   = last_successful.get('margins')
         timestamp = last_successful.get('timestamp', 0)
 
         if margins and isinstance(margins, dict):
@@ -842,10 +834,10 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
         return []
 
     total_duration_minutes = (end_hour - start_hour) * 60
-    news_count = len(news_list)
-    duration_per_news = total_duration_minutes // news_count
+    news_count             = len(news_list)
+    duration_per_news      = total_duration_minutes // news_count
 
-    schedule = []
+    schedule     = []
     current_time = datetime.now().replace(hour=start_hour, minute=0, second=0, microsecond=0)
 
     if start_hour == 0 and datetime.now().hour >= 12:
@@ -864,13 +856,13 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
     return schedule
 
 def calculate_bayram_ttl() -> int:
-    now = datetime.now()
+    now          = datetime.now()
     tomorrow_3am = (now + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
     return int((tomorrow_3am - now).total_seconds())
 
 def prepare_morning_news() -> bool:
     try:
-        news_list = fetch_all_news()
+        news_list  = fetch_all_news()
         fresh_news = filter_already_shown(news_list) if news_list else []
         summaries, bayram_msg = summarize_news_batch(fresh_news) if fresh_news else ([], None)
         pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
@@ -884,13 +876,13 @@ def prepare_morning_news() -> bool:
 def publish_morning_news() -> bool:
     try:
         logger.info("🌅 [SABAH YAYINLA] Hazır haberler yayınlanıyor...")
-        pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
+        pending_key  = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
         pending_data = get_cache(pending_key)
         if not pending_data:
             logger.error("❌ [SABAH YAYINLA] PENDING verisi yok!")
             return False
 
-        summaries = pending_data.get('summaries', [])
+        summaries  = pending_data.get('summaries', [])
         bayram_msg = pending_data.get('bayram')
 
         if bayram_msg:
@@ -919,7 +911,7 @@ def publish_morning_news() -> bool:
 
 def prepare_evening_news() -> bool:
     try:
-        news_list = fetch_all_news()
+        news_list  = fetch_all_news()
         fresh_news = filter_already_shown(news_list) if news_list else []
         summaries, bayram_msg = summarize_news_batch(fresh_news) if fresh_news else ([], None)
         pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
@@ -933,13 +925,13 @@ def prepare_evening_news() -> bool:
 def publish_evening_news() -> bool:
     try:
         logger.info("🌆 [AKŞAM YAYINLA] Hazır haberler yayınlanıyor...")
-        pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
+        pending_key  = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
         pending_data = get_cache(pending_key)
         if not pending_data:
             logger.error("❌ [AKŞAM YAYINLA] PENDING verisi yok!")
             return False
 
-        summaries = pending_data.get('summaries', [])
+        summaries  = pending_data.get('summaries', [])
         bayram_msg = pending_data.get('bayram')
 
         if bayram_msg:
@@ -971,15 +963,15 @@ def bootstrap_news_system() -> bool:
     try:
         current_hour = datetime.now().hour
         if 0 <= current_hour < 12:
-            cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
+            cache_key  = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
             shift_name = "SABAH"
             shift_type = "morning"
         else:
-            cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
+            cache_key  = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
             shift_name = "AKŞAM"
             shift_type = "evening"
 
-        now = time.time()
+        now          = time.time()
         last_attempt = _bootstrap_last_attempt[shift_type]
         if last_attempt > 0 and (now - last_attempt) < _bootstrap_cooldown:
             remaining = int(_bootstrap_cooldown - (now - last_attempt))
@@ -1084,7 +1076,7 @@ def test_news_manager():
         summaries, bayram_msg = summarize_news_batch(fresh_news)
         print(f"   ✅ {len(summaries)} kritik haber\n")
         if bayram_msg:
-            print(f"   🏦 BAYRAM: {bayram_msg}\n")
+            print(f"   🌙 BAYRAM: {bayram_msg}\n")
         if summaries:
             print("   Kritik haberler:")
             for i, summary in enumerate(summaries, 1):
