@@ -204,6 +204,8 @@ def get_previously_shown_news() -> List[str]:
 def save_shown_news(news_list: List[str]):
     existing = get_cache("news:shown_history") or []
     unique   = list(set(existing + news_list))
+    # FIX #4: Sonsuz büyümeyi önle, son 100 haberi tut
+    unique   = unique[-100:]
     set_cache("news:shown_history", unique, ttl=86400)
 
 def filter_already_shown(news_list: List[str]) -> List[str]:
@@ -326,7 +328,8 @@ BUGÜN: {today}, SAAT: {current_time}
 GÖREV 1 - BAYRAM KONTROLÜ
 ═══════════════════════════════════════════
 Bugün Türkiye'de resmi tatil/bayram var mı?
-VARSA → "BAYRAM: [tam isim]" | YOKSA → "BAYRAM: YOK"
+VARSA → "BAYRAM: [tam isim] | BİTİŞ: YYYY-MM-DD"
+YOKSA → "BAYRAM: YOK"
 
 ═══════════════════════════════════════════
 GÖREV 2 - ULTRA SIKI FİLTRE + TARİH KONTROLÜ
@@ -360,7 +363,7 @@ HAM HABERLER ({len(news_list)} adet):
 ═══════════════════════════════════════════
 ÇIKTI FORMATI:
 ═══════════════════════════════════════════
-BAYRAM: [VAR/YOK veya isim]
+BAYRAM: [VAR/YOK veya "isim | BİTİŞ: YYYY-MM-DD"]
 1. [Tam anlaşılır özet - Max 15 kelime]
 2. [Tam anlaşılır özet - Max 15 kelime]
 
@@ -376,12 +379,24 @@ BAYRAM: [VAR/YOK veya isim]
 
         lines      = result.split('\n')
         bayram_msg = None
+        bayram_end_date = None
         first_line = lines[0].strip()
 
         if first_line.startswith("BAYRAM:"):
             bayram_text = first_line.replace("BAYRAM:", "").strip()
             if bayram_text and bayram_text.upper() != "YOK":
-                text_lower = bayram_text.lower()
+                # FIX #1: Bitiş tarihini parse et
+                if "| BİTİŞ:" in bayram_text:
+                    parts = bayram_text.split("| BİTİŞ:")
+                    bayram_name = parts[0].strip()
+                    try:
+                        bayram_end_date = datetime.strptime(parts[1].strip(), "%Y-%m-%d").date()
+                    except ValueError:
+                        bayram_end_date = None
+                else:
+                    bayram_name = bayram_text
+
+                text_lower = bayram_name.lower()
                 if "ramazan" in text_lower:
                     emoji = "🌙"
                 elif "kurban" in text_lower:
@@ -390,7 +405,7 @@ BAYRAM: [VAR/YOK veya isim]
                     emoji = "🕯️"
                 else:
                     emoji = ""
-                bayram_msg = f"{emoji} {bayram_text}".strip()
+                bayram_msg = f"{emoji} {bayram_name}".strip()
             lines = lines[1:]
 
         summaries = []
@@ -408,11 +423,12 @@ BAYRAM: [VAR/YOK veya isim]
                 summaries.append(clean_line)
 
         logger.info(f"✅ [GEMİNİ] {len(summaries)} kritik haber filtrelendi")
-        return summaries, bayram_msg
+        # bayram_end_date'i de döndür
+        return summaries, bayram_msg, bayram_end_date
 
     except Exception as e:
         logger.error(f"❌ [GEMİNİ] Hata: {e}")
-        return [], None
+        return [], None, None
 
 
 def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
@@ -838,10 +854,8 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
     duration_per_news      = total_duration_minutes // news_count
 
     schedule     = []
+    # FIX #5: start_hour=0 kontrolündeki yanlış gün atlama düzeltildi
     current_time = datetime.now().replace(hour=start_hour, minute=0, second=0, microsecond=0)
-
-    if start_hour == 0 and datetime.now().hour >= 12:
-        current_time += timedelta(days=1)
 
     for i, news in enumerate(news_list):
         start_str = current_time.strftime("%H:%M")
@@ -855,18 +869,45 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
 
     return schedule
 
-def calculate_bayram_ttl() -> int:
-    now          = datetime.now()
+
+def calculate_bayram_ttl(end_date=None) -> int:
+    # FIX #1: Bayramın gerçek bitiş tarihine göre TTL hesapla
+    now = datetime.now()
+    if end_date:
+        try:
+            if isinstance(end_date, str):
+                end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+            # Bitiş günü saat 15:00'de expire et (event_manager'daki saat sınırıyla uyumlu)
+            expire_dt = datetime.combine(end_date, datetime.min.time()).replace(hour=15, minute=0, second=0)
+            ttl = int((expire_dt - now).total_seconds())
+            if ttl > 0:
+                return ttl
+        except Exception:
+            pass
+    # Fallback: yarın sabah 03:00
     tomorrow_3am = (now + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
     return int((tomorrow_3am - now).total_seconds())
+
+
+def _set_bayram_cache(bayram_msg: str, bayram_end_date=None):
+    """FIX #2: Bayram cache'i sadece yoksa yaz, varsa üzerine yazma."""
+    bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
+    if not get_cache(bayram_key):
+        ttl = calculate_bayram_ttl(bayram_end_date)
+        set_cache(bayram_key, bayram_msg, ttl=ttl)
+        logger.info(f"🌙 [BAYRAM CACHE] Yazıldı: {bayram_msg} (TTL: {ttl}s)")
+    else:
+        logger.debug("🌙 [BAYRAM CACHE] Zaten mevcut, üzerine yazılmadı")
+
 
 def prepare_morning_news() -> bool:
     try:
         news_list  = fetch_all_news()
         fresh_news = filter_already_shown(news_list) if news_list else []
-        summaries, bayram_msg = summarize_news_batch(fresh_news) if fresh_news else ([], None)
+        result = summarize_news_batch(fresh_news) if fresh_news else ([], None, None)
+        summaries, bayram_msg, bayram_end_date = result
         pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
-        set_cache(pending_key, {'summaries': summaries, 'bayram': bayram_msg}, ttl=600)
+        set_cache(pending_key, {'summaries': summaries, 'bayram': bayram_msg, 'bayram_end_date': str(bayram_end_date) if bayram_end_date else None}, ttl=600)
         logger.info(f"✅ [SABAH HAZIRLIK] {len(summaries)} haber hazırlandı")
         return True
     except Exception as e:
@@ -882,12 +923,13 @@ def publish_morning_news() -> bool:
             logger.error("❌ [SABAH YAYINLA] PENDING verisi yok!")
             return False
 
-        summaries  = pending_data.get('summaries', [])
-        bayram_msg = pending_data.get('bayram')
+        summaries       = pending_data.get('summaries', [])
+        bayram_msg      = pending_data.get('bayram')
+        bayram_end_date = pending_data.get('bayram_end_date')
 
+        # FIX #2: Bayram cache'i sadece yoksa yaz
         if bayram_msg:
-            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            set_cache(bayram_key, bayram_msg, ttl=calculate_bayram_ttl())
+            _set_bayram_cache(bayram_msg, bayram_end_date)
 
         cache_key = Config.CACHE_KEYS.get('news_morning_shift', 'news:morning_shift')
         if summaries:
@@ -913,9 +955,10 @@ def prepare_evening_news() -> bool:
     try:
         news_list  = fetch_all_news()
         fresh_news = filter_already_shown(news_list) if news_list else []
-        summaries, bayram_msg = summarize_news_batch(fresh_news) if fresh_news else ([], None)
+        result = summarize_news_batch(fresh_news) if fresh_news else ([], None, None)
+        summaries, bayram_msg, bayram_end_date = result
         pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
-        set_cache(pending_key, {'summaries': summaries, 'bayram': bayram_msg}, ttl=600)
+        set_cache(pending_key, {'summaries': summaries, 'bayram': bayram_msg, 'bayram_end_date': str(bayram_end_date) if bayram_end_date else None}, ttl=600)
         logger.info(f"✅ [AKŞAM HAZIRLIK] {len(summaries)} haber hazırlandı")
         return True
     except Exception as e:
@@ -931,12 +974,13 @@ def publish_evening_news() -> bool:
             logger.error("❌ [AKŞAM YAYINLA] PENDING verisi yok!")
             return False
 
-        summaries  = pending_data.get('summaries', [])
-        bayram_msg = pending_data.get('bayram')
+        summaries       = pending_data.get('summaries', [])
+        bayram_msg      = pending_data.get('bayram')
+        bayram_end_date = pending_data.get('bayram_end_date')
 
+        # FIX #2: Bayram cache'i sadece yoksa yaz
         if bayram_msg:
-            bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-            set_cache(bayram_key, bayram_msg, ttl=calculate_bayram_ttl())
+            _set_bayram_cache(bayram_msg, bayram_end_date)
 
         cache_key = Config.CACHE_KEYS.get('news_evening_shift', 'news:evening_shift')
         if summaries:
@@ -1042,11 +1086,8 @@ def get_current_news_banner() -> Optional[str]:
                     _last_logged_banner = banner_msg
                 return banner_msg
 
-        banner_msg = f"📰 {schedule[0]['text']}"
-        if _last_logged_banner != banner_msg:
-            logger.info(f"📰 [BANNER] Değişti: {banner_msg[:50]}...")
-            _last_logged_banner = banner_msg
-        return banner_msg
+        # FIX #3: Saat aralığı dışındaysa None döndür, schedule[0] fallback kaldırıldı
+        return None
 
     except Exception as e:
         logger.error(f"❌ [BANNER] Hata: {e}")
@@ -1073,10 +1114,10 @@ def test_news_manager():
 
     if fresh_news:
         print("3️⃣ GEMINI FİLTRE (SADECE HABERLER İÇİN):")
-        summaries, bayram_msg = summarize_news_batch(fresh_news)
+        summaries, bayram_msg, bayram_end_date = summarize_news_batch(fresh_news)
         print(f"   ✅ {len(summaries)} kritik haber\n")
         if bayram_msg:
-            print(f"   🌙 BAYRAM: {bayram_msg}\n")
+            print(f"   🌙 BAYRAM: {bayram_msg} (Bitiş: {bayram_end_date})\n")
         if summaries:
             print("   Kritik haberler:")
             for i, summary in enumerate(summaries, 1):
