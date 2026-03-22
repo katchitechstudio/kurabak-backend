@@ -598,15 +598,25 @@ def calculate_all_margins_direct(
     margins     = {}
     rates       = api_rates.get('Rates', api_rates)
 
-    if harem_prices:
-        for code, api_key in _GOLD_API_MAPPING.items():
-            harem     = harem_prices.get(code)
-            api_entry = rates.get(api_key, {})
-            api_selling = api_entry.get('Selling', 0)
+    # FIX #7: C22/YAR/TAM için GRA × gram ağırlığı baz fiyat olarak kullan
+    # API'nin bu ürünler için döndürdüğü fiyatlar kuyumcu spreadini içerdiğinden
+    # karşılaştırma için saf borsa fiyatı olan GRA kullanmak daha sağlıklı
+    _GRA_MULTIPLIERS = {
+        'C22': 1.7517,   # 1 çeyrek = 1.7517 gram
+        'YAR': 3.5034,   # 1 yarım  = 3.5034 gram
+        'TAM': 7.0068,   # 1 tam    = 7.0068 gram
+    }
 
-            if not harem or not api_selling or api_selling == 0:
-                logger.warning(f"⚠️ [DİREKT MARJ] {code}: veri eksik "
-                                f"(harem={harem}, api_selling={api_selling}) → atlandı")
+    if harem_prices:
+        # GRA baz fiyatını al
+        gra_api_entry  = rates.get('GRA', {})
+        gra_api_selling = gra_api_entry.get('Selling', 0)
+
+        for code, api_key in _GOLD_API_MAPPING.items():
+            harem = harem_prices.get(code)
+
+            if not harem:
+                logger.warning(f"⚠️ [DİREKT MARJ] {code}: Harem verisi yok → atlandı")
                 continue
 
             harem_selling = harem.get('selling', 0)
@@ -614,13 +624,26 @@ def calculate_all_margins_direct(
                 logger.warning(f"⚠️ [DİREKT MARJ] {code}: Harem satış sıfır → atlandı")
                 continue
 
-            margin = (harem_selling - api_selling) / api_selling
-
-            if _validate_margin(code, margin):
-                margins[code] = round(margin, 6)
+            # C22/YAR/TAM için GRA çarpan yöntemi
+            if code in _GRA_MULTIPLIERS and gra_api_selling > 0:
+                base_price = gra_api_selling * _GRA_MULTIPLIERS[code]
+                margin     = (harem_selling - base_price) / base_price
+                logger.info(f"  ✅ [DİREKT MARJ] {code}: "
+                            f"Harem={harem_selling:.2f} GRA_baz={base_price:.2f} "
+                            f"→ %{margin*100:.3f}")
+            else:
+                api_entry   = rates.get(api_key, {})
+                api_selling = api_entry.get('Selling', 0)
+                if not api_selling or api_selling == 0:
+                    logger.warning(f"⚠️ [DİREKT MARJ] {code}: API verisi yok → atlandı")
+                    continue
+                margin = (harem_selling - api_selling) / api_selling
                 logger.info(f"  ✅ [DİREKT MARJ] {code}: "
                             f"Harem={harem_selling:.2f} API={api_selling:.2f} "
                             f"→ %{margin*100:.3f}")
+
+            if _validate_margin(code, margin):
+                margins[code] = round(margin, 6)
             else:
                 if code in old_margins:
                     margins[code] = old_margins[code]
