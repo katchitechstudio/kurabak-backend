@@ -446,6 +446,9 @@ def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
             if len(cells) < 2:
                 continue
             name = cells[0].get_text(strip=True).lower()
+            # FIX #6: "eski" fiyat satırlarını atla, her zaman güncel fiyatı al
+            if 'eski' in name:
+                continue
             code = None
             for key, val in _HAREM_PRODUCT_MAP.items():
                 if key in name:
