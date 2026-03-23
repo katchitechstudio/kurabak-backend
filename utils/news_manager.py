@@ -35,6 +35,83 @@ _margin_bootstrap_in_progress = False
 
 _last_logged_banner = None
 
+# ─────────────────────────────────────────────────────────────
+# Türkiye resmi tatil takvimi — Gemini'ye güvenmek yerine sabit
+# liste kullanılır. Her yıl başında _TURKEY_VARIABLE_HOLIDAYS
+# güncellenmesi yeterli.
+# ─────────────────────────────────────────────────────────────
+
+# Yıl bağımsız tekrar eden tatiller
+# Format: (ay, gün_başlangıç, gün_bitiş, mesaj, emoji)
+_TURKEY_RECURRING_HOLIDAYS = [
+    (1,  1,  1,  "Yılbaşı",                     "🎆"),
+    (4,  23, 23, "23 Nisan Ulusal Egemenlik",     "🇹🇷"),
+    (5,  1,  1,  "1 Mayıs İşçi Bayramı",         "🌸"),
+    (5,  19, 19, "19 Mayıs Atatürk'ü Anma",      "🇹🇷"),
+    (7,  15, 15, "15 Temmuz Demokrasi Bayramı",  "🇹🇷"),
+    (8,  30, 30, "30 Ağustos Zafer Bayramı",     "🇹🇷"),
+    (10, 29, 29, "29 Ekim Cumhuriyet Bayramı",   "🇹🇷"),
+    (11, 10, 10, "10 Kasım Atatürk'ü Anma",      "🕯️"),
+]
+
+# Yıla göre değişen dini bayramlar — her yıl buraya ekle
+# Format: (yıl, ay, gün_başlangıç, gün_bitiş, mesaj, emoji)
+_TURKEY_VARIABLE_HOLIDAYS = [
+    # Ramazan Bayramı
+    (2024, 4,  10, 12, "Ramazan Bayramı", "🌙"),
+    (2025, 3,  30,  1, "Ramazan Bayramı", "🌙"),
+    (2026, 3,  20, 22, "Ramazan Bayramı", "🌙"),
+    (2027, 3,  10, 12, "Ramazan Bayramı", "🌙"),
+    # Kurban Bayramı
+    (2024, 6,  16, 19, "Kurban Bayramı",  "🐑"),
+    (2025, 6,   6,  9, "Kurban Bayramı",  "🐑"),
+    (2026, 5,  27, 30, "Kurban Bayramı",  "🐑"),
+    (2027, 5,  17, 20, "Kurban Bayramı",  "🐑"),
+]
+
+
+def get_today_holiday() -> Optional[tuple]:
+    """
+    Bugün Türkiye'de resmi tatil/bayram varsa (mesaj, emoji, bitiş_tarihi) döndür.
+    Yoksa None döndür. Gemini'ye güvenmek yerine sabit takvim kullanır.
+    """
+    today = datetime.now().date()
+    y, m, d = today.year, today.month, today.day
+
+    # Değişken dini bayramlar (yıla göre)
+    for entry in _TURKEY_VARIABLE_HOLIDAYS:
+        hy, hm, hd_start, hd_end, msg, emoji = entry
+        # Ramazan 2025: 30 Mart - 1 Nisan ay geçişi için özel kontrol
+        if hy == y:
+            from datetime import date as date_type
+            try:
+                start = date_type(hy, hm, hd_start)
+                # bitiş ayı farklı olabilir (örn. Mart 30 - Nisan 1)
+                if hd_end < hd_start:
+                    # ay geçişi var
+                    import calendar
+                    last_day = calendar.monthrange(hy, hm)[1]
+                    end_month = hm + 1 if hm < 12 else 1
+                    end_year  = hy if hm < 12 else hy + 1
+                    end = date_type(end_year, end_month, hd_end)
+                else:
+                    end = date_type(hy, hm, hd_end)
+                if start <= today <= end:
+                    return msg, emoji, end
+            except Exception:
+                pass
+
+    # Tekrar eden sabit tatiller
+    for entry in _TURKEY_RECURRING_HOLIDAYS:
+        hm, hd_start, hd_end, msg, emoji = entry
+        if hm == m and hd_start <= d <= hd_end:
+            from datetime import date as date_type
+            end_date = date_type(y, hm, hd_end)
+            return msg, emoji, end_date
+
+    return None
+
+
 _FALLBACK_GOLD_MARGINS = {
     'GRA':   0.030,
     'C22':   0.025,
@@ -96,30 +173,30 @@ _HAREM_PRODUCT_MAP = {
 }
 
 _ZIRAAT_CURRENCY_MAP = {
-    'abd dolari':         'USD',
-    'usd':                'USD',
-    'euro':               'EUR',
-    'eur':                'EUR',
-    'ingiliz sterlini':   'GBP',
-    'gbp':                'GBP',
-    'sterlin':            'GBP',
-    'isviçre frangı':     'CHF',
-    'chf':                'CHF',
-    'franc':              'CHF',
-    'kanada dolari':      'CAD',
-    'cad':                'CAD',
-    'avustralya dolari':  'AUD',
-    'aud':                'AUD',
-    'isveç kronasi':      'SEK',
-    'sek':                'SEK',
-    'norveç kronasi':     'NOK',
-    'nok':                'NOK',
+    'abd dolari':             'USD',
+    'usd':                    'USD',
+    'euro':                   'EUR',
+    'eur':                    'EUR',
+    'ingiliz sterlini':       'GBP',
+    'gbp':                    'GBP',
+    'sterlin':                'GBP',
+    'isviçre frangı':         'CHF',
+    'chf':                    'CHF',
+    'franc':                  'CHF',
+    'kanada dolari':          'CAD',
+    'cad':                    'CAD',
+    'avustralya dolari':      'AUD',
+    'aud':                    'AUD',
+    'isveç kronasi':          'SEK',
+    'sek':                    'SEK',
+    'norveç kronasi':         'NOK',
+    'nok':                    'NOK',
     'suudi arabistan riyali': 'SAR',
-    'sar':                'SAR',
-    'danimarka kronasi':  'DKK',
-    'dkk':                'DKK',
-    'japon yeni':         'JPY',
-    'jpy':                'JPY',
+    'sar':                    'SAR',
+    'danimarka kronasi':      'DKK',
+    'dkk':                    'DKK',
+    'japon yeni':             'JPY',
+    'jpy':                    'JPY',
 }
 
 _GOLD_API_MAPPING = {
@@ -300,10 +377,14 @@ def fetch_all_news() -> List[str]:
     logger.info(f"✅ [NEWS] Toplam {len(unique_news)} benzersiz haber toplandı")
     return unique_news
 
-def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]]:
+def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str], Optional[object]]:
+    """
+    Haberleri Gemini ile filtreler. Bayram tespiti artık Gemini'ye bırakılmaz,
+    sabit takvimden (get_today_holiday) alınır.
+    """
     try:
         if not GEMINI_API_KEY or not news_list:
-            return [], None
+            return [], None, None
 
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-3-flash-preview')
@@ -312,6 +393,16 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         today         = datetime.now().strftime('%d %B %Y, %A')
         current_time  = datetime.now().strftime('%H:%M')
         two_days_ago  = (datetime.now() - timedelta(days=2)).strftime('%d %B %Y')
+
+        # Bayram tespiti Gemini'ye bırakılmıyor — sabit takvimden al
+        holiday = get_today_holiday()
+        if holiday:
+            bayram_name, bayram_emoji, bayram_end_date = holiday
+            bayram_msg = f"{bayram_emoji} {bayram_name}".strip()
+            logger.info(f"📅 [BAYRAM TAKVİM] Bugün bayram: {bayram_msg} (Bitiş: {bayram_end_date})")
+        else:
+            bayram_msg      = None
+            bayram_end_date = None
 
         prompt = f"""
 SEN BİR FİNANS EDİTÖRÜSÜN. Sadece PİYASAYI ETKİLEYEN kritik haberleri seç.
@@ -325,14 +416,7 @@ BUGÜN: {today}, SAAT: {current_time}
 - 3+ gün önceki haberler → ATLA
 
 ═══════════════════════════════════════════
-GÖREV 1 - BAYRAM KONTROLÜ
-═══════════════════════════════════════════
-Bugün Türkiye'de resmi tatil/bayram var mı?
-VARSA → "BAYRAM: [tam isim] | BİTİŞ: YYYY-MM-DD"
-YOKSA → "BAYRAM: YOK"
-
-═══════════════════════════════════════════
-GÖREV 2 - ULTRA SIKI FİLTRE + TARİH KONTROLÜ
+GÖREV - ULTRA SIKI FİLTRE + TARİH KONTROLÜ
 ═══════════════════════════════════════════
 
 ✅ SADECE ŞU TİP HABERLERİ AL:
@@ -361,9 +445,8 @@ HAM HABERLER ({len(news_list)} adet):
 {numbered_news}
 
 ═══════════════════════════════════════════
-ÇIKTI FORMATI:
+ÇIKTI FORMATI (SADECE HABERLER, BAYRAM SATIRI YOK):
 ═══════════════════════════════════════════
-BAYRAM: [VAR/YOK veya "isim | BİTİŞ: YYYY-MM-DD"]
 1. [Tam anlaşılır özet - Max 15 kelime]
 2. [Tam anlaşılır özet - Max 15 kelime]
 
@@ -375,41 +458,10 @@ BAYRAM: [VAR/YOK veya "isim | BİTİŞ: YYYY-MM-DD"]
         result = _call_gemini_with_retry(model, prompt, label="GEMİNİ HABER")
         if not result:
             logger.error("❌ [GEMİNİ HABER] Tüm denemeler başarısız!")
-            return [], None
-
-        lines      = result.split('\n')
-        bayram_msg = None
-        bayram_end_date = None
-        first_line = lines[0].strip()
-
-        if first_line.startswith("BAYRAM:"):
-            bayram_text = first_line.replace("BAYRAM:", "").strip()
-            if bayram_text and bayram_text.upper() != "YOK":
-                # FIX #1: Bitiş tarihini parse et
-                if "| BİTİŞ:" in bayram_text:
-                    parts = bayram_text.split("| BİTİŞ:")
-                    bayram_name = parts[0].strip()
-                    try:
-                        bayram_end_date = datetime.strptime(parts[1].strip(), "%Y-%m-%d").date()
-                    except ValueError:
-                        bayram_end_date = None
-                else:
-                    bayram_name = bayram_text
-
-                text_lower = bayram_name.lower()
-                if "ramazan" in text_lower:
-                    emoji = "🌙"
-                elif "kurban" in text_lower:
-                    emoji = "🐑"
-                elif "kasım" in text_lower or "atatürk" in text_lower:
-                    emoji = "🕯️"
-                else:
-                    emoji = ""
-                bayram_msg = f"{emoji} {bayram_name}".strip()
-            lines = lines[1:]
+            return [], bayram_msg, bayram_end_date
 
         summaries = []
-        for line in lines:
+        for line in result.split('\n'):
             clean_line = line.strip()
             if not clean_line:
                 continue
@@ -423,7 +475,6 @@ BAYRAM: [VAR/YOK veya "isim | BİTİŞ: YYYY-MM-DD"]
                 summaries.append(clean_line)
 
         logger.info(f"✅ [GEMİNİ] {len(summaries)} kritik haber filtrelendi")
-        # bayram_end_date'i de döndür
         return summaries, bayram_msg, bayram_end_date
 
     except Exception as e:
@@ -599,17 +650,14 @@ def calculate_all_margins_direct(
     rates       = api_rates.get('Rates', api_rates)
 
     # FIX #7: C22/YAR/TAM için GRA × gram ağırlığı baz fiyat olarak kullan
-    # API'nin bu ürünler için döndürdüğü fiyatlar kuyumcu spreadini içerdiğinden
-    # karşılaştırma için saf borsa fiyatı olan GRA kullanmak daha sağlıklı
     _GRA_MULTIPLIERS = {
-        'C22': 1.7517,   # 1 çeyrek = 1.7517 gram
-        'YAR': 3.5034,   # 1 yarım  = 3.5034 gram
-        'TAM': 7.0068,   # 1 tam    = 7.0068 gram
+        'C22': 1.7517,
+        'YAR': 3.5034,
+        'TAM': 7.0068,
     }
 
     if harem_prices:
-        # GRA baz fiyatını al
-        gra_api_entry  = rates.get('GRA', {})
+        gra_api_entry   = rates.get('GRA', {})
         gra_api_selling = gra_api_entry.get('Selling', 0)
 
         for code, api_key in _GOLD_API_MAPPING.items():
@@ -624,7 +672,6 @@ def calculate_all_margins_direct(
                 logger.warning(f"⚠️ [DİREKT MARJ] {code}: Harem satış sıfır → atlandı")
                 continue
 
-            # C22/YAR/TAM için GRA çarpan yöntemi
             if code in _GRA_MULTIPLIERS and gra_api_selling > 0:
                 base_price = gra_api_selling * _GRA_MULTIPLIERS[code]
                 margin     = (harem_selling - base_price) / base_price
@@ -658,8 +705,8 @@ def calculate_all_margins_direct(
 
     if ziraat_prices:
         for code in _CURRENCY_API_KEYS:
-            ziraat    = ziraat_prices.get(code)
-            api_entry = rates.get(code, {})
+            ziraat      = ziraat_prices.get(code)
+            api_entry   = rates.get(code, {})
             api_selling = api_entry.get('Selling', 0)
 
             if not ziraat or not api_selling or api_selling == 0:
@@ -903,14 +950,12 @@ def calculate_bayram_ttl(end_date=None) -> int:
         try:
             if isinstance(end_date, str):
                 end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
-            # Bitiş günü saat 15:00'de expire et (event_manager'daki saat sınırıyla uyumlu)
             expire_dt = datetime.combine(end_date, datetime.min.time()).replace(hour=15, minute=0, second=0)
             ttl = int((expire_dt - now).total_seconds())
             if ttl > 0:
                 return ttl
         except Exception:
             pass
-    # Fallback: yarın sabah 03:00
     tomorrow_3am = (now + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
     return int((tomorrow_3am - now).total_seconds())
 
@@ -930,10 +975,14 @@ def prepare_morning_news() -> bool:
     try:
         news_list  = fetch_all_news()
         fresh_news = filter_already_shown(news_list) if news_list else []
-        result = summarize_news_batch(fresh_news) if fresh_news else ([], None, None)
+        result     = summarize_news_batch(fresh_news) if fresh_news else ([], None, None)
         summaries, bayram_msg, bayram_end_date = result
         pending_key = Config.CACHE_KEYS.get('news_morning_pending', 'news:morning_pending')
-        set_cache(pending_key, {'summaries': summaries, 'bayram': bayram_msg, 'bayram_end_date': str(bayram_end_date) if bayram_end_date else None}, ttl=600)
+        set_cache(pending_key, {
+            'summaries':       summaries,
+            'bayram':          bayram_msg,
+            'bayram_end_date': str(bayram_end_date) if bayram_end_date else None
+        }, ttl=600)
         logger.info(f"✅ [SABAH HAZIRLIK] {len(summaries)} haber hazırlandı")
         return True
     except Exception as e:
@@ -969,8 +1018,10 @@ def publish_morning_news() -> bool:
         delete_cache(pending_key)
         update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
         set_cache(update_key, {
-            'shift': 'morning', 'timestamp': time.time(),
-            'news_count': len(summaries), 'bayram': bayram_msg or 'yok'
+            'shift':      'morning',
+            'timestamp':  time.time(),
+            'news_count': len(summaries),
+            'bayram':     bayram_msg or 'yok'
         }, ttl=86400)
         return True
     except Exception as e:
@@ -981,10 +1032,14 @@ def prepare_evening_news() -> bool:
     try:
         news_list  = fetch_all_news()
         fresh_news = filter_already_shown(news_list) if news_list else []
-        result = summarize_news_batch(fresh_news) if fresh_news else ([], None, None)
+        result     = summarize_news_batch(fresh_news) if fresh_news else ([], None, None)
         summaries, bayram_msg, bayram_end_date = result
         pending_key = Config.CACHE_KEYS.get('news_evening_pending', 'news:evening_pending')
-        set_cache(pending_key, {'summaries': summaries, 'bayram': bayram_msg, 'bayram_end_date': str(bayram_end_date) if bayram_end_date else None}, ttl=600)
+        set_cache(pending_key, {
+            'summaries':       summaries,
+            'bayram':          bayram_msg,
+            'bayram_end_date': str(bayram_end_date) if bayram_end_date else None
+        }, ttl=600)
         logger.info(f"✅ [AKŞAM HAZIRLIK] {len(summaries)} haber hazırlandı")
         return True
     except Exception as e:
@@ -1020,8 +1075,10 @@ def publish_evening_news() -> bool:
         delete_cache(pending_key)
         update_key = Config.CACHE_KEYS.get('news_last_update', 'news:last_update')
         set_cache(update_key, {
-            'shift': 'evening', 'timestamp': time.time(),
-            'news_count': len(summaries), 'bayram': bayram_msg or 'yok'
+            'shift':      'evening',
+            'timestamp':  time.time(),
+            'news_count': len(summaries),
+            'bayram':     bayram_msg or 'yok'
         }, ttl=86400)
         return True
     except Exception as e:
@@ -1081,7 +1138,7 @@ def bootstrap_news_system() -> bool:
                     _bootstrap_in_progress['morning'] = False
                 else:
                     _bootstrap_in_progress['evening'] = False
-        except:
+        except Exception:
             pass
         return False
 
@@ -1112,7 +1169,7 @@ def get_current_news_banner() -> Optional[str]:
                     _last_logged_banner = banner_msg
                 return banner_msg
 
-        # FIX #3: Saat aralığı dışındaysa None döndür, schedule[0] fallback kaldırıldı
+        # FIX #3: Saat aralığı dışındaysa None döndür
         return None
 
     except Exception as e:
@@ -1121,6 +1178,14 @@ def get_current_news_banner() -> Optional[str]:
 
 def test_news_manager():
     print("🧪 News Manager Test\n")
+
+    print("0️⃣ BAYRAM TAKVİM KONTROLÜ:")
+    holiday = get_today_holiday()
+    if holiday:
+        msg, emoji, end = holiday
+        print(f"   🎉 Bugün bayram: {emoji} {msg} (Bitiş: {end})\n")
+    else:
+        print("   ℹ️ Bugün bayram yok\n")
 
     print("1️⃣ HABER TOPLAMA:")
     news_list = fetch_all_news()
@@ -1143,7 +1208,7 @@ def test_news_manager():
         summaries, bayram_msg, bayram_end_date = summarize_news_batch(fresh_news)
         print(f"   ✅ {len(summaries)} kritik haber\n")
         if bayram_msg:
-            print(f"   🌙 BAYRAM: {bayram_msg} (Bitiş: {bayram_end_date})\n")
+            print(f"   🌙 BAYRAM (TAKVİMDEN): {bayram_msg} (Bitiş: {bayram_end_date})\n")
         if summaries:
             print("   Kritik haberler:")
             for i, summary in enumerate(summaries, 1):
