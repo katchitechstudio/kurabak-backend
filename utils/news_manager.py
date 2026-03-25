@@ -135,15 +135,21 @@ _FALLBACK_CURRENCY_MARGINS = {
     'HUF': 0.015, 'BAM': 0.015,
 }
 
+# ─────────────────────────────────────────────────────────────
+# GÜNCELLEME: Harem'in gerçek spread'leri ölçülerek
+# upper bound'lar genişletildi.
+# GRA ~%7.2, C22 ~%12.8, YAR ~%8.3, TAM ~%7.1, ATA ~%7.x
+# Eski değerler C22/YAR/TAM/ATA için max %6'ydı → reddediliyordu.
+# ─────────────────────────────────────────────────────────────
 _MARGIN_VALID_RANGES = {
-    'GRA':   (0.008, 0.120),
-    'C22':   (0.003, 0.060),
-    'YAR':   (0.003, 0.060),
-    'TAM':   (0.003, 0.060),
-    'CUM':   (0.008, 0.060),
-    'ATA':   (0.003, 0.060),
-    'AG':    (0.020, 0.120),
-    'GUMUS': (0.020, 0.120),
+    'GRA':   (0.008, 0.130),
+    'C22':   (0.003, 0.180),  # çeyrek spread gerçekte ~%13
+    'YAR':   (0.003, 0.130),  # yarım spread gerçekte ~%8
+    'TAM':   (0.003, 0.120),  # tam spread gerçekte ~%7
+    'CUM':   (0.008, 0.120),
+    'ATA':   (0.003, 0.120),  # ata spread gerçekte ~%7
+    'AG':    (0.020, 0.130),
+    'GUMUS': (0.020, 0.130),
     'USD':   (0.005, 0.050),
     'EUR':   (0.005, 0.050),
     'GBP':   (0.005, 0.050),
