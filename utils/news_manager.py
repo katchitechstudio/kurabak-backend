@@ -136,18 +136,17 @@ _FALLBACK_CURRENCY_MARGINS = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# GÜNCELLEME: Harem'in gerçek spread'leri ölçülerek
-# upper bound'lar genişletildi.
-# GRA ~%7.2, C22 ~%12.8, YAR ~%8.3, TAM ~%7.1, ATA ~%7.x
-# Eski değerler C22/YAR/TAM/ATA için max %6'ydı → reddediliyordu.
+# Harem'in gerçek spread'leri ölçülerek upper bound'lar güncellendi.
+# GRA ~%5, C22 ~%18, YAR ~%9, TAM ~%5, ATA ~%5, AG ~%7
+# C22 için max %25'e yükseltildi — Harem çeyrek spread gerçekte ~%18.
 # ─────────────────────────────────────────────────────────────
 _MARGIN_VALID_RANGES = {
     'GRA':   (0.008, 0.130),
-    'C22':   (0.003, 0.180),  # çeyrek spread gerçekte ~%13
-    'YAR':   (0.003, 0.130),  # yarım spread gerçekte ~%8
-    'TAM':   (0.003, 0.120),  # tam spread gerçekte ~%7
+    'C22':   (0.003, 0.250),
+    'YAR':   (0.003, 0.150),
+    'TAM':   (0.003, 0.120),
     'CUM':   (0.008, 0.120),
-    'ATA':   (0.003, 0.120),  # ata spread gerçekte ~%7
+    'ATA':   (0.003, 0.120),
     'AG':    (0.020, 0.130),
     'GUMUS': (0.020, 0.130),
     'USD':   (0.005, 0.050),
@@ -163,6 +162,11 @@ _MARGIN_VALID_RANGES = {
     'JPY':   (0.005, 0.050),
 }
 
+# ─────────────────────────────────────────────────────────────
+# Harem sitesindeki ürün adı → standart kod eşlemesi.
+# CUM Harem sitesinde yok, bu yüzden map'e eklenmedi.
+# ATA satır adı "ata altın" olarak geliyor.
+# ─────────────────────────────────────────────────────────────
 _HAREM_PRODUCT_MAP = {
     'gram altın':   'GRA',
     'gramaltin':    'GRA',
@@ -205,11 +209,18 @@ _ZIRAAT_CURRENCY_MAP = {
     'jpy':                    'JPY',
 }
 
+# ─────────────────────────────────────────────────────────────
+# CUM ve ATA eklendi. CUM Harem'de olmadığı için
+# harem_prices.get('CUM') None döner → otomatik atlanır,
+# CUM marjı static/fallback'ten gelmeye devam eder.
+# ─────────────────────────────────────────────────────────────
 _GOLD_API_MAPPING = {
     'GRA': 'GRA',
     'C22': 'CEYREKALTIN',
     'YAR': 'YARIMALTIN',
     'TAM': 'TAMALTIN',
+    'CUM': 'CUMHURIYETALTINI',
+    'ATA': 'ATAALTIN',
     'AG':  'GUMUS',
 }
 
@@ -223,6 +234,7 @@ _GOLD_MIN_PRICE = {
     'C22': 5000.0,
     'YAR': 10000.0,
     'TAM': 20000.0,
+    'CUM': 20000.0,
     'ATA': 20000.0,
     'AG':  50.0,
 }
@@ -287,7 +299,6 @@ def get_previously_shown_news() -> List[str]:
 def save_shown_news(news_list: List[str]):
     existing = get_cache("news:shown_history") or []
     unique   = list(set(existing + news_list))
-    # FIX #4: Sonsuz büyümeyi önle, son 100 haberi tut
     unique   = unique[-100:]
     set_cache("news:shown_history", unique, ttl=86400)
 
@@ -400,7 +411,6 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
         current_time  = datetime.now().strftime('%H:%M')
         two_days_ago  = (datetime.now() - timedelta(days=2)).strftime('%d %B %Y')
 
-        # Bayram tespiti Gemini'ye bırakılmıyor — sabit takvimden al
         holiday = get_today_holiday()
         if holiday:
             bayram_name, bayram_emoji, bayram_end_date = holiday
@@ -503,7 +513,6 @@ def fetch_harem_prices() -> Optional[Dict[str, Dict[str, float]]]:
             if len(cells) < 2:
                 continue
             name = cells[0].get_text(strip=True).lower()
-            # FIX #6: "eski" fiyat satırlarını atla, her zaman güncel fiyatı al
             if 'eski' in name:
                 continue
             code = None
@@ -655,20 +664,9 @@ def calculate_all_margins_direct(
     margins     = {}
     rates       = api_rates.get('Rates', api_rates)
 
-    # FIX #7: C22/YAR/TAM için GRA × gram ağırlığı baz fiyat olarak kullan
-    _GRA_MULTIPLIERS = {
-        'C22': 1.7517,
-        'YAR': 3.5034,
-        'TAM': 7.0068,
-    }
-
     if harem_prices:
-        gra_api_entry   = rates.get('GRA', {})
-        gra_api_selling = gra_api_entry.get('Selling', 0)
-
         for code, api_key in _GOLD_API_MAPPING.items():
             harem = harem_prices.get(code)
-
             if not harem:
                 logger.warning(f"⚠️ [DİREKT MARJ] {code}: Harem verisi yok → atlandı")
                 continue
@@ -678,30 +676,28 @@ def calculate_all_margins_direct(
                 logger.warning(f"⚠️ [DİREKT MARJ] {code}: Harem satış sıfır → atlandı")
                 continue
 
-            if code in _GRA_MULTIPLIERS and gra_api_selling > 0:
-                base_price = gra_api_selling * _GRA_MULTIPLIERS[code]
-                margin     = (harem_selling - base_price) / base_price
-                logger.info(f"  ✅ [DİREKT MARJ] {code}: "
-                            f"Harem={harem_selling:.2f} GRA_baz={base_price:.2f} "
-                            f"→ %{margin*100:.3f}")
-            else:
-                api_entry   = rates.get(api_key, {})
-                api_selling = api_entry.get('Selling', 0)
-                if not api_selling or api_selling == 0:
-                    logger.warning(f"⚠️ [DİREKT MARJ] {code}: API verisi yok → atlandı")
-                    continue
-                margin = (harem_selling - api_selling) / api_selling
-                logger.info(f"  ✅ [DİREKT MARJ] {code}: "
-                            f"Harem={harem_selling:.2f} API={api_selling:.2f} "
-                            f"→ %{margin*100:.3f}")
+            api_entry   = rates.get(api_key, {})
+            api_selling = api_entry.get('Selling', 0)
+            if not api_selling or api_selling == 0:
+                logger.warning(f"⚠️ [DİREKT MARJ] {code}: API verisi yok → atlandı")
+                continue
+
+            margin = (harem_selling - api_selling) / api_selling
+            logger.info(
+                f"  ✅ [DİREKT MARJ] {code}: "
+                f"Harem={harem_selling:.2f} API={api_selling:.2f} "
+                f"→ %{margin*100:.3f}"
+            )
 
             if _validate_margin(code, margin):
                 margins[code] = round(margin, 6)
             else:
                 if code in old_margins:
                     margins[code] = old_margins[code]
-                    logger.warning(f"  ⚠️ [DİREKT MARJ] {code}: geçersiz ({margin:.4f}), "
-                                   f"eski marj korundu: {old_margins[code]:.4f}")
+                    logger.warning(
+                        f"  ⚠️ [DİREKT MARJ] {code}: geçersiz ({margin:.4f}), "
+                        f"eski marj korundu: {old_margins[code]:.4f}"
+                    )
 
         if 'AG' in margins:
             margins['GUMUS'] = margins['AG']
@@ -728,14 +724,18 @@ def calculate_all_margins_direct(
 
             if _validate_margin(code, margin):
                 margins[code] = round(margin, 6)
-                logger.info(f"  ✅ [DİREKT MARJ] {code}: "
-                            f"Ziraat={ziraat_selling:.4f} API={api_selling:.4f} "
-                            f"→ %{margin*100:.3f}")
+                logger.info(
+                    f"  ✅ [DİREKT MARJ] {code}: "
+                    f"Ziraat={ziraat_selling:.4f} API={api_selling:.4f} "
+                    f"→ %{margin*100:.3f}"
+                )
             else:
                 if code in old_margins:
                     margins[code] = old_margins[code]
-                    logger.warning(f"  ⚠️ [DİREKT MARJ] {code}: geçersiz ({margin:.4f}), "
-                                   f"eski marj korundu: {old_margins[code]:.4f}")
+                    logger.warning(
+                        f"  ⚠️ [DİREKT MARJ] {code}: geçersiz ({margin:.4f}), "
+                        f"eski marj korundu: {old_margins[code]:.4f}"
+                    )
     else:
         logger.warning("⚠️ [DİREKT MARJ] Ziraat verisi yok, döviz marjları hesaplanamadı")
 
@@ -933,7 +933,6 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
     duration_per_news      = total_duration_minutes // news_count
 
     schedule     = []
-    # FIX #5: start_hour=0 kontrolündeki yanlış gün atlama düzeltildi
     current_time = datetime.now().replace(hour=start_hour, minute=0, second=0, microsecond=0)
 
     for i, news in enumerate(news_list):
@@ -950,7 +949,6 @@ def plan_shift_schedule(news_list: List[str], start_hour: int, end_hour: int) ->
 
 
 def calculate_bayram_ttl(end_date=None) -> int:
-    # FIX #1: Bayramın gerçek bitiş tarihine göre TTL hesapla
     now = datetime.now()
     if end_date:
         try:
@@ -967,7 +965,6 @@ def calculate_bayram_ttl(end_date=None) -> int:
 
 
 def _set_bayram_cache(bayram_msg: str, bayram_end_date=None):
-    """FIX #2: Bayram cache'i sadece yoksa yaz, varsa üzerine yazma."""
     bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
     if not get_cache(bayram_key):
         ttl = calculate_bayram_ttl(bayram_end_date)
@@ -1008,7 +1005,6 @@ def publish_morning_news() -> bool:
         bayram_msg      = pending_data.get('bayram')
         bayram_end_date = pending_data.get('bayram_end_date')
 
-        # FIX #2: Bayram cache'i sadece yoksa yaz
         if bayram_msg:
             _set_bayram_cache(bayram_msg, bayram_end_date)
 
@@ -1065,7 +1061,6 @@ def publish_evening_news() -> bool:
         bayram_msg      = pending_data.get('bayram')
         bayram_end_date = pending_data.get('bayram_end_date')
 
-        # FIX #2: Bayram cache'i sadece yoksa yaz
         if bayram_msg:
             _set_bayram_cache(bayram_msg, bayram_end_date)
 
@@ -1175,7 +1170,6 @@ def get_current_news_banner() -> Optional[str]:
                     _last_logged_banner = banner_msg
                 return banner_msg
 
-        # FIX #3: Saat aralığı dışındaysa None döndür
         return None
 
     except Exception as e:
