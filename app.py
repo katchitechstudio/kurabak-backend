@@ -306,10 +306,65 @@ def index():
         "timestamp":   datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }), 200
 
+
 @app.route('/health', methods=['GET'])
 @app.route('/healthz', methods=['GET'])
 def health():
-    return jsonify({"status": "ok"}), 200
+    status   = {}
+    is_ok    = True
+
+    # ── Redis ────────────────────────────────────────────────
+    try:
+        from utils.cache import get_redis_client
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.ping()
+            status["redis"] = "ok"
+        else:
+            status["redis"] = "not_configured"
+            is_ok = False
+    except Exception as e:
+        status["redis"] = f"error: {e}"
+        is_ok = False
+
+    # ── Scheduler ────────────────────────────────────────────
+    try:
+        from services.maintenance_service import scheduler
+        from apscheduler.schedulers import STATE_RUNNING
+        if scheduler is not None and scheduler.state == STATE_RUNNING:
+            status["scheduler"] = "running"
+        else:
+            status["scheduler"] = "stopped"
+            is_ok = False
+    except Exception as e:
+        status["scheduler"] = f"error: {e}"
+        is_ok = False
+
+    # ── Worker (son çalışma zamanı) ──────────────────────────
+    try:
+        from utils.cache import get_cache
+        last_run = get_cache("kurabak:last_worker_run")
+        if last_run:
+            elapsed = int(time.time() - float(last_run))
+            if elapsed > 600:
+                status["worker"] = f"uyuyor ({elapsed}s önce)"
+                is_ok = False
+            else:
+                status["worker"] = f"ok ({elapsed}s önce)"
+        else:
+            status["worker"] = "henüz çalışmadı"
+    except Exception as e:
+        status["worker"] = f"error: {e}"
+
+    # ── Firebase ─────────────────────────────────────────────
+    status["firebase"] = "ok" if _firebase_initialized else "devre dışı"
+
+    return jsonify({
+        "status":    "ok" if is_ok else "degraded",
+        "checks":    status,
+        "timestamp": datetime.now().isoformat(),
+    }), 200 if is_ok else 503
+
 
 @app.route('/api/system/status', methods=['GET'])
 def system_status():
