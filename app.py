@@ -16,11 +16,6 @@ from utils.notification_service import register_fcm_token, send_test_notificatio
 
 from utils.cache import renew_scheduler_lock, SCHEDULER_LOCK_KEY, SCHEDULER_LOCK_TTL
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
 logger = logging.getLogger("KuraBak")
 
 import firebase_admin
@@ -29,40 +24,41 @@ from firebase_admin import credentials
 _firebase_initialized = False
 _firebase_lock = threading.Lock()
 
+
 def init_firebase():
     global _firebase_initialized
-    
+
     if _firebase_initialized:
         logger.info("🔥 [Firebase] Zaten başlatılmış (global flag)")
         return True
-    
+
     with _firebase_lock:
         if _firebase_initialized:
             return True
-        
+
         try:
             if firebase_admin._apps:
                 logger.info("🔥 [Firebase] firebase_admin._apps dolu, başlatılmış kabul ediliyor")
                 _firebase_initialized = True
                 return True
-            
+
             if os.environ.get("RENDER"):
                 cred_path = "/etc/secrets/firebase_credentials.json"
             else:
                 cred_path = Config.FIREBASE_CREDENTIALS_PATH or "firebase_credentials.json"
-            
+
             logger.info(f"🔍 [Firebase] Credentials yolu: {cred_path}")
-            
+
             if not os.path.exists(cred_path):
                 logger.error(f"❌ [Firebase] Credentials dosyası bulunamadı: {cred_path}")
-                
+
                 alternative_paths = [
                     "firebase_credentials.json",
                     "./firebase_credentials.json",
                     "/etc/secrets/firebase_credentials.json",
                     os.path.join(os.getcwd(), "firebase_credentials.json")
                 ]
-                
+
                 logger.info("🔍 [Firebase] Alternatif yollar deneniyor...")
                 for alt_path in alternative_paths:
                     logger.info(f"   Kontrol: {alt_path}")
@@ -74,9 +70,9 @@ def init_firebase():
                     logger.warning("⚠️ [Firebase] Hiçbir yolda dosya bulunamadı!")
                     logger.warning("   Push notification özellikleri devre dışı!")
                     return False
-            
+
             logger.info(f"✅ [Firebase] Credentials dosyası bulundu: {cred_path}")
-            
+
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {'projectId': 'kurabak-f1950'})
 
@@ -97,7 +93,7 @@ def init_firebase():
             logger.info(f"   📁 Credentials: {cred_path}")
             logger.info(f"   🎯 Project ID: kurabak-f1950")
             return True
-            
+
         except ValueError as ve:
             if "already exists" in str(ve).lower():
                 logger.info("🔥 [Firebase] Zaten başlatılmış (ValueError yakalandı)")
@@ -113,6 +109,7 @@ def init_firebase():
             logger.warning("   Push notification özellikleri devre dışı!")
             return False
 
+
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -124,16 +121,17 @@ app.register_blueprint(alarm_bp)
 _telegram_instance = None
 _telegram_lock = threading.Lock()
 
+
 def get_telegram_instance():
     global _telegram_instance
-    
+
     if _telegram_instance is not None:
         return _telegram_instance
-    
+
     with _telegram_lock:
         if _telegram_instance is not None:
             return _telegram_instance
-        
+
         try:
             from utils.telegram_monitor import init_telegram_monitor
             _telegram_instance = init_telegram_monitor()
@@ -143,13 +141,14 @@ def get_telegram_instance():
             logger.error(f"❌ [Telegram] Instance oluşturma hatası: {e}")
             return None
 
+
 def post_fork(server, worker):
     global _firebase_initialized
-    
+
     logger.info(f"🔥 [Worker {worker.pid}] Post-fork hook tetiklendi")
-    
+
     _firebase_initialized = False
-    
+
     try:
         firebase_status = init_firebase()
         if firebase_status:
@@ -284,6 +283,7 @@ def background_initialization():
         except Exception:
             pass
 
+
 is_render = os.environ.get("RENDER") is not None
 
 if is_render:
@@ -295,6 +295,19 @@ else:
         logger.info("💻 [Local] Development modda thread başlatılıyor...")
         init_thread = threading.Thread(target=background_initialization, daemon=True)
         init_thread.start()
+
+
+def _require_admin_token() -> bool:
+    expected = os.environ.get("ADMIN_SECRET_TOKEN")
+    if not expected:
+        logger.warning("⚠️ [Admin] ADMIN_SECRET_TOKEN env değişkeni tanımlı değil!")
+        return False
+    token = request.headers.get("X-Admin-Token") or (request.json.get("admin_token") if request.json else None)
+    if not token or token != expected:
+        logger.warning(f"🚨 [Admin] Yetkisiz erişim denemesi! IP: {request.remote_addr}")
+        return False
+    return True
+
 
 @app.route('/', methods=['GET'])
 def index():
@@ -310,8 +323,8 @@ def index():
 @app.route('/health', methods=['GET'])
 @app.route('/healthz', methods=['GET'])
 def health():
-    status   = {}
-    is_ok    = True
+    status = {}
+    is_ok  = True
 
     # ── Redis ────────────────────────────────────────────────
     try:
@@ -368,29 +381,32 @@ def health():
 
 @app.route('/api/system/status', methods=['GET'])
 def system_status():
+    if not _require_admin_token():
+        return jsonify({"success": False, "error": "Yetkisiz erişim"}), 403
+
     try:
         from services.maintenance_service import scheduler, get_scheduler_status
         from services.financial_service import get_service_metrics
         from services.alarm_service import get_alarm_stats
         from utils.cache import get_cache
-        
+
         scheduler_running = False
         active_job_list   = []
-        
+
         if scheduler is not None:
             try:
                 from apscheduler.schedulers import STATE_RUNNING
                 scheduler_running = (scheduler.state == STATE_RUNNING)
-                
+
                 if scheduler_running:
                     active_job_list = [job.id for job in scheduler.get_jobs()]
             except Exception as sched_err:
                 logger.warning(f"⚠️ Scheduler kontrol hatası: {sched_err}")
-        
+
         scheduler_status = get_scheduler_status()
         metrics          = get_service_metrics()
         alarm_stats      = get_alarm_stats()
-        
+
         last_worker_run = get_cache("kurabak:last_worker_run")
         worker_status   = "🟢 Aktif"
         if last_worker_run:
@@ -401,10 +417,10 @@ def system_status():
                 worker_status = "🟡 Yavaş"
         else:
             worker_status = "⚪ Henüz Çalışmadı"
-        
+
         snapshot_exists = bool(get_cache(Config.CACHE_KEYS['raw_snapshot']))
         snapshot_status = "🟢 Mevcut" if snapshot_exists else "🔴 Kayıp"
-        
+
         last_alarm_check = get_cache(Config.CACHE_KEYS['alarm_last_check'])
         alarm_status     = "🟢 Aktif"
         if last_alarm_check:
@@ -415,10 +431,10 @@ def system_status():
                 alarm_status = "🟡 Yavaş"
         else:
             alarm_status = "⚪ Henüz Çalışmadı"
-        
+
         firebase_status = "🟢 Aktif" if _firebase_initialized else "🔴 Devre Dışı"
         telegram_status = "🟢 Aktif" if _telegram_instance else "🔴 Devre Dışı"
-        
+
         return jsonify({
             "success":   True,
             "timestamp": datetime.now().isoformat(),
@@ -442,24 +458,25 @@ def system_status():
             },
             "metrics": metrics
         }), 200
-        
+
     except Exception as e:
         logger.error(f"System status error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/api/device/register', methods=['POST'])
 def register_device():
     try:
         data  = request.json
         token = data.get('token')
-        
+
         if not token:
             return jsonify({"success": False, "error": "Token eksik"}), 400
-            
+
         success = register_fcm_token(token)
-        
+
         if success:
-            logger.info(f"✅ [FCM] Cihaz kaydedildi")
+            logger.info("✅ [FCM] Cihaz kaydedildi")
             return jsonify({"success": True, "message": "Cihaz kaydedildi"}), 200
         else:
             return jsonify({"success": False, "error": "Kayıt başarısız"}), 500
@@ -467,6 +484,7 @@ def register_device():
     except Exception as e:
         logger.error(f"❌ [FCM] Token kayıt hatası: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/api/device/check-token', methods=['POST'])
 def check_token():
@@ -484,6 +502,7 @@ def check_token():
         logger.error(f"❌ [FCM] Token kontrol hatası: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route('/api/device/test-push', methods=['GET'])
 def trigger_test_push():
     try:
@@ -493,20 +512,13 @@ def trigger_test_push():
         logger.error(f"❌ [Push Test] Hata: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route('/api/admin/trigger-push', methods=['POST'])
 def trigger_daily_push():
+    if not _require_admin_token():
+        return jsonify({"success": False, "error": "Yetkisiz erişim"}), 403
+
     try:
-        admin_token    = request.headers.get('X-Admin-Token') or (request.json.get('admin_token') if request.json else None)
-        expected_token = os.environ.get('ADMIN_SECRET_TOKEN')
-
-        if not expected_token:
-            logger.warning("⚠️ [TRIGGER PUSH] ADMIN_SECRET_TOKEN env değişkeni tanımlı değil!")
-            return jsonify({"success": False, "error": "Sunucu yapılandırma hatası"}), 500
-
-        if not admin_token or admin_token != expected_token:
-            logger.warning(f"🚨 [TRIGGER PUSH] Yetkisiz erişim denemesi! IP: {request.remote_addr}")
-            return jsonify({"success": False, "error": "Yetkisiz erişim"}), 403
-
         from utils.notification_service import send_daily_summary
         result = send_daily_summary()
         logger.info(f"✅ [TRIGGER PUSH] Manuel push gönderildi: {result}")
@@ -516,27 +528,20 @@ def trigger_daily_push():
         logger.error(f"❌ [TRIGGER PUSH] Hata: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route('/api/admin/cleanup', methods=['POST'])
 def emergency_cleanup():
+    if not _require_admin_token():
+        return jsonify({"success": False, "error": "Yetkisiz erişim"}), 403
+
     try:
-        admin_token    = request.headers.get('X-Admin-Token') or request.json.get('admin_token') if request.json else None
-        expected_token = os.environ.get('ADMIN_SECRET_TOKEN')
-
-        if not expected_token:
-            logger.warning("⚠️ [CLEANUP] ADMIN_SECRET_TOKEN env değişkeni tanımlı değil!")
-            return jsonify({"success": False, "error": "Sunucu yapılandırma hatası"}), 500
-
-        if not admin_token or admin_token != expected_token:
-            logger.warning(f"🚨 [CLEANUP] Yetkisiz erişim denemesi! IP: {request.remote_addr}")
-            return jsonify({"success": False, "error": "Yetkisiz erişim"}), 403
-
         from utils.cache import get_redis_client, cleanup_old_disk_backups
-        
+
         logger.warning("🚨 [CLEANUP] ACİL TEMİZLİK BAŞLADI!")
-        
+
         deleted_count = 0
         redis_client  = get_redis_client()
-        
+
         if redis_client:
             keys = redis_client.keys("kurabak:*")
             if keys:
@@ -546,16 +551,16 @@ def emergency_cleanup():
             logger.info(f"✅ [CLEANUP] {deleted_count} kurabak:* key silindi (FCM ve alarm keyleri korundu)")
         else:
             logger.warning("⚠️ [CLEANUP] Redis bağlantısı yok, cache temizlenemedi")
-        
+
         cleanup_result = cleanup_old_disk_backups(max_age_days=7)
         logger.info(f"✅ [CLEANUP] {cleanup_result['deleted_count']} eski backup silindi")
-        
+
         stop_scheduler()
         time.sleep(2)
         start_scheduler()
         renew_scheduler_lock()
         logger.info("✅ [CLEANUP] Scheduler yeniden başlatıldı")
-        
+
         telegram = get_telegram_instance()
         if telegram:
             telegram._send_raw(
@@ -566,7 +571,7 @@ def emergency_cleanup():
                 f"🔄 Scheduler yeniden başlatıldı\n\n"
                 "Sistem şimdi temiz ve hazır!"
             )
-        
+
         return jsonify({
             "success": True,
             "message": "Sistem temizlendi ve yeniden başlatıldı",
@@ -577,17 +582,18 @@ def emergency_cleanup():
                 "protected":           ["fcm_tokens", "alarm:*"]
             }
         }), 200
-        
+
     except Exception as e:
         logger.error(f"❌ [CLEANUP] Hata: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 def on_exit():
     global _firebase_initialized, _telegram_instance
-    
+
     logger.info("🛑 Uygulama kapatılıyor...")
     stop_scheduler()
-    
+
     try:
         from utils.cache import get_redis_client
         redis_client = get_redis_client()
@@ -596,7 +602,7 @@ def on_exit():
             logger.info("🔒 [Redis Lock] Temizlendi.")
     except Exception as e:
         logger.warning(f"⚠️ [Redis Lock] Temizleme hatası: {e}")
-    
+
     try:
         if _firebase_initialized and firebase_admin._apps:
             firebase_admin.delete_app(firebase_admin.get_app())
@@ -604,15 +610,16 @@ def on_exit():
             logger.info("🔥 [Firebase] Temiz kapanış tamamlandı.")
     except Exception:
         pass
-    
+
     try:
         if _telegram_instance:
             _telegram_instance = None
             logger.info("📱 [Telegram] Temiz kapanış tamamlandı.")
     except Exception:
         pass
-    
+
     logger.info("✅ Temiz kapanış tamamlandı.")
+
 
 atexit.register(on_exit)
 
