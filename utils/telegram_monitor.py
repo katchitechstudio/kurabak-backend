@@ -1,22 +1,13 @@
 """
-Telegram Monitor - ŞEF KOMUTA MERKEZİ V5.2 🤖
+Telegram Monitor - ŞEF KOMUTA MERKEZİ V5.3
 =======================================================
 ✅ CIRCUIT BREAKER SPAM FIX: 15 dakika sürekli hata → TEK uyarı
-✅ TEST SİSTEMİ: /test, /test mobil, /test detay
-✅ TAKVİM BİLDİRİMLERİ: Günü gelen etkinlikler için otomatik uyarı
 ✅ SELF-HEALING: Otomatik CPU/RAM izleme ve müdahale
-✅ TÜRKÇE KARAKTER FIX: 'ı', 'ş', 'ğ', 'ü', 'ö', 'ç' otomatik düzeltme
-✅ ANTI-SPAM: Gün içi gereksiz bildirimleri engeller
 ✅ 🔒 ADMİN GÜVENLİĞİ: Sadece yetkili Telegram ID komut gönderebilir
-✅ V5 ONLY: Tek kaynak sistemi
-✅ GÜNLÜK RAPOR ZENGİNLEŞTİRME: CPU, RAM, Disk, Circuit Breaker, Aktif kullanıcı
-✅ ÖZEL OLAY LİSTESİ: Circuit breaker, cleanup, trend detayları
-✅ /circuit KOMUTU: Circuit Breaker durumu sorgulama
-✅ GÜVENLİ CACHE TEMİZLİĞİ: Redis bağlantısı korunur
-✅ SADELEŞTİRİLMİŞ KOMUTLAR: Duyuru ve rapor komutları optimize edildi
-✅ 🔥 GELİŞMİŞ /online KOMUTU: Detaylı kullanıcı analizi
-✅ 🔥 RAM THRESHOLD: %95, CPU THRESHOLD: %80
-✅ 🚫 STRES TESTİ KALDIRILDI: Production güvenliği (V5.2)
+✅ GÜNLÜK RAPOR: CPU, RAM, Disk, Circuit Breaker, Aktif kullanıcı
+✅ 📱 V5.3: Device ID bazlı online tracking (10dk aktif + 12sa unique)
+✅ TEMİZLENMİŞ KOMUTLAR: Sadece işe yarayanlar kaldı
+   - /durum, /circuit, /online, /temizle, /duyuru, /bakim
 """
 
 import os
@@ -32,95 +23,41 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_ADMIN_IDS = [7101853980]
 
+
 class TelegramMonitor:
-    
+
     def __init__(self, bot_token: str, chat_id: str):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.base_url = f"https://api.telegram.org/bot{bot_token}"
-        self._lock = threading.Lock()
-        
-        self.circuit_error_start_time = None
+        self.bot_token  = bot_token
+        self.chat_id    = chat_id
+        self.base_url   = f"https://api.telegram.org/bot{bot_token}"
+        self._lock      = threading.Lock()
+
+        self.circuit_error_start_time  = None
         self.circuit_recovery_notified = False
-        self.circuit_down_notified = False
-        
+        self.circuit_down_notified     = False
+
         self.last_critical_alert = datetime.min
-        self.command_thread = None
-        self.is_listening = False
-        self.healing_thread = None
-        self.is_healing_active = False
+        self.command_thread      = None
+        self.is_listening        = False
+        self.healing_thread      = None
+        self.is_healing_active   = False
+
+    # ──────────────────────────────────────────────
+    # TEMEL GÖNDERIM
+    # ──────────────────────────────────────────────
 
     def _send_raw(self, text: str, parse_mode: str = 'Markdown'):
         try:
-            url = f"{self.base_url}/sendMessage"
+            url     = f"{self.base_url}/sendMessage"
             payload = {
-                'chat_id': self.chat_id,
-                'text': text,
-                'parse_mode': parse_mode,
-                'disable_web_page_preview': True
+                'chat_id':                  self.chat_id,
+                'text':                     text,
+                'parse_mode':               parse_mode,
+                'disable_web_page_preview': True,
             }
             requests.post(url, json=payload, timeout=10)
         except Exception as e:
             logger.error(f"❌ Telegram Gönderim Hatası: {e}")
-
-    def notify_circuit_breaker_event(self, event_type: str, details: Dict[str, Any] = None):
-        now = time.time()
-        
-        if event_type == "error":
-            if self.circuit_error_start_time is None:
-                self.circuit_error_start_time = now
-                logger.info("🟡 Circuit Breaker: İlk hata kaydedildi (sessiz)")
-                return
-            
-            error_duration = now - self.circuit_error_start_time
-            
-            if error_duration >= 900:
-                if not self.circuit_down_notified:
-                    self.circuit_down_notified = True
-                    self.circuit_recovery_notified = False
-                    
-                    alert_msg = (
-                        f"🚨 *KRİTİK: V5 API 15 DAKİKADIR ÇALIŞMIYOR!*\n\n"
-                        f"⏱️ *Süre:* {int(error_duration/60)} dakika\n"
-                        f"💾 *Durum:* Backup veri kullanılıyor\n"
-                        f"🔄 *Aksiyon:* Sistem otomatik kurtarma yapıyor\n\n"
-                        f"_Sistem düzelince haber vereceğim._"
-                    )
-                    threading.Thread(target=self._send_raw, args=(alert_msg,)).start()
-                    logger.warning(f"📤 Circuit Breaker: 15 dakikalık downtime bildirimi gönderildi")
-                else:
-                    logger.debug("🔇 Circuit Breaker: Hata devam ediyor (sessiz)")
-            else:
-                logger.debug(f"🟡 Circuit Breaker: Hata devam ({int(error_duration/60)} dk, sessiz)")
-        
-        elif event_type == "recovery":
-            if self.circuit_down_notified and not self.circuit_recovery_notified:
-                self.circuit_recovery_notified = True
-                self.circuit_down_notified = False
-                self.circuit_error_start_time = None
-                
-                downtime = ""
-                if details and 'downtime_minutes' in details:
-                    downtime = f"\n⏱️ *Downtime:* {details['downtime_minutes']} dakika"
-                
-                recovery_msg = (
-                    f"✅ *SİSTEM KURTARILDI!*\n\n"
-                    f"🚀 V5 API tekrar çalışıyor\n"
-                    f"📊 Veriler güncelleniyor{downtime}\n\n"
-                    f"_Sistem normale döndü, sorun çözüldü._"
-                )
-                threading.Thread(target=self._send_raw, args=(recovery_msg,)).start()
-                logger.info("📤 Circuit Breaker: Kurtarma bildirimi gönderildi")
-            else:
-                self.circuit_error_start_time = None
-                logger.debug("🔇 Circuit Breaker: Kurtarma (sessiz)")
-        
-        elif event_type == "open":
-            if not self.circuit_down_notified:
-                logger.info("🟡 Circuit Breaker: OPEN (henüz 15 dk değil, sessiz)")
-        
-        elif event_type == "closed":
-            logger.debug("🟢 Circuit Breaker: CLOSED (sessiz)")
 
     def send_message(self, text: str, level: str = 'info') -> bool:
         if level in ['info', 'success', 'warning']:
@@ -134,7 +71,6 @@ class TelegramMonitor:
                     logger.warning("Telegram: Kritik hata spam korumasına takıldı.")
                     return False
                 self.last_critical_alert = now
-            
             alert_msg = (
                 f"🚨 *KRİTİK SİSTEM UYARISI* 🚨\n\n"
                 f"{text}\n\n"
@@ -149,71 +85,104 @@ class TelegramMonitor:
 
         return False
 
+    # ──────────────────────────────────────────────
+    # CIRCUIT BREAKER OLAYLARI
+    # ──────────────────────────────────────────────
+
+    def notify_circuit_breaker_event(self, event_type: str, details: Dict[str, Any] = None):
+        now = time.time()
+
+        if event_type == "error":
+            if self.circuit_error_start_time is None:
+                self.circuit_error_start_time = now
+                return
+            error_duration = now - self.circuit_error_start_time
+            if error_duration >= 900 and not self.circuit_down_notified:
+                self.circuit_down_notified     = True
+                self.circuit_recovery_notified = False
+                threading.Thread(target=self._send_raw, args=(
+                    f"🚨 *KRİTİK: V5 API 15 DAKİKADIR ÇALIŞMIYOR!*\n\n"
+                    f"⏱️ *Süre:* {int(error_duration/60)} dakika\n"
+                    f"💾 *Durum:* Backup veri kullanılıyor\n"
+                    f"🔄 *Aksiyon:* Sistem otomatik kurtarma yapıyor\n\n"
+                    f"_Sistem düzelince haber vereceğim._",
+                )).start()
+
+        elif event_type == "recovery":
+            if self.circuit_down_notified and not self.circuit_recovery_notified:
+                self.circuit_recovery_notified = True
+                self.circuit_down_notified     = False
+                self.circuit_error_start_time  = None
+                downtime = ""
+                if details and 'downtime_minutes' in details:
+                    downtime = f"\n⏱️ *Downtime:* {details['downtime_minutes']} dakika"
+                threading.Thread(target=self._send_raw, args=(
+                    f"✅ *SİSTEM KURTARILDI!*\n\n"
+                    f"🚀 V5 API tekrar çalışıyor\n"
+                    f"📊 Veriler güncelleniyor{downtime}\n\n"
+                    f"_Sistem normale döndü, sorun çözüldü._",
+                )).start()
+            else:
+                self.circuit_error_start_time = None
+
+    # ──────────────────────────────────────────────
+    # GÜNLÜK RAPOR
+    # ──────────────────────────────────────────────
+
     def send_daily_report(self, metrics: Dict[str, Any]):
         try:
-            now = datetime.now()
+            now      = datetime.now()
             date_str = now.strftime("%d.%m.%Y")
-            
-            total = metrics.get('v5', 0) + metrics.get('backup', 0)
-            success_rate = 100
-            if total > 0:
-                success_rate = ((total - metrics.get('errors', 0)) / total) * 100
 
-            status_icon = "🟢" if success_rate > 95 else "🟡" if success_rate > 80 else "🔴"
-            
-            cpu = psutil.cpu_percent(interval=1)
-            ram = psutil.virtual_memory().percent
+            total        = metrics.get('v5', 0) + metrics.get('backup', 0)
+            success_rate = 100 if total == 0 else ((total - metrics.get('errors', 0)) / total) * 100
+            status_icon  = "🟢" if success_rate > 95 else "🟡" if success_rate > 80 else "🔴"
+
+            cpu  = psutil.cpu_percent(interval=1)
+            ram  = psutil.virtual_memory().percent
             disk = psutil.disk_usage('/').percent
-            
+
             cpu_icon  = "🟢" if cpu  < 80 else "🟡" if cpu  < 90 else "🔴"
             ram_icon  = "🟢" if ram  < 80 else "🟡" if ram  < 95 else "🔴"
             disk_icon = "🟢" if disk < 80 else "🟡" if disk < 90 else "🔴"
-            
+
+            # 12 saatlik unique cihaz sayısı
             try:
                 from utils.cache import get_cache_keys
-                online_keys = get_cache_keys("online_user:*")
-                active_users = len(online_keys)
-            except:
-                active_users = 0
-            
+                daily_count = len(get_cache_keys("daily_user:*"))
+            except Exception:
+                daily_count = 0
+
             cb_status   = metrics.get('circuit_breaker', {})
             cb_state    = cb_status.get('state', 'UNKNOWN')
             cb_failures = cb_status.get('failure_count', 0)
-            
-            cb_icon = "🟢" if cb_state == "CLOSED" else "🟡" if cb_state == "HALF_OPEN" else "🔴"
-            cb_text = f"{cb_icon} {cb_state}"
-            if cb_failures > 0:
-                cb_text += f" ({cb_failures} hata)"
-            
+            cb_icon     = "🟢" if cb_state == "CLOSED" else "🟡" if cb_state == "HALF_OPEN" else "🔴"
+            cb_text     = f"{cb_icon} {cb_state}" + (f" ({cb_failures} hata)" if cb_failures > 0 else "")
+
             special_events = []
-            
             if cb_state == "OPEN":
                 special_events.append("🔴 Circuit Breaker açıldı (API hatası)")
             elif cb_state == "HALF_OPEN":
                 special_events.append("🟡 Circuit Breaker test modunda")
-            
-            cb_trips = metrics.get('circuit_breaker_trips', 0)
-            if cb_trips > 0:
-                special_events.append(f"⚡ Circuit Breaker {cb_trips} kez tetiklendi")
-            
+            if metrics.get('circuit_breaker_trips', 0) > 0:
+                special_events.append(f"⚡ Circuit Breaker {metrics['circuit_breaker_trips']} kez tetiklendi")
+
             try:
                 from utils.cache import get_cache, get_disk_backup_stats
                 from config import Config
-                
                 cleanup_last_run = get_cache(Config.CACHE_KEYS.get('cleanup_last_run'))
-                
                 if cleanup_last_run:
                     cleanup_time = datetime.fromtimestamp(float(cleanup_last_run))
                     if cleanup_time.date() == now.date():
-                        backup_stats = get_disk_backup_stats()
+                        stats = get_disk_backup_stats()
                         special_events.append(
-                            f"🧹 Cleanup çalıştı: {backup_stats.get('total_files', 0)} dosya, "
-                            f"{backup_stats.get('total_size_mb', 0)} MB"
+                            f"🧹 Cleanup çalıştı: {stats.get('total_files', 0)} dosya, "
+                            f"{stats.get('total_size_mb', 0)} MB"
                         )
-            except:
+            except Exception:
                 pass
-            
-            report_lines = [
+
+            lines = [
                 f"🌙 *GÜN SONU RAPORU* | {date_str}",
                 f"━━━━━━━━━━━━━━━━━━━━\n",
                 f"📊 *GENEL DURUM*",
@@ -229,58 +198,59 @@ class TelegramMonitor:
                 f"• 📦 Backup: `{metrics.get('backup', 0)}`",
                 f"• 🛡️ Circuit Breaker: {cb_text}\n",
                 f"👥 *KULLANICILAR*",
-                f"• Aktif Kullanıcı: *{active_users}*",
-                f"  _(Son 5 dakika)_\n",
+                f"• Son 12 Saat Unique: *{daily_count}* cihaz\n",
                 f"🛡️ *GÜVENLİK & HATALAR*",
-                f"• Hatalar: `{metrics.get('errors', 0)}`"
+                f"• Hatalar: `{metrics.get('errors', 0)}`",
             ]
-            
+
             if special_events:
-                report_lines.append(f"\n🔔 *ÖZEL OLAYLAR*")
+                lines.append(f"\n🔔 *ÖZEL OLAYLAR*")
                 for event in special_events:
-                    report_lines.append(f"• {event}")
-            
-            report_lines.append(f"\n_KuraBak Backend v5.2 • {now.strftime('%H:%M')}_")
-            
-            report = "\n".join(report_lines)
-            self.send_message(report, level='report')
-            
+                    lines.append(f"• {event}")
+
+            lines.append(f"\n_KuraBak Backend v5.3 • {now.strftime('%H:%M')}_")
+            self.send_message("\n".join(lines), level='report')
+
         except Exception as e:
             logger.error(f"❌ Günlük rapor hatası: {e}")
             self.send_message(
-                f"🌙 *GÜN SONU RAPORU*\n\n"
-                f"⚠️ Detaylı rapor oluşturulamadı\n"
-                f"Hata: {str(e)[:100]}",
+                f"🌙 *GÜN SONU RAPORU*\n\n⚠️ Detaylı rapor oluşturulamadı\nHata: {str(e)[:100]}",
                 level='report'
             )
 
-    def send_calendar_notification(self, event_name: str, event_date: str):
-        msg = (
-            f"📅 *TAKVİM UYARISI*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📌 *Etkinlik:* {event_name}\n"
-            f"🗓️ *Tarih:* {event_date}\n\n"
-            f"ℹ️ Banner otomatik olarak aktif edilecek."
-        )
-        self.send_message(msg, level='report')
+    # ──────────────────────────────────────────────
+    # STARTUP & TAKVİM
+    # ──────────────────────────────────────────────
 
     def send_startup_message(self):
         from config import Config
-        msg = (
+        self.send_message(
             f"🚀 *SİSTEM BAŞLATILDI*\n\n"
             f"📦 v{Config.APP_VERSION} • V5 API Only\n"
             f"🛡️ Circuit Breaker • Self-Healing\n"
             f"🔔 Push (12:00) • Cleanup (03:00)\n\n"
-            f"✅ Tüm sistemler online!"
+            f"✅ Tüm sistemler online!",
+            level='report'
         )
-        self.send_message(msg, level='report')
+
+    def send_calendar_notification(self, event_name: str, event_date: str):
+        self.send_message(
+            f"📅 *TAKVİM UYARISI*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📌 *Etkinlik:* {event_name}\n"
+            f"🗓️ *Tarih:* {event_date}\n\n"
+            f"ℹ️ Banner otomatik olarak aktif edilecek.",
+            level='report'
+        )
+
+    # ──────────────────────────────────────────────
+    # KOMUT DİNLEYİCİ
+    # ──────────────────────────────────────────────
 
     def start_command_listener(self):
         if self.is_listening:
-            logger.warning("Komut dinleyici zaten çalışıyor!")
             return
-        
-        self.is_listening = True
+        self.is_listening  = True
         self.command_thread = threading.Thread(target=self._listen_commands, daemon=True)
         self.command_thread.start()
         logger.info("🤖 Şef Komut Dinleyici başlatıldı! 🔒 Admin Filter: ACTIVE")
@@ -290,444 +260,105 @@ class TelegramMonitor:
 
     def _listen_commands(self):
         offset = 0
-        
         while self.is_listening:
             try:
-                url = f"{self.base_url}/getUpdates"
-                params = {
-                    'offset': offset,
-                    'timeout': 30,
-                    'allowed_updates': ['message']
-                }
-                
-                response = requests.get(url, params=params, timeout=35)
+                response = requests.get(
+                    f"{self.base_url}/getUpdates",
+                    params={'offset': offset, 'timeout': 30, 'allowed_updates': ['message']},
+                    timeout=35,
+                )
                 data = response.json()
-                
                 if not data.get('ok'):
                     time.sleep(5)
                     continue
-                
+
                 for update in data.get('result', []):
-                    offset = update['update_id'] + 1
-                    
+                    offset  = update['update_id'] + 1
                     message = update.get('message')
                     if not message:
                         continue
-                    
                     if str(message.get('chat', {}).get('id')) != str(self.chat_id):
                         continue
-                    
+
                     user_id = message.get('from', {}).get('id')
-                    
                     if not self._is_admin(user_id):
                         username = message.get('from', {}).get('username', 'Unknown')
-                        logger.warning(f"🚨 Yetkisiz komut denemesi! User ID: {user_id}, Username: @{username}")
+                        logger.warning(f"🚨 Yetkisiz komut! User ID: {user_id}, @{username}")
                         self._send_raw(
                             "🔒 *ERİŞİM ENGELLENDİ*\n\n"
-                            "Bu bot sadece yetkili kullanıcılar tarafından kontrol edilebilir.\n\n"
+                            "Sadece yetkili admin kullanabilir.\n"
                             "⚠️ Bu deneme kaydedildi."
                         )
                         continue
-                    
+
                     text = message.get('text', '').strip()
-                    
+
                     if text == '/durum':
                         self._handle_durum()
                     elif text == '/online':
                         self._handle_online()
                     elif text == '/temizle':
                         self._handle_temizle()
-                    elif text == '/analiz':
-                        self._handle_analiz()
+                    elif text == '/circuit':
+                        self._handle_circuit()
                     elif text.startswith('/duyuru'):
                         self._handle_duyuru(text)
                     elif text.startswith('/bakim'):
                         self._handle_bakim(text)
-                    elif text.startswith('/test'):
-                        self._handle_test(text)
-                    elif text == '/circuit':
-                        self._handle_circuit()
-                    elif text == '/yardim' or text.startswith('/'):
+                    else:
                         self._send_help()
-                
+
             except Exception as e:
                 logger.error(f"Komut dinleyici hatası: {e}")
                 time.sleep(10)
 
+    # ──────────────────────────────────────────────
+    # KOMUT HANDLERS
+    # ──────────────────────────────────────────────
+
     def _send_help(self):
-        """🚫 Stres testi kaldırıldı (V5.2)"""
         self._send_raw(
             "❓ *KOMUT LİSTESİ* 🔒\n\n"
-            "🧪 *TEST:*\n"
-            "`/test` - Basit test (5sn)\n"
-            "`/test mobil` - Mobil uyumluluk\n"
-            "`/test detay` - Detaylı test\n\n"
+            "📊 *RAPOR:*\n"
+            "`/durum` - Sistem sağlık raporu\n"
+            "`/online` - Kullanıcı analizi\n"
+            "`/circuit` - Circuit Breaker durumu\n\n"
             "📢 *YÖNETİM:*\n"
             "`/duyuru [mesaj]` - Duyuru as\n"
             "`/duyuru sil` - Duyuruyu kaldır\n"
             "`/bakim` - Bakım modu aç\n"
             "`/bakim kapat` - Bakım kapat\n\n"
-            "📊 *RAPOR:*\n"
-            "`/durum` - Sistem sağlık raporu\n"
-            "`/online` - Aktif kullanıcı analizi\n"
-            "`/temizle` - Güvenli cache temizliği\n"
-            "`/analiz` - Sistem analizi\n"
-            "`/circuit` - Circuit Breaker durumu\n\n"
+            "🧹 *BAKIM:*\n"
+            "`/temizle` - Güvenli cache temizliği\n\n"
             "🔒 _Sadece yetkili admin kullanabilir._"
         )
-
-    def _handle_circuit(self):
-        try:
-            from services.financial_service import get_circuit_breaker_status
-            
-            status = get_circuit_breaker_status()
-            
-            state       = status.get('state', 'UNKNOWN')
-            failures    = status.get('failure_count', 0)
-            can_attempt = status.get('can_attempt', False)
-            timeout     = status.get('timeout', 0)
-            
-            if state == "CLOSED":
-                icon        = "🟢"
-                status_text = "Normal Çalışıyor"
-                detail      = "API çağrıları yapılıyor"
-            elif state == "OPEN":
-                icon        = "🔴"
-                status_text = "Devre Açık"
-                last_open   = status.get('last_open_time', 0)
-                if last_open:
-                    elapsed    = int(time.time() - last_open)
-                    remaining  = max(0, timeout - elapsed)
-                    detail     = f"{remaining} saniye sonra test edilecek"
-                else:
-                    detail     = f"{timeout} saniye bekleniyor"
-            elif state == "HALF_OPEN":
-                icon        = "🟡"
-                status_text = "Test Modu"
-                detail      = "1 deneme yapılıyor..."
-            else:
-                icon        = "⚪"
-                status_text = "Bilinmiyor"
-                detail      = ""
-            
-            report = (
-                f"{icon} *CIRCUIT BREAKER DURUMU*\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📊 *Durum:* {status_text}\n"
-                f"🔢 *State:* `{state}`\n"
-                f"❌ *Hata Sayısı:* {failures}\n"
-                f"✅ *API Çağrısı:* {'Yapılabilir' if can_attempt else 'Yapılamaz'}\n"
-                f"⏱️ *Timeout:* {timeout} saniye\n"
-            )
-            
-            if detail:
-                report += f"\nℹ️ {detail}"
-            
-            self._send_raw(report)
-            
-        except Exception as e:
-            self._send_raw(f"❌ Circuit breaker sorgu hatası: {str(e)}")
-
-    def _handle_test(self, text):
-        """
-        🧪 TEST SİSTEMİ (V5.2)
-        🚫 Stres testi kaldırıldı — production güvenliği
-        """
-        try:
-            raw_content = text.replace('/test', '').strip().lower()
-            raw_content = (raw_content
-                .replace('ı', 'i').replace('ş', 's')
-                .replace('ğ', 'g').replace('ü', 'u')
-                .replace('ö', 'o').replace('ç', 'c'))
-
-            # 🚫 Stres testi kaldırıldı
-            if raw_content.startswith('stres'):
-                self._send_raw(
-                    "🚫 *STRES TESTİ KALDIRILDI*\n\n"
-                    "Production ortamında stres testi devre dışıdır.\n"
-                    "Sistem sağlığını `/durum` veya `/circuit` ile kontrol edin."
-                )
-                return
-
-            self._send_raw("⏳ Test başlatılıyor...")
-
-            if raw_content in ('', 'basit'):
-                report = self._run_basic_test()
-            elif raw_content in ('mobil', 'mobile'):
-                report = self._run_mobile_test()
-            elif raw_content in ('detay', 'detayli', 'detailed'):
-                report = self._run_detailed_test()
-            else:
-                self._send_raw(
-                    "❌ Geçersiz test tipi!\n\n"
-                    "Kullanım:\n"
-                    "`/test` - Basit test (5sn)\n"
-                    "`/test mobil` - Mobil uyumluluk\n"
-                    "`/test detay` - Detaylı test"
-                )
-                return
-
-            self._send_raw(report)
-
-        except Exception as e:
-            self._send_raw(f"❌ Test hatası: {str(e)}")
-
-    def _run_basic_test(self) -> str:
-        try:
-            from utils.cache import get_cache, redis_wrapper
-            from config import Config
-            
-            results = []
-            
-            if redis_wrapper.is_enabled():
-                results.append("✅ Redis: Bağlı")
-            else:
-                results.append("⚠️ Redis: RAM Modu")
-            
-            currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
-            if currencies and len(currencies.get('data', [])) > 0:
-                results.append(f"✅ Döviz: {len(currencies.get('data', []))} adet")
-            else:
-                results.append("❌ Döviz: Veri yok")
-            
-            last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
-            if last_worker_run:
-                time_diff = time.time() - float(last_worker_run)
-                if time_diff < 300:
-                    results.append(f"✅ Worker: Aktif ({int(time_diff)}sn önce)")
-                else:
-                    results.append(f"⚠️ Worker: Yavaş ({int(time_diff/60)}dk önce)")
-            else:
-                results.append("❌ Worker: Henüz çalışmadı")
-            
-            cpu = psutil.cpu_percent(interval=1)
-            ram = psutil.virtual_memory().percent
-            
-            cpu_status = "✅" if cpu < 80 else "⚠️" if cpu < 90 else "❌"
-            ram_status = "✅" if ram < 80 else "⚠️" if ram < 95 else "❌"
-            
-            results.append(f"{cpu_status} CPU: %{cpu:.1f}")
-            results.append(f"{ram_status} RAM: %{ram:.1f}")
-            
-            try:
-                from services.financial_service import get_circuit_breaker_status
-                cb_status = get_circuit_breaker_status()
-                state = cb_status.get('state', 'UNKNOWN')
-                if state == "CLOSED":
-                    results.append("✅ Circuit Breaker: CLOSED")
-                elif state == "OPEN":
-                    results.append("❌ Circuit Breaker: OPEN")
-                else:
-                    results.append(f"🟡 Circuit Breaker: {state}")
-            except:
-                pass
-            
-            total  = len(results)
-            passed = sum(1 for r in results if r.startswith("✅"))
-            
-            status_icon = "🟢" if passed == total else "🟡" if passed >= total/2 else "🔴"
-            
-            return (
-                f"{status_icon} *BASIT TEST RAPORU*\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                + "\n".join(results) +
-                f"\n\n📊 *Sonuç:* {passed}/{total} başarılı\n"
-                f"⏱️ *Süre:* ~5 saniye"
-            )
-            
-        except Exception as e:
-            return f"❌ Test hatası: {str(e)}"
-
-    def _run_mobile_test(self) -> str:
-        try:
-            from utils.cache import get_cache
-            from config import Config
-            
-            results = []
-            
-            currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
-            if currencies:
-                curr_data = currencies.get('data', [])
-                expected  = 23
-                actual    = len(curr_data)
-                results.append(f"{'✅' if actual == expected else '⚠️'} Döviz: {actual}/{expected}")
-            else:
-                results.append("❌ Döviz: Veri yok")
-            
-            golds = get_cache(Config.CACHE_KEYS['golds_all'])
-            if golds:
-                gold_data = golds.get('data', [])
-                expected  = 6
-                actual    = len(gold_data)
-                results.append(f"{'✅' if actual == expected else '⚠️'} Altın: {actual}/{expected}")
-            else:
-                results.append("❌ Altın: Veri yok")
-            
-            silvers = get_cache(Config.CACHE_KEYS['silvers_all'])
-            if silvers:
-                silver_data = silvers.get('data', [])
-                if len(silver_data) >= 1:
-                    silver_name = silver_data[0].get('name', '')
-                    ok = silver_name == "Gümüş"
-                    results.append(f"{'✅' if ok else '⚠️'} Gümüş: 1/1 (İsim: {silver_name})")
-                else:
-                    results.append("❌ Gümüş: 0/1")
-            else:
-                results.append("❌ Gümüş: Veri yok")
-            
-            if currencies:
-                banner = currencies.get('banner')
-                results.append(f"ℹ️ Banner: \"{banner[:30]}...\"" if banner else "✅ Banner: Yok (Normal)")
-            
-            if currencies:
-                status = currencies.get('status', 'UNKNOWN')
-                if status == 'OPEN':
-                    results.append("✅ Status: OPEN (Piyasa açık)")
-                elif status == 'CLOSED':
-                    results.append("ℹ️ Status: CLOSED (Hafta sonu)")
-                else:
-                    results.append(f"⚠️ Status: {status}")
-            
-            total  = len([r for r in results if not r.startswith("ℹ️")])
-            passed = sum(1 for r in results if r.startswith("✅"))
-            
-            status_icon = "🟢" if passed == total else "🟡" if passed >= total/2 else "🔴"
-            
-            return (
-                f"{status_icon} *MOBİL UYUMLULUK TESTİ*\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                + "\n".join(results) +
-                f"\n\n📊 *Sonuç:* {passed}/{total} başarılı\n"
-                f"📱 *Mobil Ready:* {'Evet ✅' if passed == total else 'Hayır ⚠️'}"
-            )
-            
-        except Exception as e:
-            return f"❌ Test hatası: {str(e)}"
-
-    def _run_detailed_test(self) -> str:
-        try:
-            from utils.cache import get_cache, redis_wrapper
-            from config import Config
-            
-            results = []
-            
-            results.append("🔹 *REDIS*")
-            results.append("  ✅ Bağlı" if redis_wrapper.is_enabled() else "  ⚠️ RAM Modu")
-            
-            results.append("\n🔹 *VERİLER*")
-            currencies = get_cache(Config.CACHE_KEYS['currencies_all'])
-            golds      = get_cache(Config.CACHE_KEYS['golds_all'])
-            silvers    = get_cache(Config.CACHE_KEYS['silvers_all'])
-            
-            if currencies:
-                results.append(f"  ✅ Döviz: {len(currencies.get('data', []))} adet")
-                results.append(f"     Kaynak: {currencies.get('source', 'Unknown')}")
-                results.append(f"     Güncelleme: {currencies.get('last_update', 'Unknown')}")
-                summary = currencies.get('summary', {})
-                if summary:
-                    winner = summary.get('winner', {}).get('name', 'YOK')
-                    loser  = summary.get('loser', {}).get('name', 'YOK')
-                    results.append(f"     Summary: Winner={winner}, Loser={loser}")
-                else:
-                    results.append("     Summary: Yok")
-            else:
-                results.append("  ❌ Döviz: Veri yok")
-            
-            if golds:
-                results.append(f"  ✅ Altın: {len(golds.get('data', []))} adet")
-            else:
-                results.append("  ❌ Altın: Veri yok")
-            
-            if silvers:
-                silver_data = silvers.get('data', [])
-                if silver_data:
-                    silver_name = silver_data[0].get('name', 'Unknown')
-                    results.append(f"  ✅ Gümüş: {len(silver_data)} adet (İsim: {silver_name})")
-                else:
-                    results.append("  ❌ Gümüş: Veri yok")
-            else:
-                results.append("  ❌ Gümüş: Veri yok")
-            
-            results.append("\n🔹 *BİLEŞENLER*")
-            last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
-            if last_worker_run:
-                time_diff = time.time() - float(last_worker_run)
-                if time_diff < 300:
-                    results.append(f"  ✅ Worker: Aktif ({int(time_diff)}sn)")
-                else:
-                    results.append(f"  ⚠️ Worker: Yavaş ({int(time_diff/60)}dk)")
-            else:
-                results.append("  ❌ Worker: Çalışmadı")
-            
-            snapshot = get_cache(Config.CACHE_KEYS['yesterday_prices'])
-            if snapshot:
-                results.append(f"  ✅ Snapshot: {len(snapshot)} fiyat")
-            else:
-                results.append("  ❌ Snapshot: Yok")
-            
-            results.append("\n🔹 *SİSTEM*")
-            cpu = psutil.cpu_percent(interval=1)
-            ram = psutil.virtual_memory().percent
-            
-            cpu_status = "✅" if cpu < 80 else "⚠️" if cpu < 90 else "❌"
-            ram_status = "✅" if ram < 80 else "⚠️" if ram < 95 else "❌"
-            
-            results.append(f"  {cpu_status} CPU: %{cpu:.1f}")
-            results.append(f"  {ram_status} RAM: %{ram:.1f}")
-            
-            results.append("\n🔹 *KAYNAK*")
-            results.append(f"  ℹ️ Aktif: V5 API Only")
-            results.append(f"  ℹ️ Backup: 15 dakikalık otomatik")
-            
-            all_results = "\n".join(results)
-            passed = all_results.count("✅")
-            total  = all_results.count("✅") + all_results.count("❌")
-            
-            status_icon = "🟢" if passed == total else "🟡" if passed >= total/2 else "🔴"
-            
-            return (
-                f"{status_icon} *DETAYLI TEST RAPORU*\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                + all_results +
-                f"\n\n📊 *Sonuç:* {passed}/{total} başarılı"
-            )
-            
-        except Exception as e:
-            return f"❌ Test hatası: {str(e)}"
 
     def _handle_durum(self):
         try:
             from utils.cache import get_cache, redis_wrapper
             from config import Config
-            
+
             cpu = psutil.cpu_percent(interval=1)
             ram = psutil.virtual_memory().percent
-            
+
             last_worker_run = get_cache(Config.CACHE_KEYS['last_worker_run'])
-            worker_icon = "🟢"
-            worker_text = "Aktif"
-            
             if last_worker_run:
-                time_diff = time.time() - float(last_worker_run)
-                if time_diff > 600:
-                    worker_icon = "🔴"
-                    worker_text = f"Uyuyor ({int(time_diff/60)} dk)"
-                elif time_diff > 300:
-                    worker_icon = "🟡"
-                    worker_text = f"Yavaş ({int(time_diff/60)} dk)"
+                diff = time.time() - float(last_worker_run)
+                if diff > 600:
+                    worker_icon, worker_text = "🔴", f"Uyuyor ({int(diff/60)} dk)"
+                elif diff > 300:
+                    worker_icon, worker_text = "🟡", f"Yavaş ({int(diff/60)} dk)"
+                else:
+                    worker_icon, worker_text = "🟢", f"Aktif ({int(diff)}sn önce)"
             else:
-                worker_icon = "⚪"
-                worker_text = "Henüz Çalışmadı"
-            
-            redis_status   = "🟢 Bağlı" if redis_wrapper.is_enabled() else "🔴 RAM Modu"
-            snapshot_exists = bool(get_cache(Config.CACHE_KEYS['yesterday_prices']))
-            snapshot_icon  = "🟢" if snapshot_exists else "🔴"
+                worker_icon, worker_text = "⚪", "Henüz Çalışmadı"
+
+            redis_status     = "🟢 Bağlı" if redis_wrapper.is_enabled() else "🔴 RAM Modu"
+            snapshot_exists  = bool(get_cache(Config.CACHE_KEYS['yesterday_prices']))
             maintenance_data = get_cache(Config.CACHE_KEYS['maintenance'])
-            maintenance_status = "🔴 Aktif" if maintenance_data else "🟢 Kapalı"
-            healing_status = "🟢 Aktif" if self.is_healing_active else "🔴 Kapalı"
-            
-            report = (
-                f"👮‍♂️ *SİSTEM DURUMU RAPORU*\n"
+
+            self._send_raw(
+                f"👮‍♂️ *SİSTEM DURUMU*\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"⚡ *SUNUCU*\n"
                 f"• CPU: `%{cpu:.1f}`\n"
@@ -735,342 +366,278 @@ class TelegramMonitor:
                 f"• Redis: {redis_status}\n\n"
                 f"🛠️ *BİLEŞENLER*\n"
                 f"• {worker_icon} Worker: `{worker_text}`\n"
-                f"• {snapshot_icon} Snapshot: `{'Mevcut' if snapshot_exists else 'Kayıp'}`\n"
-                f"• 🤖 Self-Healing: {healing_status}\n\n"
-                f"🔌 *VERİ KAYNAĞI*\n"
-                f"• Aktif: `V5 API Only`\n"
-                f"• Backup: `15 dakikalık otomatik`\n\n"
-                f"🚧 *ÖZEL MODLAR*\n"
-                f"• Bakım: {maintenance_status}\n\n"
-                f"🔒 *GÜVENLİK*\n"
-                f"• Admin Filter: `Aktif`\n"
-                f"• Güvenli Cache: `V5.2`\n\n"
-                f"_Rapor Zamanı: {datetime.now().strftime('%H:%M:%S')}_"
+                f"• {'🟢' if snapshot_exists else '🔴'} Snapshot: `{'Mevcut' if snapshot_exists else 'Kayıp'}`\n"
+                f"• 🤖 Self-Healing: `{'Aktif' if self.is_healing_active else 'Kapalı'}`\n\n"
+                f"🚧 *MODLAR*\n"
+                f"• Bakım: `{'🔴 Aktif' if maintenance_data else '🟢 Kapalı'}`\n\n"
+                f"_Rapor: {datetime.now().strftime('%H:%M:%S')}_"
             )
-            
-            self._send_raw(report)
-            
         except Exception as e:
             self._send_raw(f"❌ Durum raporu hatası: {str(e)}")
 
     def _handle_online(self):
         try:
             from utils.cache import get_cache_keys
-            
-            online_keys = get_cache_keys("online_user:*")
-            count = len(online_keys)
-            
-            if count == 0:
+
+            online_keys  = get_cache_keys("online_user:*")
+            daily_keys   = get_cache_keys("daily_user:*")
+            active_count = len(online_keys)
+            daily_count  = len(daily_keys)
+
+            # IP gibi görünenleri ayıkla
+            import re
+            ip_pattern   = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+            device_based = sum(1 for k in daily_keys if not ip_pattern.match(k.replace("daily_user:", "")))
+            ip_based     = daily_count - device_based
+
+            if active_count == 0 and daily_count == 0:
                 self._send_raw(
-                    "👤 *CANLI KULLANICI*\n\n"
-                    "Şu an *0* kullanıcı aktif Patron!\n\n"
-                    "_Son 5 dakika içinde API'ye istek atanlar_"
+                    "📱 *KULLANICI ANALİZİ*\n\n"
+                    "Şu an aktif kullanıcı yok.\n\n"
+                    "_Son 10 dakika içinde istek atan cihazlar_"
                 )
                 return
-            
-            unique_users   = set()
-            unique_devices = set()
-            unique_ips     = set()
-            user_details   = []
-            
-            for key in online_keys:
-                parts = key.replace("online_user:", "").split(":")
-                
-                if len(parts) >= 2:
-                    user_id   = parts[0]
-                    device_id = parts[1]
-                    
-                    if "." in user_id or user_id == "unknown":
-                        unique_ips.add(user_id)
-                    else:
-                        unique_users.add(user_id)
-                    
-                    if device_id != "unknown":
-                        unique_devices.add(device_id)
-                    
-                    if len(user_details) < 5:
-                        user_details.append({'user': user_id[:20], 'device': device_id[:20]})
-            
-            icon = "🔥" if count > 100 else "📊" if count > 10 else "👤"
-            
-            report  = f"{icon} *CANLI KULLANICI*\n\n"
-            report += f"Şu an *{count}* istek aktif Patron!\n\n"
-            report += "📈 *DETAYLI ANALİZ:*\n"
-            report += f"• Unique Kullanıcı: `{len(unique_users)}`\n"
-            report += f"• Unique Device: `{len(unique_devices)}`\n"
-            report += f"• IP Bazlı: `{len(unique_ips)}`\n"
-            report += f"• Toplam Key: `{count}`\n\n"
-            
-            estimated = max(len(unique_users), len(unique_devices), len(unique_ips))
-            if estimated > 0:
-                report += f"🎯 *TAHMİNİ GERÇEK KULLANICI:* `{estimated}`\n"
-                if count > estimated:
-                    report += f"   _(1 kişi ~{count // estimated} istek atmış)_\n"
-                report += "\n"
-            
-            if user_details:
-                report += "👥 *İLK 5 KULLANICI:*\n"
-                for i, detail in enumerate(user_details[:5], 1):
-                    report += f"{i}. User: `{detail['user'][:15]}...`\n"
-                    report += f"   Device: `{detail['device'][:15]}...`\n"
-                
-                if count > 5:
-                    report += f"\n_+{count - 5} key daha..._\n"
-            
-            report += "\n_Son 5 dakika içinde API'ye istek atanlar_"
-            self._send_raw(report)
-            
+
+            icon = "🔥" if active_count > 50 else "📊" if active_count > 10 else "📱"
+
+            self._send_raw(
+                f"{icon} *KULLANICI ANALİZİ*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"⚡ *ŞU AN AKTİF* (son 10 dk)\n"
+                f"• Aktif Cihaz: `{active_count}`\n\n"
+                f"📅 *SON 12 SAAT*\n"
+                f"• Unique Cihaz: `{daily_count}`\n"
+                f"• Device ID Bazlı: `{device_based}`\n"
+                f"• IP Bazlı (fallback): `{ip_based}`\n\n"
+                f"_Device ID = Android ID ile tanımlanan gerçek cihazlar_"
+            )
         except Exception as e:
             logger.error(f"Online sayım hatası: {e}")
             self._send_raw(f"❌ Online sayım hatası: {str(e)}")
+
+    def _handle_circuit(self):
+        try:
+            from services.financial_service import get_circuit_breaker_status
+            status  = get_circuit_breaker_status()
+            state   = status.get('state', 'UNKNOWN')
+            failures = status.get('failure_count', 0)
+            timeout  = status.get('timeout', 0)
+
+            if state == "CLOSED":
+                icon, status_text, detail = "🟢", "Normal Çalışıyor", "API çağrıları yapılıyor"
+            elif state == "OPEN":
+                icon, status_text = "🔴", "Devre Açık"
+                last_open = status.get('last_open_time', 0)
+                remaining = max(0, timeout - int(time.time() - last_open)) if last_open else timeout
+                detail    = f"{remaining} saniye sonra test edilecek"
+            elif state == "HALF_OPEN":
+                icon, status_text, detail = "🟡", "Test Modu", "1 deneme yapılıyor..."
+            else:
+                icon, status_text, detail = "⚪", "Bilinmiyor", ""
+
+            report = (
+                f"{icon} *CIRCUIT BREAKER*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📊 *Durum:* {status_text}\n"
+                f"🔢 *State:* `{state}`\n"
+                f"❌ *Hata Sayısı:* {failures}\n"
+                f"⏱️ *Timeout:* {timeout} saniye\n"
+            )
+            if detail:
+                report += f"\nℹ️ {detail}"
+            self._send_raw(report)
+        except Exception as e:
+            self._send_raw(f"❌ Circuit breaker sorgu hatası: {str(e)}")
 
     def _handle_temizle(self):
         try:
             from utils.cache import get_redis_client, delete_cache
             from config import Config
-            
+
             self._send_raw(
                 "⚠️ *GÜVENLİ CACHE TEMİZLİĞİ*\n\n"
-                "Sadece KuraBak cache'leri silinecek\n"
-                "(Redis bağlantısı korunacak)\n"
+                "Sadece KuraBak cache'leri silinecek.\n"
                 "İşlem başlatılıyor..."
             )
-            
+
             deleted_count = 0
-            failed_keys   = []
             redis_client  = get_redis_client()
-            
+
             if redis_client:
-                try:
-                    pattern = "kurabak:*"
-                    keys    = redis_client.keys(pattern)
-                    
-                    if keys:
-                        for key in keys:
-                            try:
-                                redis_client.delete(key)
-                                deleted_count += 1
-                            except Exception as e:
-                                failed_keys.append(key.decode() if isinstance(key, bytes) else key)
-                                logger.error(f"Key silme hatası ({key}): {e}")
-                        
-                        success_msg = (
-                            f"✅ *GÜVENLİ TEMİZLİK TAMAMLANDI*\n\n"
-                            f"🧹 *Silinen Key:* {deleted_count} adet\n"
-                            f"🔗 *Redis Bağlantısı:* Korundu ✅\n"
-                            f"🔄 Worker 2 dakika içinde yeni veri çekecek.\n"
-                        )
-                        if failed_keys:
-                            success_msg += f"\n⚠️ Silinemedi: {len(failed_keys)} key"
-                        self._send_raw(success_msg)
-                    else:
-                        self._send_raw("ℹ️ *SİLİNECEK KEY YOK*\n\nCache zaten boş.")
-                        
-                except Exception as redis_error:
-                    logger.error(f"Redis key silme hatası: {redis_error}")
-                    self._send_raw(
-                        f"⚠️ *REDIS HATASI*\n\n"
-                        f"Key silme sırasında sorun oluştu:\n"
-                        f"`{str(redis_error)[:100]}`"
-                    )
-            else:
-                try:
-                    known_keys = [
-                        Config.CACHE_KEYS.get('currencies_all'),
-                        Config.CACHE_KEYS.get('golds_all'),
-                        Config.CACHE_KEYS.get('silvers_all'),
-                        Config.CACHE_KEYS.get('yesterday_prices'),
-                        Config.CACHE_KEYS.get('last_worker_run'),
-                        'system_banner',
-                    ]
-                    for key in known_keys:
-                        if key:
-                            delete_cache(key)
+                keys = redis_client.keys("kurabak:*")
+                if keys:
+                    for key in keys:
+                        try:
+                            redis_client.delete(key)
                             deleted_count += 1
-                    
+                        except Exception:
+                            pass
                     self._send_raw(
-                        f"✅ *RAM CACHE TEMİZLENDİ*\n\n"
-                        f"🧹 Silindi: {deleted_count} key\n"
-                        f"⚠️ Redis bağlantısı yok (RAM modu)\n"
+                        f"✅ *TEMİZLİK TAMAMLANDI*\n\n"
+                        f"🧹 Silinen: {deleted_count} key\n"
+                        f"🔗 Redis Bağlantısı: Korundu ✅\n"
                         f"🔄 Worker 2 dakika içinde yeni veri çekecek."
                     )
-                except Exception as ram_error:
-                    logger.error(f"RAM cache temizleme hatası: {ram_error}")
-                    self._send_raw(f"❌ RAM cache temizlik hatası: {str(ram_error)}")
-                
+                else:
+                    self._send_raw("ℹ️ Cache zaten boş.")
+            else:
+                known_keys = [
+                    Config.CACHE_KEYS.get('currencies_all'),
+                    Config.CACHE_KEYS.get('golds_all'),
+                    Config.CACHE_KEYS.get('silvers_all'),
+                    Config.CACHE_KEYS.get('yesterday_prices'),
+                    Config.CACHE_KEYS.get('last_worker_run'),
+                    'system_banner',
+                ]
+                for key in known_keys:
+                    if key:
+                        delete_cache(key)
+                        deleted_count += 1
+                self._send_raw(
+                    f"✅ *RAM CACHE TEMİZLENDİ*\n\n"
+                    f"🧹 Silindi: {deleted_count} key\n"
+                    f"⚠️ Redis yok (RAM modu)\n"
+                    f"🔄 Worker 2 dakika içinde yeni veri çekecek."
+                )
         except Exception as e:
             logger.error(f"Temizlik hatası: {e}")
-            self._send_raw(
-                f"❌ *TEMİZLİK HATASI*\n\n"
-                f"Beklenmeyen hata:\n`{str(e)[:150]}`"
-            )
-
-    def _handle_analiz(self):
-        try:
-            self._send_raw(
-                "📊 *SİSTEM ANALİZİ*\n\n"
-                "🚀 *API:* V5 Only\n"
-                "💾 *Backup:* 15 dakikalık otomatik\n"
-                "🤖 *Self-Healing:* Aktif\n"
-                "⏱️ *Kontrol Sıklığı:* 1 dakika\n"
-                "🎯 *CPU Eşik:* %80\n"
-                "💾 *RAM Eşik:* %95\n"
-                "🗓️ *Takvim:* Her gün 08:00\n"
-                "🛡️ *Circuit Breaker:* 3 hata = 60s\n"
-                "🔔 *Push Notification:* Her gün 12:00\n"
-                "🧹 *Cleanup:* Her gün 03:00\n"
-                "🔐 *Güvenli Cache:* V5.2\n\n"
-                "_Sistem otomatik olarak yüksek yük durumlarını tespit edip düzeltiyor._"
-            )
-        except Exception as e:
-            self._send_raw(f"❌ Analiz hatası: {str(e)}")
+            self._send_raw(f"❌ Temizlik hatası: `{str(e)[:150]}`")
 
     def _handle_duyuru(self, text):
         try:
             from utils.cache import set_cache, delete_cache
             from config import Config
-            
-            raw_content = text.replace('/duyuru', '').strip()
-            
-            if raw_content.lower() == 'sil' or raw_content == '':
+
+            content = text.replace('/duyuru', '').strip()
+
+            if not content or content.lower() == 'sil':
                 delete_cache(Config.CACHE_KEYS['banner'])
-                self._send_raw("🔇 *DUYURU KALDIRILDI*\n\nPatron, mesajı sildim.")
+                self._send_raw("🔇 *DUYURU KALDIRILDI*")
                 return
 
-            set_cache(Config.CACHE_KEYS['banner'], raw_content, ttl=0)
-            
+            set_cache(Config.CACHE_KEYS['banner'], content, ttl=0)
             self._send_raw(
-                f"📢 *DUYURU YAYINDA!*\n"
-                f"━━━━━━━━━━━━━━━━\n"
-                f"📝 *Mesaj:* \"{raw_content}\"\n"
+                f"📢 *DUYURU YAYINDA!*\n\n"
+                f"📝 *Mesaj:* \"{content}\"\n"
                 f"⏱️ *Süre:* Süresiz ♾️\n\n"
                 f"✅ Uygulama ekranlarında görünüyor."
             )
-            
         except Exception as e:
             self._send_raw(f"❌ Duyuru hatası: {str(e)}")
 
     def _handle_bakim(self, text):
         try:
             from services.maintenance_service import activate_maintenance, deactivate_maintenance
-            
-            raw_content = text.replace('/bakim', '').strip()
-            
-            if raw_content.lower() in ['kapat', 'sil', '']:
+
+            content = text.replace('/bakim', '').strip().lower()
+
+            if content in ['kapat', 'sil', '']:
                 deactivate_maintenance()
                 self._send_raw("✅ *BAKIM MODU KAPANDI*\n\nSistem normal moda döndü.")
                 return
-            
+
             activate_maintenance()
             self._send_raw(
-                f"🚧 *BAKIM MODU AKTİF!*\n"
-                f"━━━━━━━━━━━━━━━━\n"
-                f"📝 *Durum:* Uygulama açık ama veri gelmiyor\n"
-                f"💬 *Banner:* Kullanıcılar bilgilendiriliyor\n\n"
-                f"✅ Kapatmak için: `/bakim kapat`"
+                f"🚧 *BAKIM MODU AKTİF!*\n\n"
+                f"Kullanıcılar bilgilendiriliyor.\n\n"
+                f"Kapatmak için: `/bakim kapat`"
             )
-            
         except Exception as e:
             self._send_raw(f"❌ Bakım modu hatası: {str(e)}")
 
+    # ──────────────────────────────────────────────
+    # SELF-HEALING
+    # ──────────────────────────────────────────────
+
     def start_self_healing(self):
         if self.is_healing_active:
-            logger.warning("Self-Healing zaten çalışıyor!")
             return
-        
         self.is_healing_active = True
-        self.healing_thread = threading.Thread(target=self._self_healing_loop, daemon=True)
+        self.healing_thread    = threading.Thread(target=self._self_healing_loop, daemon=True)
         self.healing_thread.start()
         logger.info("🤖 Self-Healing sistemi başlatıldı!")
 
     def _self_healing_loop(self):
         from config import Config
-        
+
         cpu_high_since        = None
         last_cpu_notification = 0
         last_ram_notification = 0
-        
+
         while self.is_healing_active:
             try:
                 cpu = psutil.cpu_percent(interval=1)
                 ram = psutil.virtual_memory().percent
                 now = time.time()
-                
+
+                # CPU kontrolü
                 if cpu > Config.CPU_THRESHOLD:
                     if cpu_high_since is None:
                         cpu_high_since = now
-                    
-                    if (now - cpu_high_since) > Config.CPU_HIGH_DURATION:
-                        logger.warning(f"🔥 CPU yüksek ({cpu}%), müdahale ediliyor...")
-                        
+                    elif (now - cpu_high_since) > Config.CPU_HIGH_DURATION:
                         if (now - last_cpu_notification) > Config.ALARM_NOTIFICATION_INTERVAL:
                             self._send_raw(
                                 f"⚠️ *CPU YÜKSEK!*\n\n"
-                                f"🧠 *CPU:* %{cpu:.1f}\n"
-                                f"📊 *Eşik:* %{Config.CPU_THRESHOLD}\n"
-                                f"⏱️ *Süre:* {int((now - cpu_high_since)/60)} dakika\n\n"
+                                f"🧠 CPU: %{cpu:.1f}\n"
+                                f"⏱️ Süre: {int((now - cpu_high_since)/60)} dakika\n\n"
                                 f"Sistem müdahale edecek..."
                             )
                             last_cpu_notification = now
-                        
                         cpu_high_since = None
                 else:
                     if cpu_high_since is not None:
                         logger.info(f"✅ CPU normale döndü: %{cpu:.1f}")
-                        cpu_high_since = None
-                
+                    cpu_high_since = None
+
+                # RAM kontrolü
                 if ram > Config.RAM_THRESHOLD:
-                    logger.warning(f"💾 RAM KRİTİK ({ram}%), otomatik temizlik yapılıyor...")
-                    
+                    logger.warning(f"💾 RAM KRİTİK ({ram}%), otomatik temizlik...")
                     try:
                         from utils.cache import get_redis_client
-                        
                         redis_client = get_redis_client()
                         if redis_client:
-                            keys = redis_client.keys("kurabak:*")
-                            if keys:
-                                for key in keys:
-                                    try:
-                                        redis_client.delete(key)
-                                    except:
-                                        pass
-                        
+                            for key in redis_client.keys("kurabak:*"):
+                                try:
+                                    redis_client.delete(key)
+                                except Exception:
+                                    pass
+
                         new_ram = psutil.virtual_memory().percent
-                        
                         if (now - last_ram_notification) > Config.ALARM_NOTIFICATION_INTERVAL:
                             if new_ram < Config.RAM_THRESHOLD:
                                 self._send_raw(
                                     f"✅ *RAM DÜZELTİLDİ*\n\n"
-                                    f"💾 *Önceki:* %{ram:.1f}\n"
-                                    f"💾 *Şimdi:* %{new_ram:.1f}\n\n"
-                                    f"Cache temizlendi, sorun çözüldü!"
+                                    f"💾 Önceki: %{ram:.1f} → Şimdi: %{new_ram:.1f}\n"
+                                    f"Cache temizlendi!"
                                 )
                             else:
                                 self._send_raw(
                                     f"⚠️ *RAM HALA YÜKSEK!*\n\n"
-                                    f"💾 *RAM:* %{new_ram:.1f}\n"
-                                    f"📊 *Eşik:* %{Config.RAM_THRESHOLD}\n\n"
-                                    f"Temizlik yaptım ama düşmüyor. Kontrol et Patron!"
+                                    f"💾 RAM: %{new_ram:.1f}\n"
+                                    f"Temizlik yaptım ama düşmüyor. Kontrol et!"
                                 )
                             last_ram_notification = now
-                            
                     except Exception as e:
                         logger.error(f"❌ RAM temizlik hatası: {e}")
-                
+
                 time.sleep(Config.ALARM_CHECK_INTERVAL)
-                
+
             except Exception as e:
                 logger.error(f"Self-Healing hatası: {e}")
                 time.sleep(60)
 
 
-telegram_monitor: Optional[TelegramMonitor] = None
+# ──────────────────────────────────────────────
+# SINGLETON
+# ──────────────────────────────────────────────
+
+telegram_monitor:  Optional[TelegramMonitor] = None
 telegram_instance: Optional[TelegramMonitor] = None
 
 
-def init_telegram_monitor():
+def init_telegram_monitor() -> Optional[TelegramMonitor]:
     global telegram_monitor, telegram_instance
-    
+
     if telegram_monitor:
         return telegram_monitor
 
@@ -1084,10 +651,10 @@ def init_telegram_monitor():
         telegram_monitor.start_self_healing()
         logger.info("✅ Telegram Monitor başlatıldı.")
         return telegram_monitor
-    else:
-        logger.warning("⚠️ Telegram Monitor başlatılamadı!")
-        telegram_instance = None
-        return None
+
+    logger.warning("⚠️ Telegram Monitor başlatılamadı! Token veya Chat ID eksik.")
+    telegram_instance = None
+    return None
 
 
 def get_telegram_monitor() -> Optional[TelegramMonitor]:
