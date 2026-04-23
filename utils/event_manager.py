@@ -10,16 +10,26 @@ logger = logging.getLogger(__name__)
 _last_logged_banner = None
 
 
+def _get_today_holiday_safe() -> Optional[tuple]:
+    try:
+        from utils.news_manager import get_today_holiday
+        return get_today_holiday()
+    except Exception as e:
+        logger.warning(f"⚠️ [BAYRAM] Takvim kontrolü hatası: {e}")
+        return None
+
+
 def get_todays_events() -> List[Dict[str, any]]:
     today_str    = date.today().strftime("%Y-%m-%d")
     current_time = datetime.now()
     events       = []
 
     try:
-        bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-        bayram_msg = get_cache(bayram_key)
+        holiday = _get_today_holiday_safe()
 
-        if bayram_msg and current_time.hour < 15:
+        if holiday and current_time.hour < 15:
+            bayram_name, bayram_emoji, bayram_end = holiday
+            bayram_msg = f"{bayram_emoji} {bayram_name}"
             events.append({
                 "type":        "bayram",
                 "message":     bayram_msg,
@@ -28,8 +38,9 @@ def get_todays_events() -> List[Dict[str, any]]:
                 "date":        today_str
             })
             logger.debug(f"🏦 [BAYRAM] {bayram_msg} - 15:00'a kadar gösterilecek (Priority: 10)")
-        elif bayram_msg and current_time.hour >= 15:
-            logger.debug(f"🏦 [BAYRAM] Süresi doldu (15:00+), haberler devrede")
+        elif holiday and current_time.hour >= 15:
+            bayram_name, bayram_emoji, _ = holiday
+            logger.debug(f"🏦 [BAYRAM] {bayram_emoji} {bayram_name} süresi doldu (15:00+), haberler devrede")
 
     except Exception as e:
         logger.warning(f"⚠️ [BAYRAM] Kontrol hatası: {e}")
@@ -125,8 +136,21 @@ def test_event_manager():
     Terminal'den test etmek için:
     python -c "from utils.event_manager import test_event_manager; test_event_manager()"
     """
-    print("🧪 Event Manager V7.2 📰🏦 Test Ediliyor...\n")
+    print("🧪 Event Manager Test Ediliyor...\n")
     print("Priority Sistemi: DÜŞÜK SAYI = YÜKSEK ÖNCELİK\n")
+
+    print("=" * 60)
+    print("0️⃣ BAYRAM TAKVİM KONTROLÜ (Cache'siz, anlık):")
+    holiday = _get_today_holiday_safe()
+    if holiday:
+        msg, emoji, end = holiday
+        current_hour    = datetime.now().hour
+        status          = "AKTİF ✅ (saat < 15:00)" if current_hour < 15 else "SÜRESİ DOLDU ❌ (15:00+)"
+        print(f"   🎉 Bugün bayram: {emoji} {msg} (Bitiş: {end}) — {status}")
+    else:
+        print("   ℹ️ Bugün bayram yok")
+    print("=" * 60)
+    print()
 
     print("=" * 60)
     banner = get_todays_banner()
@@ -149,20 +173,6 @@ def test_event_manager():
         print()
     else:
         print("ℹ️ Bugün etkinlik yok\n")
-
-    print("=" * 60)
-    bayram_key = Config.CACHE_KEYS.get('daily_bayram', 'daily:bayram')
-    bayram_msg = get_cache(bayram_key)
-
-    if bayram_msg:
-        current_hour = datetime.now().hour
-        status = "AKTİF ✅" if current_hour < 15 else "SÜRESİ SONA ERDİ ❌ (15:00+)"
-        print(f"🏦 BAYRAM CACHE'İ: {status}")
-        print(f"   {bayram_msg}")
-    else:
-        print("ℹ️ Bayram cache'i boş (Gemini henüz kontrol etmedi veya bayram yok)")
-    print("=" * 60)
-    print()
 
     print("=" * 60)
     print("🧪 get_daily_notification_content() TEST EDİLİYOR...")
