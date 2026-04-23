@@ -76,17 +76,28 @@ def init_firebase():
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred, {'projectId': 'kurabak-f1950'})
 
+            # 🔥 FCM CONNECTION POOL FIX
+            # firebase_admin SDK her yeni Session() açtığında bu factory'den alır.
+            # pool_maxsize=50 ile toplu bildirim sırasında oluşan
+            # "Connection pool is full, discarding connection" warning'i tamamen durur.
             import requests as _requests
-            import google.auth.transport.requests as _google_transport
-            _session = _requests.Session()
-            _adapter = _requests.adapters.HTTPAdapter(
-                pool_connections=10,
-                pool_maxsize=100,
+            from requests.adapters import HTTPAdapter
+
+            _adapter = HTTPAdapter(
+                pool_connections=20,
+                pool_maxsize=50,
                 max_retries=3
             )
-            _session.mount('https://', _adapter)
-            _google_transport.Request(session=_session)
-            logger.info("✅ [Firebase] HTTP connection pool genişletildi (maxsize=100)")
+            _patched_session_factory = _requests.Session
+
+            class _PatchedSession(_patched_session_factory):
+                def __init__(self):
+                    super().__init__()
+                    self.mount('https://', _adapter)
+                    self.mount('http://',  _adapter)
+
+            _requests.Session = _PatchedSession
+            logger.info("✅ [Firebase] HTTP connection pool genişletildi (pool_connections=20, pool_maxsize=50)")
 
             _firebase_initialized = True
             logger.info("✅ [Firebase] Admin SDK başarıyla başlatıldı! (Singleton)")
