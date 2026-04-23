@@ -404,7 +404,7 @@ def summarize_news_batch(news_list: List[str]) -> Tuple[List[str], Optional[str]
             return [], None, None
 
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-3-flash')
 
         numbered_news = '\n'.join([f"{i+1}. {news}" for i, news in enumerate(news_list)])
         today         = datetime.now().strftime('%d %B %Y, %A')
